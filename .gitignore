@@ -1,0 +1,38 @@
+# Godot editor/import state (recreated from source assets).
+.godot/
+.import/
+.export/
+
+# Local editor profiles accidentally created beside this project.
+.agents/
+.codex/
+export_templates/
+feature_profiles/
+script_templates/
+text_editor_themes/
+
+# Local app-data sandboxes and machine caches.
+_appdata/
+_local_appdata/
+LocalLow/
+.tmp*/
+*.log
+__pycache__/
+*.pyc
+
+# Generated QA, backup, and release output.
+artifacts/
+backups/
+builds/
+dist/
+
+# Export credentials are machine-local secrets. The current Godot location is
+# already covered by .godot/, while this also protects legacy/manual copies.
+export_credentials.cfg
+
+# IDE and operating-system state.
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini

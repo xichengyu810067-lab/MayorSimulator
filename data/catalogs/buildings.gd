@@ -1,0 +1,306 @@
+extends RefCounted
+
+static func all() -> Dictionary:
+	return {
+		"住宅": {
+			"category": "住宅類",
+			"cost": 1000,
+			"population": 28,
+			"maintenance": 70,
+			"color": Color(0.48, 0.78, 0.95),
+			"text_color": Color(0.04, 0.13, 0.20),
+			"description": "人口增加，提供穩定稅基。"
+		},
+		"社會住宅": {
+			"category": "住宅類",
+			"cost": 2200,
+			"population": 48,
+			"satisfaction": 2,
+			"maintenance": 90,
+			"color": Color(0.62, 0.88, 0.84),
+			"text_color": Color(0.04, 0.16, 0.14),
+			"description": "人口增加，居民滿意度上升。"
+		},
+		"商店": {
+			"category": "商業類",
+			"cost": 1500,
+			"commercial_income": 380,
+			"traffic": -5,
+			"maintenance": 95,
+			"color": Color(0.95, 0.55, 0.20),
+			"text_color": Color(0.12, 0.06, 0.02),
+			"description": "每月收入增加，交通壓力上升。"
+		},
+		"大型商場": {
+			"category": "商業類",
+			"cost": 6500,
+			"commercial_income": 1050,
+			"satisfaction": 4,
+			"traffic": -8,
+			"job_attraction": 5,
+			"maintenance": 250,
+			"color": Color(0.98, 0.42, 0.28),
+			"text_color": Color(0.12, 0.04, 0.02),
+			"description": "商業收入上升，滿意度上升但交通下降。"
+		},
+		"工廠": {
+			"category": "產業類",
+			"cost": 3500,
+			"industrial_income": 720,
+			"population": 18,
+			"environment": -8,
+			"job_attraction": 8,
+			"maintenance": 120,
+			"color": Color(0.34, 0.38, 0.40),
+			"text_color": Color.WHITE,
+			"description": "工業收入增加，吸引就業但污染上升。"
+		},
+		"公園": {
+			"category": "休閒類",
+			"cost": 1200,
+			"environment": 8,
+			"satisfaction": 4,
+			"maintenance": 60,
+			"color": Color(0.30, 0.70, 0.36),
+			"text_color": Color.WHITE,
+			"description": "環境上升，滿意度上升。"
+		},
+		"體育館": {
+			"category": "休閒類",
+			"cost": 2600,
+			"satisfaction": 7,
+			"score_bonus": 2,
+			"maintenance": 100,
+			"color": Color(0.90, 0.22, 0.55),
+			"text_color": Color.WHITE,
+			"description": "滿意度明顯上升，城市形象提升。"
+		},
+		"學校": {
+			"category": "教育文化類",
+			"cost": 2000,
+			"education": 10,
+			"satisfaction": 3,
+			"maintenance": 120,
+			"color": Color(0.96, 0.82, 0.22),
+			"text_color": Color(0.13, 0.10, 0.02),
+			"description": "教育上升，滿意度上升。"
+		},
+		"圖書館": {
+			"category": "教育文化類",
+			"cost": 1800,
+			"education": 7,
+			"satisfaction": 2,
+			"maintenance": 60,
+			"color": Color(0.55, 0.35, 0.78),
+			"text_color": Color.WHITE,
+			"description": "教育文化提升，滿意度小幅上升。"
+		},
+		"醫院": {
+			"category": "醫療類",
+			"cost": 2500,
+			"healthcare": 11,
+			"satisfaction": 3,
+			"maintenance": 140,
+			"color": Color(1.0, 0.88, 0.90),
+			"text_color": Color(0.20, 0.06, 0.08),
+			"description": "醫療上升，滿意度上升。"
+		},
+		"警局": {
+			"category": "安全類",
+			"cost": 2200,
+			"security": 10,
+			"satisfaction": 3,
+			"maintenance": 125,
+			"color": Color(0.08, 0.20, 0.55),
+			"text_color": Color.WHITE,
+			"description": "治安上升，滿意度上升。"
+		},
+		"消防局": {
+			"category": "安全類",
+			"cost": 2300,
+			"security": 8,
+			"satisfaction": 2,
+			"maintenance": 80,
+			"color": Color(0.82, 0.12, 0.10),
+			"text_color": Color.WHITE,
+			"description": "安全上升，災害風險概念降低。"
+		},
+		"停車場": {
+			"category": "交通類",
+			"cost": 1400,
+			"traffic": 9,
+			"maintenance": 30,
+			"color": Color(0.56, 0.60, 0.64),
+			"text_color": Color.WHITE,
+			"description": "交通改善，維護費低。"
+		},
+		"公車站": {
+			"category": "交通類",
+			"cost": 1600,
+			"traffic": 8,
+			"satisfaction": 2,
+			"maintenance": 50,
+			"color": Color(0.08, 0.68, 0.62),
+			"text_color": Color.WHITE,
+			"description": "交通改善，滿意度小幅上升。"
+		},
+		"捷運站": {
+			"category": "交通類",
+			"cost": 5000,
+			"traffic": 18,
+			"satisfaction": 5,
+			"commercial_income": 180,
+			"maintenance": 220,
+			"color": Color(0.08, 0.55, 0.82),
+			"text_color": Color.WHITE,
+			"description": "交通大幅改善，滿意度與商業效率上升。"
+		},
+		"火車站": {
+			"category": "交通類",
+			"cost": 6500,
+			"traffic": 15,
+			"satisfaction": 3,
+			"commercial_income": 160,
+			"industrial_income": 180,
+			"job_attraction": 4,
+			"maintenance": 260,
+			"color": Color(0.38, 0.48, 0.58),
+			"text_color": Color.WHITE,
+			"description": "連結城際客運與貨運，改善交通並帶動商業與產業。"
+		},
+		"機場": {
+			"category": "交通類",
+			"cost": 12000,
+			"commercial_income": 1500,
+			"industrial_income": 450,
+			"traffic": -10,
+			"environment": -10,
+			"score_bonus": 8,
+			"job_attraction": 10,
+			"maintenance": 600,
+			"color": Color(0.66, 0.78, 0.86),
+			"text_color": Color(0.04, 0.10, 0.14),
+			"description": "收入與城市評級大幅上升，但環境與交通承壓。"
+		},
+		"發電廠": {
+			"category": "基礎建設類",
+			"cost": 3000,
+			"commercial_income": 260,
+			"environment": -7,
+			"satisfaction": -2,
+			"maintenance": 120,
+			"color": Color(0.18, 0.18, 0.16),
+			"text_color": Color(1.0, 0.88, 0.20),
+			"description": "收入潛力上升，但污染增加。"
+		},
+		"瓦斯場": {
+			"category": "基礎建設類",
+			"cost": 4000,
+			"utility_efficiency": {"gas": 0.45},
+			"environment": -4,
+			"security": -2,
+			"satisfaction": -1,
+			"maintenance": 180,
+			"color": Color(0.42, 0.34, 0.52),
+			"text_color": Color.WHITE,
+			"description": "強化瓦斯費收入，但有安全與環境壓力。"
+		},
+		"自來水廠": {
+			"category": "基礎建設類",
+			"cost": 2800,
+			"healthcare": 4,
+			"environment": 3,
+			"satisfaction": 3,
+			"maintenance": 100,
+			"color": Color(0.12, 0.56, 0.72),
+			"text_color": Color.WHITE,
+			"description": "生活品質提升，醫療與環境小幅上升。"
+		},
+		"垃圾處理場": {
+			"category": "基礎建設類",
+			"cost": 2000,
+			"environment": 5,
+			"satisfaction": -2,
+			"maintenance": 70,
+			"color": Color(0.48, 0.43, 0.22),
+			"text_color": Color.WHITE,
+			"description": "維持城市衛生，但形象下降。"
+		},
+		"法院": {
+			"category": "行政類",
+			"cost": 6800,
+			"security": 6,
+			"education": 1,
+			"satisfaction": 2,
+			"score_bonus": 3,
+			"maintenance": 210,
+			"color": Color(0.82, 0.84, 0.90),
+			"text_color": Color(0.10, 0.12, 0.20),
+			"description": "司法委員會審理重大案件，提升法治、治安與城市信任。"
+		},
+		"監察所": {
+			"category": "行政類",
+			"cost": 6000,
+			"security": 3,
+			"satisfaction": 3,
+			"score_bonus": 3,
+			"maintenance": 190,
+			"color": Color(0.45, 0.66, 0.72),
+			"text_color": Color(0.04, 0.12, 0.15),
+			"description": "監察委員會調查並監管行政官員，可依法提出彈劾。"
+		},
+		"市政府": {
+			"category": "行政類",
+			"cost": 5000,
+			"security": 2,
+			"environment": 1,
+			"education": 1,
+			"healthcare": 1,
+			"satisfaction": 4,
+			"score_bonus": 4,
+			"maintenance": 150,
+			"color": Color(0.84, 0.62, 0.14),
+			"text_color": Color(0.12, 0.08, 0.01),
+			"description": "整體穩定性與城市形象提升。"
+		},
+		"核能發電廠": {
+			"category": "基礎建設類",
+			"cost": 7200,
+			"commercial_income": 620,
+			"industrial_income": 220,
+			"environment": -11,
+			"satisfaction": -4,
+			"maintenance": 260,
+			"security": -3,
+			"job_attraction": 6,
+			"color": Color(0.34, 0.28, 0.30),
+			"text_color": Color(1.0, 0.94, 0.75),
+			"description": "高容量供電帶動經濟，但核能風險提升環境與治安壓力。"
+		},
+		"加油站": {
+			"category": "交通類",
+			"cost": 1800,
+			"commercial_income": 220,
+			"traffic": 10,
+			"environment": -4,
+			"satisfaction": -1,
+			"security": -2,
+			"maintenance": 85,
+			"job_attraction": 2,
+			"color": Color(0.82, 0.38, 0.20),
+			"text_color": Color.WHITE,
+			"description": "提升補給與交通便利，但油霧與安全風險仍需監控。"
+		},
+		"游泳池": {
+			"category": "休閒類",
+			"cost": 2400,
+			"commercial_income": 90,
+			"satisfaction": 8,
+			"environment": 6,
+			"maintenance": 95,
+			"score_bonus": 1,
+			"color": Color(0.29, 0.73, 0.86),
+			"text_color": Color.WHITE,
+			"description": "市民休閒品質提升，環境舒適度同步增加。"
+		}
+	}

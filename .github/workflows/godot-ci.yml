@@ -1,0 +1,421 @@
+name: Godot 4.7 verification
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: Release version in YYYY.MM.DD format (must match export_presets.cfg)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: godot-verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GODOT_RELEASE: 4.7-stable
+  GODOT_TEMPLATE_VERSION: 4.7.stable
+  GODOT_WINDOWS_ARCHIVE: Godot_v4.7-stable_win64.exe.zip
+  GODOT_WINDOWS_SHA256: 02a5312236f4e0209c78bcb2f52135b1963e6b8888c873c9cee81459e60bcd71
+  GODOT_LINUX_ARCHIVE: Godot_v4.7-stable_linux.x86_64.zip
+  GODOT_LINUX_SHA256: 0b1a6c54c2c619c12e169fe9241edda4b81080b519451cec2984bf0d2c6cb73c
+  GODOT_TEMPLATES_ARCHIVE: Godot_v4.7-stable_export_templates.tpz
+  GODOT_TEMPLATES_SHA256: 9714459dc071907c0f3d5f17d608faf69e7cda21331fc5d39c4503ffa4e99eec
+
+jobs:
+  assertion-matrix:
+    name: Assertion matrix (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.SDK_REPOSITORY_READ_TOKEN || github.token }}
+
+      - name: Validate Mayor Simulator SDK contracts
+        shell: pwsh
+        run: |
+          python sdk/mayor_sdk.py self-test
+          python -m unittest discover -s tests/sdk -p 'test_*.py'
+
+      - name: Download and verify Godot editor
+        id: godot
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+          $archive = Join-Path $env:RUNNER_TEMP $env:GODOT_WINDOWS_ARCHIVE
+          $url = "https://github.com/godotengine/godot-builds/releases/download/$env:GODOT_RELEASE/$env:GODOT_WINDOWS_ARCHIVE"
+          Invoke-WebRequest -Uri $url -OutFile $archive
+          $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:GODOT_WINDOWS_SHA256) {
+            throw "Godot editor SHA-256 mismatch: $actual"
+          }
+          $editorRoot = Join-Path $env:RUNNER_TEMP 'godot-editor'
+          Expand-Archive -LiteralPath $archive -DestinationPath $editorRoot -Force
+          $console = Get-ChildItem -LiteralPath $editorRoot -Filter '*_console.exe' -File | Select-Object -First 1
+          if ($null -eq $console) {
+            throw 'Godot console executable was not found after extraction.'
+          }
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "godot_exe=$($console.FullName)"
+
+      - name: Run isolated assertion manifest
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP 'assertion-matrix'
+          & pwsh -NoProfile -File tools/run_assertion_matrix.ps1 `
+            -GodotExe '${{ steps.godot.outputs.godot_exe }}' `
+            -ManifestPath tests/assertion_matrix.json `
+            -OutputRoot $output
+
+      - name: Run OS-kill save durability QA
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP 'save-os-kill-qa'
+          & pwsh -NoProfile -File tools/run_save_os_kill_qa.ps1 `
+            -GodotExe '${{ steps.godot.outputs.godot_exe }}' `
+            -OutputRoot $output
+
+      - name: Upload assertion evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: assertion-matrix-${{ github.run_number }}
+          path: ${{ runner.temp }}/assertion-matrix
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload OS-kill save durability evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: save-os-kill-qa-${{ github.run_number }}
+          path: ${{ runner.temp }}/save-os-kill-qa
+          if-no-files-found: error
+          retention-days: 14
+
+  release-version:
+    name: Resolve and validate release metadata
+    needs: assertion-matrix
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      release_version: ${{ steps.metadata.outputs.release_version }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.SDK_REPOSITORY_READ_TOKEN || github.token }}
+
+      - name: Validate source ref and export metadata
+        id: metadata
+        shell: bash
+        env:
+          DISPATCH_VERSION: ${{ inputs.release_version }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            release_version="${GITHUB_REF_NAME#v}"
+          else
+            release_version="${DISPATCH_VERSION}"
+          fi
+
+          if [[ ! "${release_version}" =~ ^([0-9]{4})\.([0-9]{2})\.([0-9]{2})$ ]]; then
+            echo "Release version must use YYYY.MM.DD: ${release_version}" >&2
+            exit 1
+          fi
+          year="${BASH_REMATCH[1]}"
+          month=$((10#${BASH_REMATCH[2]}))
+          day=$((10#${BASH_REMATCH[3]}))
+          windows_version="${year}.${month}.${day}.0"
+
+          mapfile -t file_versions < <(sed -n 's/^application\/file_version="\([^"]*\)"$/\1/p' export_presets.cfg)
+          mapfile -t product_versions < <(sed -n 's/^application\/product_version="\([^"]*\)"$/\1/p' export_presets.cfg)
+          if [[ ${#file_versions[@]} -ne 1 || ${#product_versions[@]} -ne 1 ]]; then
+            echo 'Expected exactly one Windows file_version and product_version in export_presets.cfg.' >&2
+            exit 1
+          fi
+          if [[ "${file_versions[0]}" != "${windows_version}" || "${product_versions[0]}" != "${windows_version}" ]]; then
+            echo "Release ${release_version} requires Windows metadata ${windows_version}; found file=${file_versions[0]} product=${product_versions[0]}." >&2
+            exit 1
+          fi
+
+          echo "release_version=${release_version}" >> "${GITHUB_OUTPUT}"
+          echo "Validated release ${release_version} against ${GITHUB_REF}." >> "${GITHUB_STEP_SUMMARY}"
+
+  windows-export-smoke:
+    name: Exported Windows executable smoke test
+    needs: release-version
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      RELEASE_VERSION: ${{ needs.release-version.outputs.release_version }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.SDK_REPOSITORY_READ_TOKEN || github.token }}
+
+      - name: Download and verify Windows editor and templates
+        id: windows-godot
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+          $baseUrl = "https://github.com/godotengine/godot-builds/releases/download/$env:GODOT_RELEASE"
+          $editorArchive = Join-Path $env:RUNNER_TEMP $env:GODOT_WINDOWS_ARCHIVE
+          $templateArchive = Join-Path $env:RUNNER_TEMP $env:GODOT_TEMPLATES_ARCHIVE
+          Invoke-WebRequest -Uri "$baseUrl/$env:GODOT_WINDOWS_ARCHIVE" -OutFile $editorArchive
+          Invoke-WebRequest -Uri "$baseUrl/$env:GODOT_TEMPLATES_ARCHIVE" -OutFile $templateArchive
+          $editorHash = (Get-FileHash -LiteralPath $editorArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+          $templateHash = (Get-FileHash -LiteralPath $templateArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($editorHash -ne $env:GODOT_WINDOWS_SHA256) { throw "Godot editor SHA-256 mismatch: $editorHash" }
+          if ($templateHash -ne $env:GODOT_TEMPLATES_SHA256) { throw "Godot templates SHA-256 mismatch: $templateHash" }
+
+          $editorRoot = Join-Path $env:RUNNER_TEMP 'godot-windows-editor'
+          Expand-Archive -LiteralPath $editorArchive -DestinationPath $editorRoot -Force
+          $console = Get-ChildItem -LiteralPath $editorRoot -Filter '*_console.exe' -File | Select-Object -First 1
+          if ($null -eq $console) { throw 'Godot console executable was not found after extraction.' }
+
+          $templateZip = Join-Path $env:RUNNER_TEMP 'godot-export-templates.zip'
+          Copy-Item -LiteralPath $templateArchive -Destination $templateZip
+          $templateExtract = Join-Path $env:RUNNER_TEMP 'godot-export-templates'
+          Expand-Archive -LiteralPath $templateZip -DestinationPath $templateExtract -Force
+          $templateSource = Join-Path $templateExtract 'templates'
+          $templateTarget = Join-Path (Join-Path $env:APPDATA 'Godot\export_templates') $env:GODOT_TEMPLATE_VERSION
+          New-Item -ItemType Directory -Path $templateTarget -Force | Out-Null
+          Copy-Item -Path (Join-Path $templateSource '*') -Destination $templateTarget -Recurse -Force
+          if (-not (Test-Path -LiteralPath (Join-Path $templateTarget 'windows_release_x86_64.exe') -PathType Leaf)) {
+            throw 'Windows release export template was not installed.'
+          }
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "godot_exe=$($console.FullName)"
+
+      - name: Export and smoke-test Windows executable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $godot = '${{ steps.windows-godot.outputs.godot_exe }}'
+          $outputRoot = Join-Path $env:RUNNER_TEMP 'windows-export'
+          New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
+          & $godot --headless --path . --import
+          if ($LASTEXITCODE -ne 0) { throw "Godot import failed with exit code $LASTEXITCODE." }
+          $exported = Join-Path $outputRoot 'MayorSimulator.exe'
+          & $godot --headless --path . --export-release 'Windows Desktop' $exported
+          if ($LASTEXITCODE -ne 0) { throw "Windows export failed with exit code $LASTEXITCODE." }
+          $pck = Join-Path $outputRoot 'MayorSimulator.pck'
+          if (-not (Test-Path -LiteralPath $exported -PathType Leaf) -or -not (Test-Path -LiteralPath $pck -PathType Leaf)) {
+            throw 'Windows export did not produce the expected EXE and PCK.'
+          }
+
+          $log = Join-Path $outputRoot 'windows-release-smoke.log'
+          $smokeOutput = & $exported --headless -- --qa-release-smoke-frames=120 2>&1 | Out-String
+          $smokeExitCode = $LASTEXITCODE
+          [IO.File]::WriteAllText($log, $smokeOutput, [Text.UTF8Encoding]::new($false))
+          if ($smokeExitCode -ne 0) { throw "Exported Windows smoke test failed with exit code $smokeExitCode." }
+          $logLines = @(Get-Content -LiteralPath $log)
+          if (-not $logLines.Contains('QA_RELEASE_SMOKE_ARMED frames=120') -or -not $logLines.Contains('QA_RELEASE_SMOKE_COMPLETED')) {
+            throw 'Exported Windows smoke markers are incomplete.'
+          }
+          $disallowed = @($logLines | Where-Object {
+              ($_ -match '^(SCRIPT ERROR|ERROR):|ObjectDB instances? .* leaked|resources? still in use at exit|Leaked instance:') -and
+              ($_ -notmatch '^ERROR: Failed to read the root certificate store')
+          })
+          if ($disallowed.Count -gt 0) { throw "Exported Windows smoke log contains product diagnostics: $($disallowed -join ' | ')" }
+
+          $evidence = [ordered]@{
+            schema_version = 1
+            source_ref = $env:GITHUB_REF
+            source_sha = $env:GITHUB_SHA
+            release_version = $env:RELEASE_VERSION
+            engine_release = $env:GODOT_RELEASE
+            editor_archive_sha256 = $env:GODOT_WINDOWS_SHA256
+            templates_archive_sha256 = $env:GODOT_TEMPLATES_SHA256
+            export_command = "godot --headless --path . --export-release 'Windows Desktop' <runner-temp>/windows-export/MayorSimulator.exe"
+            smoke_command = 'MayorSimulator.exe --headless -- --qa-release-smoke-frames=120'
+            smoke_exit_code = $smokeExitCode
+            markers = @('QA_RELEASE_SMOKE_ARMED frames=120', 'QA_RELEASE_SMOKE_COMPLETED')
+            executable = [ordered]@{
+              bytes = (Get-Item -LiteralPath $exported).Length
+              sha256 = (Get-FileHash -LiteralPath $exported -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+            pck = [ordered]@{
+              bytes = (Get-Item -LiteralPath $pck).Length
+              sha256 = (Get-FileHash -LiteralPath $pck -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+            log_sha256 = (Get-FileHash -LiteralPath $log -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+          $evidence | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $outputRoot 'windows-release-evidence.json') -Encoding utf8NoBOM
+
+      - name: Upload Windows export evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-export-evidence-${{ needs.release-version.outputs.release_version }}-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/windows-export/windows-release-smoke.log
+            ${{ runner.temp }}/windows-export/windows-release-evidence.json
+          if-no-files-found: error
+          retention-days: 30
+
+  release-exports:
+    name: Windows and Linux release exports
+    needs: release-version
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      RELEASE_VERSION: ${{ needs.release-version.outputs.release_version }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download and verify Godot editor and export templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .ci/editor .ci/templates
+          base_url="https://github.com/godotengine/godot-builds/releases/download/${GODOT_RELEASE}"
+          curl --fail --location --retry 4 --output ".ci/${GODOT_LINUX_ARCHIVE}" "${base_url}/${GODOT_LINUX_ARCHIVE}"
+          curl --fail --location --retry 4 --output ".ci/${GODOT_TEMPLATES_ARCHIVE}" "${base_url}/${GODOT_TEMPLATES_ARCHIVE}"
+          echo "${GODOT_LINUX_SHA256}  .ci/${GODOT_LINUX_ARCHIVE}" | sha256sum --check --strict
+          echo "${GODOT_TEMPLATES_SHA256}  .ci/${GODOT_TEMPLATES_ARCHIVE}" | sha256sum --check --strict
+          unzip -q ".ci/${GODOT_LINUX_ARCHIVE}" -d .ci/editor
+          unzip -q ".ci/${GODOT_TEMPLATES_ARCHIVE}" -d .ci/templates
+          chmod +x .ci/editor/Godot_v4.7-stable_linux.x86_64
+          template_root="${HOME}/.local/share/godot/export_templates/${GODOT_TEMPLATE_VERSION}"
+          mkdir -p "${template_root}"
+          cp -a .ci/templates/templates/. "${template_root}/"
+          test -f "${template_root}/windows_release_x86_64.exe"
+          test -f "${template_root}/linux_release.x86_64"
+
+      - name: Import and export release packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          godot=.ci/editor/Godot_v4.7-stable_linux.x86_64
+          mkdir -p builds/windows builds/linux
+          "${godot}" --headless --path . --import
+          "${godot}" --headless --path . --export-release "Windows Desktop" builds/windows/MayorSimulator.exe
+          "${godot}" --headless --path . --export-release Linux builds/linux/MayorSimulator.x86_64
+          test -s builds/windows/MayorSimulator.exe
+          test -s builds/windows/MayorSimulator.pck
+          test -s builds/linux/MayorSimulator.x86_64
+          test -s builds/linux/MayorSimulator.pck
+          chmod +x builds/linux/MayorSimulator.x86_64
+          cp RELEASE_README.txt builds/windows/
+          cp RELEASE_README.txt builds/linux/
+          cp THIRD_PARTY_NOTICES.md builds/windows/
+          cp THIRD_PARTY_NOTICES.md builds/linux/
+          cp GODOT_COPYRIGHT.txt builds/windows/
+          cp GODOT_COPYRIGHT.txt builds/linux/
+
+      - name: Smoke-test Linux export
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 60s builds/linux/MayorSimulator.x86_64 --headless -- --qa-release-smoke-frames=120 > .ci/linux-startup.log 2>&1
+          grep -Fxq 'QA_RELEASE_SMOKE_ARMED frames=120' .ci/linux-startup.log
+          grep -Fxq 'QA_RELEASE_SMOKE_COMPLETED' .ci/linux-startup.log
+          if grep -E '^(SCRIPT ERROR|ERROR):|ObjectDB instances? .* leaked|resources? still in use at exit|Leaked instance:' .ci/linux-startup.log; then
+            cat .ci/linux-startup.log
+            exit 1
+          fi
+
+      - name: Package release artifacts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & ./tools/package_release.ps1 `
+            -Version $env:RELEASE_VERSION `
+            -OutputDirectory "builds/release-$env:RELEASE_VERSION"
+
+      - name: Write machine-readable release evidence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $releaseRoot = "builds/release-$env:RELEASE_VERSION"
+          $files = [ordered]@{}
+          foreach ($relativePath in @(
+              'builds/windows/MayorSimulator.exe',
+              'builds/windows/MayorSimulator.pck',
+              'builds/windows/RELEASE_README.txt',
+              'builds/windows/THIRD_PARTY_NOTICES.md',
+              'builds/windows/GODOT_COPYRIGHT.txt',
+              'builds/linux/MayorSimulator.x86_64',
+              'builds/linux/MayorSimulator.pck',
+              'builds/linux/RELEASE_README.txt',
+              'builds/linux/THIRD_PARTY_NOTICES.md',
+              'builds/linux/GODOT_COPYRIGHT.txt',
+              "$releaseRoot/MayorSimulator-Windows-x86_64-$env:RELEASE_VERSION.zip",
+              "$releaseRoot/MayorSimulator-Linux-x86_64-$env:RELEASE_VERSION.tar.gz",
+              "$releaseRoot/SHA256SUMS",
+              '.ci/linux-startup.log'
+          )) {
+            if (-not (Test-Path -LiteralPath $relativePath -PathType Leaf)) {
+              throw "Release evidence input is missing: $relativePath"
+            }
+            $item = Get-Item -LiteralPath $relativePath
+            $files[$relativePath.Replace('\\', '/')] = [ordered]@{
+              bytes = $item.Length
+              sha256 = (Get-FileHash -LiteralPath $relativePath -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+          }
+          $evidence = [ordered]@{
+            schema_version = 1
+            generated_at_utc = [DateTimeOffset]::UtcNow.ToString('o')
+            source_ref = $env:GITHUB_REF
+            source_sha = $env:GITHUB_SHA
+            workflow_run_id = $env:GITHUB_RUN_ID
+            workflow_run_attempt = $env:GITHUB_RUN_ATTEMPT
+            release_version = $env:RELEASE_VERSION
+            engine_release = $env:GODOT_RELEASE
+            linux_editor_archive_sha256 = $env:GODOT_LINUX_SHA256
+            templates_archive_sha256 = $env:GODOT_TEMPLATES_SHA256
+            assertion_matrix_dependency = 'success'
+            commands = [ordered]@{
+              import = 'godot --headless --path . --import'
+              windows_export = "godot --headless --path . --export-release 'Windows Desktop' builds/windows/MayorSimulator.exe"
+              linux_export = "godot --headless --path . --export-release Linux builds/linux/MayorSimulator.x86_64"
+              linux_smoke = 'MayorSimulator.x86_64 --headless -- --qa-release-smoke-frames=120'
+              package = "tools/package_release.ps1 -Version $env:RELEASE_VERSION -OutputDirectory $releaseRoot"
+            }
+            exit_codes = [ordered]@{
+              import = 0
+              windows_export = 0
+              linux_export = 0
+              linux_smoke = 0
+              package = 0
+            }
+            required_smoke_markers = @('QA_RELEASE_SMOKE_ARMED frames=120', 'QA_RELEASE_SMOKE_COMPLETED')
+            files = $files
+          }
+          $evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath '.ci/release-evidence.json' -Encoding utf8NoBOM
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: MayorSimulator-${{ env.RELEASE_VERSION }}-${{ github.run_number }}
+          path: |
+            builds/release-${{ env.RELEASE_VERSION }}/MayorSimulator-Windows-x86_64-${{ env.RELEASE_VERSION }}.zip
+            builds/release-${{ env.RELEASE_VERSION }}/MayorSimulator-Linux-x86_64-${{ env.RELEASE_VERSION }}.tar.gz
+            builds/release-${{ env.RELEASE_VERSION }}/SHA256SUMS
+            .ci/linux-startup.log
+            .ci/release-evidence.json
+          if-no-files-found: error
+          retention-days: 30

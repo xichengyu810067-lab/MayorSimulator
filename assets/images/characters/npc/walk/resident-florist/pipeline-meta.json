@@ -1,0 +1,61 @@
+{
+  "target": "npc",
+  "mode": "directional_walk_assembled",
+  "rows": 4,
+  "cols": 4,
+  "cell_size": 192,
+  "duration": 120,
+  "directions": [
+    "down",
+    "left",
+    "right",
+    "up"
+  ],
+  "replace_row": 3,
+  "base_directory": "assets\\images\\characters\\npc\\walk\\resident-florist-source",
+  "replacement_directory": "assets\\images\\characters\\npc\\walk\\resident-florist-up",
+  "frame_sources": [
+    "assets\\images\\characters\\npc\\walk\\resident-florist-source\\npc_walk-1.png",
+    "assets\\images\\characters\\npc\\walk\\resident-florist-source\\npc_walk-2.png",
+    "assets\\images\\characters\\npc\\walk\\resident-florist-source\\npc_walk-3.png",
+    "assets\\images\\characters\\npc\\walk\\resident-florist-source\\npc_walk-4.png",
+    "assets\\images\\characters\\npc\\walk\\resident-florist-source\\npc_walk-5.png",
+    "assets\\images\\characters\\npc\\walk\\resident-florist-source\\npc_walk-6.png",
+    "assets\\images\\characters\\npc\\walk\\resident-florist-source\\npc_walk-7.png",
+    "assets\\images\\characters\\npc\\walk\\resident-florist-source\\npc_walk-8.png",
+    "assets\\images\\characters\\npc\\walk\\resident-florist-source\\npc_walk-9.png",
+    "assets\\images\\characters\\npc\\walk\\resident-florist-source\\npc_walk-10.png",
+    "assets\\images\\characters\\npc\\walk\\resident-florist-source\\npc_walk-11.png",
+    "assets\\images\\characters\\npc\\walk\\resident-florist-source\\npc_walk-12.png",
+    "assets\\images\\characters\\npc\\walk\\resident-florist-up\\npc_walk-1.png",
+    "assets\\images\\characters\\npc\\walk\\resident-florist-up\\npc_walk-2.png",
+    "assets\\images\\characters\\npc\\walk\\resident-florist-up\\npc_walk-3.png",
+    "assets\\images\\characters\\npc\\walk\\resident-florist-up\\npc_walk-4.png"
+  ],
+  "edge_touch_frames": [],
+  "base_edge_touch_frames_ignored": [
+    [
+      3,
+      0
+    ],
+    [
+      3,
+      1
+    ],
+    [
+      3,
+      2
+    ],
+    [
+      3,
+      3
+    ]
+  ],
+  "replacement_edge_touch_frames": [],
+  "assembly": "deterministic frame replacement; no creative image synthesis",
+  "despill": {
+    "removed_pixels": 0,
+    "recovered_edge_pixels": 4,
+    "algorithm": "transparent-neighbor magenta recovery v1"
+  }
+}

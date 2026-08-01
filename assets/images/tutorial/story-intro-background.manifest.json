@@ -1,0 +1,13 @@
+{
+  "map_mode": "baked_scene_mode",
+  "map_kind": "story_cutscene",
+  "visual_model": "baked_raster",
+  "runtime_object_model": "none",
+  "collision_model": "none",
+  "engine_target": "Godot project-native",
+  "art_style": "project-native hand_painted",
+  "source": "OpenAI image_gen",
+  "canvas": [2880, 1800],
+  "non_playable": true,
+  "generated_on": "2026-07-31"
+}

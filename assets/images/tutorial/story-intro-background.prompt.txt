@@ -1,0 +1,14 @@
+Use the attached city-map background only as the active art-direction reference.
+Create a brand-new non-playable story-introduction background for the same Godot
+city-simulator, landscape 16:10 composition. Warm hand-painted storybook
+watercolor style, crisp readable shapes, lush green valley at dawn, a small
+hopeful civic town in the lower-left and middle distance with teal roofs and warm
+amber windows, a modest bell-tower city hall as the visual landmark, winding
+river catching sunrise, distant forested hills and soft clouds. Leave generous
+calm sky and softly lit meadow negative space across the right half for a
+translucent tutorial story panel. Add subtle depth layers that will look good
+under slow parallax pan and light-ray animation, but bake this as one decorative
+cutscene background. No player characters, no people, no UI, no text, no labels,
+no watermark, no border, no symbols, no readable signs. Match the reference's
+warm painterly rendering, green palette, gold sunlight, and friendly
+civic-fantasy tone; do not copy its terrain layout.

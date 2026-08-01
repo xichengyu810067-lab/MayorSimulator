@@ -1,0 +1,183 @@
+{
+	"anchor": "feet",
+	"assets": [
+		{
+			"cell": 0,
+			"destination": [
+				91,
+				24
+			],
+			"edge_touch": false,
+			"output": "npc-resident.png",
+			"rendered_size": [
+				201,
+				476
+			],
+			"role": "resident",
+			"source": "npc-pack-community-raw.png",
+			"source_bounds": [
+				211,
+				24,
+				241,
+				571
+			]
+		},
+		{
+			"cell": 1,
+			"destination": [
+				76,
+				24
+			],
+			"edge_touch": false,
+			"output": "npc-student.png",
+			"rendered_size": [
+				232,
+				476
+			],
+			"role": "student",
+			"source": "npc-pack-community-raw.png",
+			"source_bounds": [
+				138,
+				58,
+				260,
+				534
+			]
+		},
+		{
+			"cell": 2,
+			"destination": [
+				83,
+				24
+			],
+			"edge_touch": false,
+			"output": "npc-merchant.png",
+			"rendered_size": [
+				217,
+				476
+			],
+			"role": "merchant",
+			"source": "npc-pack-community-raw.png",
+			"source_bounds": [
+				206,
+				21,
+				258,
+				566
+			]
+		},
+		{
+			"cell": 3,
+			"destination": [
+				70,
+				24
+			],
+			"edge_touch": false,
+			"output": "npc-elderly.png",
+			"rendered_size": [
+				243,
+				476
+			],
+			"role": "elderly",
+			"source": "npc-pack-community-raw.png",
+			"source_bounds": [
+				125,
+				67,
+				262,
+				513
+			]
+		},
+		{
+			"cell": 0,
+			"destination": [
+				82,
+				24
+			],
+			"edge_touch": false,
+			"output": "npc-worker.png",
+			"rendered_size": [
+				220,
+				476
+			],
+			"role": "worker",
+			"source": "npc-pack-civic-raw.png",
+			"source_bounds": [
+				222,
+				62,
+				245,
+				530
+			]
+		},
+		{
+			"cell": 1,
+			"destination": [
+				90,
+				24
+			],
+			"edge_touch": false,
+			"output": "npc-civil-servant.png",
+			"rendered_size": [
+				204,
+				476
+			],
+			"role": "civil-servant",
+			"source": "npc-pack-civic-raw.png",
+			"source_bounds": [
+				154,
+				63,
+				225,
+				526
+			]
+		},
+		{
+			"cell": 2,
+			"destination": [
+				79,
+				24
+			],
+			"edge_touch": false,
+			"output": "npc-council-member.png",
+			"rendered_size": [
+				225,
+				476
+			],
+			"role": "council-member",
+			"source": "npc-pack-civic-raw.png",
+			"source_bounds": [
+				223,
+				41,
+				252,
+				532
+			]
+		},
+		{
+			"cell": 3,
+			"destination": [
+				73,
+				24
+			],
+			"edge_touch": false,
+			"output": "npc-resident-florist.png",
+			"rendered_size": [
+				237,
+				476
+			],
+			"role": "resident-florist",
+			"source": "npc-pack-civic-raw.png",
+			"source_bounds": [
+				138,
+				45,
+				263,
+				529
+			]
+		}
+	],
+	"background_key": "#FF00FF",
+	"canvas_size": [
+		384,
+		512
+	],
+	"processor": "Godot 4 deterministic chroma-key fallback",
+	"target_size": [
+		348,
+		476
+	]
+}

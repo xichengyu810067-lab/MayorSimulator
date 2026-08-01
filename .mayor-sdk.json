@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "sdk_repository": "xichengyu810067-lab/MayorSimulator-SDK",
+  "sdk_version_range": ">=1.1.0 <2.0.0",
+  "integration_path": "sdk",
+  "contract": "The game repository pins an SDK commit through a Git submodule. The SDK manifest version must satisfy sdk_version_range."
+}

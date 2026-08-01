@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "committees": {
+	"judicial_committee": {
+	  "display_name": "司法委員會",
+	  "capacity": 15,
+	  "term_years": 5,
+	  "responsibilities": ["審理違法行政行為", "裁定法案停止施行", "裁定罰款或監禁", "審查市長提出的抗辯資料"]
+	},
+	"oversight_committee": {
+	  "display_name": "監察委員會",
+	  "capacity": 10,
+	  "term_years": 3,
+	  "responsibilities": ["調查行政官員", "監管行政權力", "審查利益衝突與失職", "表決是否提出彈劾"]
+	}
+  },
+  "members": [
+	{"person_id":"JC-001","name":"沈知衡","gender":"男性","age":60,"committee_id":"judicial_committee","role":"司法委員","personality_tags":["嚴謹","克制","重程序"],"appointed_year":1,"term_years":5,"term_end_year":6,"major_cases":["河岸徵收程序案","緊急預算越權案"]},
+	{"person_id":"JC-002","name":"顧清嵐","gender":"女性","age":55,"committee_id":"judicial_committee","role":"司法委員","personality_tags":["冷靜","獨立","重證據"],"appointed_year":1,"term_years":5,"term_end_year":6,"major_cases":["公共資料公開案","醫療採購爭議案"]},
+	{"person_id":"JC-003","name":"方致中","gender":"男性","age":49,"committee_id":"judicial_committee","role":"司法委員","personality_tags":["務實","果斷","重比例"],"appointed_year":1,"term_years":5,"term_end_year":6,"major_cases":["工業區停工處分案","市場管制合法性案"]},
+	{"person_id":"JC-004","name":"唐雅敘","gender":"女性","age":46,"committee_id":"judicial_committee","role":"司法委員","personality_tags":["細膩","同理","重人權"],"appointed_year":1,"term_years":5,"term_end_year":6,"major_cases":["社會住宅安置案","弱勢補助撤銷案"]},
+	{"person_id":"JC-005","name":"賀文川","gender":"男性","age":58,"committee_id":"judicial_committee","role":"司法委員","personality_tags":["保守","穩健","重秩序"],"appointed_year":1,"term_years":5,"term_end_year":6,"major_cases":["大型集會限制案","公共安全緊急命令案"]},
+	{"person_id":"JC-006","name":"白若庭","gender":"女性","age":42,"committee_id":"judicial_committee","role":"司法委員","personality_tags":["敏銳","改革","重透明"],"appointed_year":1,"term_years":5,"term_end_year":6,"major_cases":["城市監視資料案","行政會議紀錄公開案"]},
+	{"person_id":"JC-007","name":"宋承岳","gender":"男性","age":53,"committee_id":"judicial_committee","role":"司法委員","personality_tags":["理性","耐心","重法理"],"appointed_year":1,"term_years":5,"term_end_year":6,"major_cases":["交通建設契約案","地方自治權限案"]},
+	{"person_id":"JC-008","name":"夏芮安","gender":"女性","age":39,"committee_id":"judicial_committee","role":"司法委員","personality_tags":["開放","果敢","重公平"],"appointed_year":1,"term_years":5,"term_end_year":6,"major_cases":["教育資源分配案","非典型勞動保障案"]},
+	{"person_id":"JC-009","name":"邱明哲","gender":"男性","age":62,"committee_id":"judicial_committee","role":"司法委員","personality_tags":["資深","審慎","重先例"],"appointed_year":1,"term_years":5,"term_end_year":6,"major_cases":["市長行政命令案","舊城保存禁建案"]},
+	{"person_id":"JC-010","name":"簡舒寧","gender":"女性","age":50,"committee_id":"judicial_committee","role":"司法委員","personality_tags":["沉著","精準","重責任"],"appointed_year":1,"term_years":5,"term_end_year":6,"major_cases":["公共工程延誤案","醫院營運責任案"]},
+	{"person_id":"JC-011","name":"段維新","gender":"男性","age":45,"committee_id":"judicial_committee","role":"司法委員","personality_tags":["分析","懷疑","重效率"],"appointed_year":1,"term_years":5,"term_end_year":6,"major_cases":["數位服務採購案","公共費率調整案"]},
+	{"person_id":"JC-012","name":"游嘉禾","gender":"女性","age":57,"committee_id":"judicial_committee","role":"司法委員","personality_tags":["溫和","堅定","重公益"],"appointed_year":1,"term_years":5,"term_end_year":6,"major_cases":["公園用地變更案","環境影響評估案"]},
+	{"person_id":"JC-013","name":"柯正宇","gender":"男性","age":48,"committee_id":"judicial_committee","role":"司法委員","personality_tags":["直接","自律","重問責"],"appointed_year":1,"term_years":5,"term_end_year":6,"major_cases":["官員財產申報案","工程追加預算案"]},
+	{"person_id":"JC-014","name":"莫心蘭","gender":"女性","age":44,"committee_id":"judicial_committee","role":"司法委員","personality_tags":["同理","謹慎","重復原"],"appointed_year":1,"term_years":5,"term_end_year":6,"major_cases":["災後安置補償案","錯誤行政處分案"]},
+	{"person_id":"JC-015","name":"韓啟瑞","gender":"男性","age":59,"committee_id":"judicial_committee","role":"司法委員","personality_tags":["威嚴","務實","重安全"],"appointed_year":1,"term_years":5,"term_end_year":6,"major_cases":["消防強制徵用案","重大治安管制案"]},
+
+	{"person_id":"OC-001","name":"任書妍","gender":"女性","age":47,"committee_id":"oversight_committee","role":"監察委員","personality_tags":["敏銳","正直","重透明"],"appointed_year":1,"term_years":3,"term_end_year":4,"major_cases":["採購利益衝突調查","官員財產異常調查"]},
+	{"person_id":"OC-002","name":"潘國勳","gender":"男性","age":56,"committee_id":"oversight_committee","role":"監察委員","personality_tags":["嚴格","保守","重紀律"],"appointed_year":1,"term_years":3,"term_end_year":4,"major_cases":["工程監造失職案","公務車濫用案"]},
+	{"person_id":"OC-003","name":"蔣宜真","gender":"女性","age":52,"committee_id":"oversight_committee","role":"監察委員","personality_tags":["沉著","細心","重證據"],"appointed_year":1,"term_years":3,"term_end_year":4,"major_cases":["補助款流向調查","人事任用程序案"]},
+	{"person_id":"OC-004","name":"黎修遠","gender":"男性","age":43,"committee_id":"oversight_committee","role":"監察委員","personality_tags":["果斷","好辯","重效率"],"appointed_year":1,"term_years":3,"term_end_year":4,"major_cases":["行政怠惰調查","緊急採購延誤案"]},
+	{"person_id":"OC-005","name":"翁映慈","gender":"女性","age":38,"committee_id":"oversight_committee","role":"監察委員","personality_tags":["改革","積極","重民意"],"appointed_year":1,"term_years":3,"term_end_year":4,"major_cases":["陳情壓案調查","公共服務歧視案"]},
+	{"person_id":"OC-006","name":"施柏謙","gender":"男性","age":61,"committee_id":"oversight_committee","role":"監察委員","personality_tags":["資深","審慎","重制度"],"appointed_year":1,"term_years":3,"term_end_year":4,"major_cases":["行政規則越權案","機密文件管理案"]},
+	{"person_id":"OC-007","name":"卓語彤","gender":"女性","age":45,"committee_id":"oversight_committee","role":"監察委員","personality_tags":["獨立","冷靜","重人權"],"appointed_year":1,"term_years":3,"term_end_year":4,"major_cases":["警務執法監督案","收容程序調查"]},
+	{"person_id":"OC-008","name":"康志宏","gender":"男性","age":50,"committee_id":"oversight_committee","role":"監察委員","personality_tags":["精算","務實","重預算"],"appointed_year":1,"term_years":3,"term_end_year":4,"major_cases":["預算浮編調查","維護經費挪用案"]},
+	{"person_id":"OC-009","name":"藍可欣","gender":"女性","age":41,"committee_id":"oversight_committee","role":"監察委員","personality_tags":["同理","堅定","重弱勢"],"appointed_year":1,"term_years":3,"term_end_year":4,"major_cases":["社福資格審查案","住宅分配關說案"]},
+	{"person_id":"OC-010","name":"穆景文","gender":"男性","age":54,"committee_id":"oversight_committee","role":"監察委員","personality_tags":["理性","低調","重程序"],"appointed_year":1,"term_years":3,"term_end_year":4,"major_cases":["行政會議洩密案","公務員迴避義務案"]}
+  ]
+}

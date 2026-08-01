@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mayor Simulator SDK"
+  short_description: "Maintain SDK versions tests and release gates"
+  default_prompt: "Use $mayor-simulator-sdk to inspect recent project chats, maintain the SDK, and validate the Mayor Simulator project safely."

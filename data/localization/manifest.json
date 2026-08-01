@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "source_locale": "zh_TW",
+  "locales": [
+    "zh_TW",
+    "zh_CN",
+    "en",
+    "ja",
+    "ko"
+  ],
+  "source_count": 1471,
+  "generated_at": "2026-07-31T23:45:00+08:00"
+}

@@ -1,0 +1,218 @@
+{
+  "schema_version": 1,
+  "chamber_id": "lower_council",
+  "seat_count": 30,
+  "majority_threshold": 16,
+  "members": [
+    {
+      "member_id": "LC-001", "name": "林若衡", "gender": "男性", "age": 52, "district": "北一", "region": "north", "caucus": "財政與發展聯盟",
+      "personality_tags": ["理性", "節制", "強硬"],
+      "concerns": [{"key": "budget", "label": "預算", "weight": 45}, {"key": "roi", "label": "投資報酬率", "weight": 35}, {"key": "administrative_efficiency", "label": "行政效率", "weight": 20}],
+      "behavior": {"public_sensitivity": 35, "persuasion_resistance": 82, "caucus_discipline": 88, "risk_tolerance": 28},
+      "seed_votes": {"environment_act": "against", "transit_act": "for", "commerce_act": "for", "welfare_act": "against", "security_act": "for", "utility_relief_act": "against", "industry_act": "for", "social_housing_act": "against"}
+    },
+    {
+      "member_id": "LC-002", "name": "謝明潔", "gender": "女性", "age": 46, "district": "北二", "region": "north", "caucus": "社會民生聯盟",
+      "personality_tags": ["同理", "穩健", "協調"],
+      "concerns": [{"key": "public_opinion", "label": "民意", "weight": 40}, {"key": "social_welfare", "label": "社會福利", "weight": 35}, {"key": "housing", "label": "住宅", "weight": 25}],
+      "behavior": {"public_sensitivity": 86, "persuasion_resistance": 48, "caucus_discipline": 76, "risk_tolerance": 42},
+      "seed_votes": {"environment_act": "for", "transit_act": "for", "commerce_act": "abstain", "welfare_act": "for", "security_act": "abstain", "utility_relief_act": "for", "industry_act": "against", "social_housing_act": "for"}
+    },
+    {
+      "member_id": "LC-003", "name": "陳映蓉", "gender": "女性", "age": 39, "district": "北三", "region": "north", "caucus": "綠色未來聯盟",
+      "personality_tags": ["理想", "敏銳", "堅定"],
+      "concerns": [{"key": "environment", "label": "環境", "weight": 50}, {"key": "transport", "label": "永續交通", "weight": 30}, {"key": "execution_feasibility", "label": "執行可行性", "weight": 20}],
+      "behavior": {"public_sensitivity": 64, "persuasion_resistance": 76, "caucus_discipline": 84, "risk_tolerance": 58},
+      "seed_votes": {"environment_act": "for", "transit_act": "for", "commerce_act": "abstain", "welfare_act": "for", "security_act": "against", "utility_relief_act": "for", "industry_act": "against", "social_housing_act": "for"}
+    },
+    {
+      "member_id": "LC-004", "name": "周啟安", "gender": "男性", "age": 58, "district": "北四", "region": "north", "caucus": "公民地方聯盟",
+      "personality_tags": ["老練", "務實", "審慎"],
+      "concerns": [{"key": "regional_balance", "label": "區域平衡", "weight": 40}, {"key": "budget", "label": "預算", "weight": 35}, {"key": "execution_feasibility", "label": "執行可行性", "weight": 25}],
+      "behavior": {"public_sensitivity": 72, "persuasion_resistance": 70, "caucus_discipline": 68, "risk_tolerance": 30},
+      "seed_votes": {"environment_act": "abstain", "transit_act": "for", "commerce_act": "for", "welfare_act": "abstain", "security_act": "for", "utility_relief_act": "against", "industry_act": "for", "social_housing_act": "against"}
+    },
+    {
+      "member_id": "LC-005", "name": "高以辰", "gender": "非二元", "age": 35, "district": "北五", "region": "north", "caucus": "無黨籍",
+      "personality_tags": ["開放", "好奇", "敢言"],
+      "concerns": [{"key": "public_opinion", "label": "民意", "weight": 40}, {"key": "education", "label": "教育", "weight": 30}, {"key": "environment", "label": "環境", "weight": 30}],
+      "behavior": {"public_sensitivity": 90, "persuasion_resistance": 32, "caucus_discipline": 15, "risk_tolerance": 74},
+      "seed_votes": {"environment_act": "for", "transit_act": "for", "commerce_act": "for", "welfare_act": "for", "security_act": "abstain", "utility_relief_act": "for", "industry_act": "against", "social_housing_act": "for"}
+    },
+    {
+      "member_id": "LC-006", "name": "吳俊維", "gender": "男性", "age": 44, "district": "北六", "region": "north", "caucus": "財政與發展聯盟",
+      "personality_tags": ["果斷", "競爭", "重效率"],
+      "concerns": [{"key": "roi", "label": "投資報酬率", "weight": 45}, {"key": "economic_growth", "label": "經濟成長", "weight": 35}, {"key": "employment", "label": "就業", "weight": 20}],
+      "behavior": {"public_sensitivity": 42, "persuasion_resistance": 68, "caucus_discipline": 82, "risk_tolerance": 72},
+      "seed_votes": {"environment_act": "abstain", "transit_act": "for", "commerce_act": "for", "welfare_act": "against", "security_act": "for", "utility_relief_act": "against", "industry_act": "for", "social_housing_act": "against"}
+    },
+    {
+      "member_id": "LC-007", "name": "蔡芷晴", "gender": "女性", "age": 41, "district": "東一", "region": "east", "caucus": "綠色未來聯盟",
+      "personality_tags": ["溫和", "長期思考", "耐心"],
+      "concerns": [{"key": "environment", "label": "環境", "weight": 45}, {"key": "healthcare", "label": "醫療", "weight": 30}, {"key": "regional_balance", "label": "區域平衡", "weight": 25}],
+      "behavior": {"public_sensitivity": 70, "persuasion_resistance": 58, "caucus_discipline": 78, "risk_tolerance": 46},
+      "seed_votes": {"environment_act": "for", "transit_act": "for", "commerce_act": "against", "welfare_act": "for", "security_act": "abstain", "utility_relief_act": "for", "industry_act": "against", "social_housing_act": "for"}
+    },
+    {
+      "member_id": "LC-008", "name": "黃世謙", "gender": "男性", "age": 55, "district": "東二", "region": "east", "caucus": "財政與發展聯盟",
+      "personality_tags": ["保守", "精算", "低調"],
+      "concerns": [{"key": "budget", "label": "預算", "weight": 50}, {"key": "public_safety", "label": "公共安全", "weight": 30}, {"key": "administrative_efficiency", "label": "行政效率", "weight": 20}],
+      "behavior": {"public_sensitivity": 30, "persuasion_resistance": 88, "caucus_discipline": 91, "risk_tolerance": 18},
+      "seed_votes": {"environment_act": "against", "transit_act": "for", "commerce_act": "for", "welfare_act": "against", "security_act": "for", "utility_relief_act": "against", "industry_act": "for", "social_housing_act": "against"}
+    },
+    {
+      "member_id": "LC-009", "name": "李妍書", "gender": "女性", "age": 37, "district": "東三", "region": "east", "caucus": "社會民生聯盟",
+      "personality_tags": ["熱情", "直接", "重公平"],
+      "concerns": [{"key": "social_welfare", "label": "社會福利", "weight": 45}, {"key": "public_opinion", "label": "民意", "weight": 35}, {"key": "utility_affordability", "label": "公共服務可負擔性", "weight": 20}],
+      "behavior": {"public_sensitivity": 92, "persuasion_resistance": 38, "caucus_discipline": 72, "risk_tolerance": 55},
+      "seed_votes": {"environment_act": "for", "transit_act": "for", "commerce_act": "against", "welfare_act": "for", "security_act": "against", "utility_relief_act": "for", "industry_act": "against", "social_housing_act": "for"}
+    },
+    {
+      "member_id": "LC-010", "name": "張伯勳", "gender": "男性", "age": 61, "district": "東四", "region": "east", "caucus": "公民地方聯盟",
+      "personality_tags": ["傳統", "穩定", "地方導向"],
+      "concerns": [{"key": "regional_balance", "label": "區域平衡", "weight": 45}, {"key": "public_safety", "label": "公共安全", "weight": 30}, {"key": "employment", "label": "就業", "weight": 25}],
+      "behavior": {"public_sensitivity": 78, "persuasion_resistance": 80, "caucus_discipline": 74, "risk_tolerance": 22},
+      "seed_votes": {"environment_act": "against", "transit_act": "for", "commerce_act": "for", "welfare_act": "against", "security_act": "for", "utility_relief_act": "abstain", "industry_act": "for", "social_housing_act": "against"}
+    },
+    {
+      "member_id": "LC-011", "name": "王心岑", "gender": "女性", "age": 49, "district": "東五", "region": "east", "caucus": "無黨籍",
+      "personality_tags": ["冷靜", "獨立", "重證據"],
+      "concerns": [{"key": "execution_feasibility", "label": "執行可行性", "weight": 40}, {"key": "budget", "label": "預算", "weight": 35}, {"key": "healthcare", "label": "醫療", "weight": 25}],
+      "behavior": {"public_sensitivity": 58, "persuasion_resistance": 72, "caucus_discipline": 20, "risk_tolerance": 34},
+      "seed_votes": {"environment_act": "abstain", "transit_act": "for", "commerce_act": "against", "welfare_act": "for", "security_act": "for", "utility_relief_act": "for", "industry_act": "abstain", "social_housing_act": "for"}
+    },
+    {
+      "member_id": "LC-012", "name": "劉承翰", "gender": "男性", "age": 43, "district": "東六", "region": "east", "caucus": "公民地方聯盟",
+      "personality_tags": ["務實", "機敏", "擅談判"],
+      "concerns": [{"key": "transport", "label": "交通", "weight": 40}, {"key": "economic_growth", "label": "經濟成長", "weight": 35}, {"key": "regional_balance", "label": "區域平衡", "weight": 25}],
+      "behavior": {"public_sensitivity": 74, "persuasion_resistance": 44, "caucus_discipline": 62, "risk_tolerance": 60},
+      "seed_votes": {"environment_act": "abstain", "transit_act": "for", "commerce_act": "for", "welfare_act": "against", "security_act": "for", "utility_relief_act": "against", "industry_act": "for", "social_housing_act": "abstain"}
+    },
+    {
+      "member_id": "LC-013", "name": "趙雨庭", "gender": "女性", "age": 34, "district": "南一", "region": "south", "caucus": "社會民生聯盟",
+      "personality_tags": ["積極", "同理", "改革導向"],
+      "concerns": [{"key": "housing", "label": "住宅", "weight": 40}, {"key": "social_welfare", "label": "社會福利", "weight": 35}, {"key": "public_opinion", "label": "民意", "weight": 25}],
+      "behavior": {"public_sensitivity": 88, "persuasion_resistance": 35, "caucus_discipline": 70, "risk_tolerance": 68},
+      "seed_votes": {"environment_act": "for", "transit_act": "for", "commerce_act": "abstain", "welfare_act": "for", "security_act": "against", "utility_relief_act": "for", "industry_act": "against", "social_housing_act": "for"}
+    },
+    {
+      "member_id": "LC-014", "name": "楊致遠", "gender": "男性", "age": 50, "district": "南二", "region": "south", "caucus": "財政與發展聯盟",
+      "personality_tags": ["自律", "精準", "重成果"],
+      "concerns": [{"key": "roi", "label": "投資報酬率", "weight": 45}, {"key": "budget", "label": "預算", "weight": 35}, {"key": "employment", "label": "就業", "weight": 20}],
+      "behavior": {"public_sensitivity": 38, "persuasion_resistance": 74, "caucus_discipline": 86, "risk_tolerance": 52},
+      "seed_votes": {"environment_act": "against", "transit_act": "for", "commerce_act": "for", "welfare_act": "abstain", "security_act": "for", "utility_relief_act": "against", "industry_act": "for", "social_housing_act": "against"}
+    },
+    {
+      "member_id": "LC-015", "name": "何婉寧", "gender": "女性", "age": 57, "district": "南三", "region": "south", "caucus": "綠色未來聯盟",
+      "personality_tags": ["沉著", "原則", "學術導向"],
+      "concerns": [{"key": "environment", "label": "環境", "weight": 55}, {"key": "execution_feasibility", "label": "執行可行性", "weight": 25}, {"key": "education", "label": "教育", "weight": 20}],
+      "behavior": {"public_sensitivity": 52, "persuasion_resistance": 90, "caucus_discipline": 88, "risk_tolerance": 38},
+      "seed_votes": {"environment_act": "for", "transit_act": "for", "commerce_act": "against", "welfare_act": "for", "security_act": "against", "utility_relief_act": "for", "industry_act": "against", "social_housing_act": "for"}
+    },
+    {
+      "member_id": "LC-016", "name": "鄭凱文", "gender": "男性", "age": 38, "district": "南四", "region": "south", "caucus": "公民地方聯盟",
+      "personality_tags": ["彈性", "親民", "行動派"],
+      "concerns": [{"key": "public_opinion", "label": "民意", "weight": 45}, {"key": "transport", "label": "交通", "weight": 30}, {"key": "public_safety", "label": "公共安全", "weight": 25}],
+      "behavior": {"public_sensitivity": 94, "persuasion_resistance": 28, "caucus_discipline": 55, "risk_tolerance": 70},
+      "seed_votes": {"environment_act": "for", "transit_act": "for", "commerce_act": "abstain", "welfare_act": "for", "security_act": "for", "utility_relief_act": "for", "industry_act": "against", "social_housing_act": "for"}
+    },
+    {
+      "member_id": "LC-017", "name": "孫雅雯", "gender": "女性", "age": 45, "district": "南五", "region": "south", "caucus": "社會民生聯盟",
+      "personality_tags": ["溫暖", "堅韌", "社區導向"],
+      "concerns": [{"key": "social_welfare", "label": "社會福利", "weight": 40}, {"key": "healthcare", "label": "醫療", "weight": 35}, {"key": "housing", "label": "住宅", "weight": 25}],
+      "behavior": {"public_sensitivity": 82, "persuasion_resistance": 54, "caucus_discipline": 80, "risk_tolerance": 36},
+      "seed_votes": {"environment_act": "for", "transit_act": "abstain", "commerce_act": "against", "welfare_act": "for", "security_act": "for", "utility_relief_act": "for", "industry_act": "against", "social_housing_act": "for"}
+    },
+    {
+      "member_id": "LC-018", "name": "郭尚謙", "gender": "男性", "age": 59, "district": "南六", "region": "south", "caucus": "財政與發展聯盟",
+      "personality_tags": ["威嚴", "謹慎", "制度導向"],
+      "concerns": [{"key": "budget", "label": "預算", "weight": 45}, {"key": "administrative_efficiency", "label": "行政效率", "weight": 30}, {"key": "public_safety", "label": "公共安全", "weight": 25}],
+      "behavior": {"public_sensitivity": 34, "persuasion_resistance": 86, "caucus_discipline": 93, "risk_tolerance": 20},
+      "seed_votes": {"environment_act": "against", "transit_act": "for", "commerce_act": "for", "welfare_act": "against", "security_act": "for", "utility_relief_act": "against", "industry_act": "for", "social_housing_act": "abstain"}
+    },
+    {
+      "member_id": "LC-019", "name": "羅采薇", "gender": "女性", "age": 42, "district": "西一", "region": "west", "caucus": "綠色未來聯盟",
+      "personality_tags": ["敏感", "堅持", "重科學"],
+      "concerns": [{"key": "environment", "label": "環境", "weight": 50}, {"key": "healthcare", "label": "公共健康", "weight": 30}, {"key": "public_opinion", "label": "民意", "weight": 20}],
+      "behavior": {"public_sensitivity": 76, "persuasion_resistance": 84, "caucus_discipline": 86, "risk_tolerance": 44},
+      "seed_votes": {"environment_act": "for", "transit_act": "for", "commerce_act": "abstain", "welfare_act": "for", "security_act": "against", "utility_relief_act": "for", "industry_act": "against", "social_housing_act": "for"}
+    },
+    {
+      "member_id": "LC-020", "name": "徐敬倫", "gender": "男性", "age": 47, "district": "西二", "region": "west", "caucus": "財政與發展聯盟",
+      "personality_tags": ["冷靜", "商業導向", "現實"],
+      "concerns": [{"key": "economic_growth", "label": "經濟成長", "weight": 40}, {"key": "roi", "label": "投資報酬率", "weight": 35}, {"key": "budget", "label": "預算", "weight": 25}],
+      "behavior": {"public_sensitivity": 48, "persuasion_resistance": 66, "caucus_discipline": 79, "risk_tolerance": 64},
+      "seed_votes": {"environment_act": "abstain", "transit_act": "for", "commerce_act": "for", "welfare_act": "against", "security_act": "for", "utility_relief_act": "against", "industry_act": "for", "social_housing_act": "against"}
+    },
+    {
+      "member_id": "LC-021", "name": "許佩珊", "gender": "女性", "age": 53, "district": "西三", "region": "west", "caucus": "社會民生聯盟",
+      "personality_tags": ["細膩", "審慎", "重照護"],
+      "concerns": [{"key": "healthcare", "label": "醫療", "weight": 40}, {"key": "social_welfare", "label": "社會福利", "weight": 35}, {"key": "utility_affordability", "label": "公共服務可負擔性", "weight": 25}],
+      "behavior": {"public_sensitivity": 80, "persuasion_resistance": 62, "caucus_discipline": 83, "risk_tolerance": 24},
+      "seed_votes": {"environment_act": "for", "transit_act": "for", "commerce_act": "against", "welfare_act": "for", "security_act": "abstain", "utility_relief_act": "for", "industry_act": "against", "social_housing_act": "for"}
+    },
+    {
+      "member_id": "LC-022", "name": "馮子維", "gender": "男性", "age": 36, "district": "西四", "region": "west", "caucus": "公民地方聯盟",
+      "personality_tags": ["外向", "靈活", "重民調"],
+      "concerns": [{"key": "public_opinion", "label": "民意", "weight": 50}, {"key": "employment", "label": "就業", "weight": 30}, {"key": "transport", "label": "交通", "weight": 20}],
+      "behavior": {"public_sensitivity": 96, "persuasion_resistance": 25, "caucus_discipline": 48, "risk_tolerance": 78},
+      "seed_votes": {"environment_act": "for", "transit_act": "for", "commerce_act": "for", "welfare_act": "abstain", "security_act": "for", "utility_relief_act": "abstain", "industry_act": "for", "social_housing_act": "against"}
+    },
+    {
+      "member_id": "LC-023", "name": "蘇慧君", "gender": "女性", "age": 60, "district": "西五", "region": "west", "caucus": "無黨籍",
+      "personality_tags": ["正直", "資深", "重公共利益"],
+      "concerns": [{"key": "public_interest", "label": "公共利益", "weight": 40}, {"key": "public_safety", "label": "公共安全", "weight": 35}, {"key": "procedural_justice", "label": "程序正義", "weight": 25}],
+      "behavior": {"public_sensitivity": 66, "persuasion_resistance": 92, "caucus_discipline": 10, "risk_tolerance": 16},
+      "seed_votes": {"environment_act": "for", "transit_act": "against", "commerce_act": "against", "welfare_act": "for", "security_act": "for", "utility_relief_act": "for", "industry_act": "against", "social_housing_act": "for"}
+    },
+    {
+      "member_id": "LC-024", "name": "梁睿哲", "gender": "男性", "age": 40, "district": "西六", "region": "west", "caucus": "綠色未來聯盟",
+      "personality_tags": ["創新", "理性", "願冒險"],
+      "concerns": [{"key": "environment", "label": "環境", "weight": 40}, {"key": "roi", "label": "投資報酬率", "weight": 35}, {"key": "innovation", "label": "創新", "weight": 25}],
+      "behavior": {"public_sensitivity": 60, "persuasion_resistance": 40, "caucus_discipline": 70, "risk_tolerance": 90},
+      "seed_votes": {"environment_act": "for", "transit_act": "for", "commerce_act": "for", "welfare_act": "abstain", "security_act": "for", "utility_relief_act": "for", "industry_act": "against", "social_housing_act": "abstain"}
+    },
+    {
+      "member_id": "LC-025", "name": "江映雪", "gender": "女性", "age": 33, "district": "中一", "region": "central", "caucus": "社會民生聯盟",
+      "personality_tags": ["理想", "活躍", "擅溝通"],
+      "concerns": [{"key": "public_opinion", "label": "民意", "weight": 40}, {"key": "education", "label": "教育", "weight": 35}, {"key": "social_welfare", "label": "社會福利", "weight": 25}],
+      "behavior": {"public_sensitivity": 93, "persuasion_resistance": 30, "caucus_discipline": 68, "risk_tolerance": 76},
+      "seed_votes": {"environment_act": "for", "transit_act": "for", "commerce_act": "abstain", "welfare_act": "for", "security_act": "against", "utility_relief_act": "for", "industry_act": "against", "social_housing_act": "for"}
+    },
+    {
+      "member_id": "LC-026", "name": "彭志傑", "gender": "男性", "age": 56, "district": "中二", "region": "central", "caucus": "財政與發展聯盟",
+      "personality_tags": ["嚴謹", "耐性", "重問責"],
+      "concerns": [{"key": "budget", "label": "預算", "weight": 50}, {"key": "accountability", "label": "問責", "weight": 30}, {"key": "execution_feasibility", "label": "執行可行性", "weight": 20}],
+      "behavior": {"public_sensitivity": 32, "persuasion_resistance": 94, "caucus_discipline": 95, "risk_tolerance": 12},
+      "seed_votes": {"environment_act": "against", "transit_act": "for", "commerce_act": "for", "welfare_act": "against", "security_act": "for", "utility_relief_act": "abstain", "industry_act": "for", "social_housing_act": "against"}
+    },
+    {
+      "member_id": "LC-027", "name": "杜欣怡", "gender": "女性", "age": 48, "district": "中三", "region": "central", "caucus": "公民地方聯盟",
+      "personality_tags": ["平衡", "包容", "重程序"],
+      "concerns": [{"key": "regional_balance", "label": "區域平衡", "weight": 40}, {"key": "procedural_justice", "label": "程序正義", "weight": 35}, {"key": "public_opinion", "label": "民意", "weight": 25}],
+      "behavior": {"public_sensitivity": 84, "persuasion_resistance": 56, "caucus_discipline": 64, "risk_tolerance": 40},
+      "seed_votes": {"environment_act": "for", "transit_act": "for", "commerce_act": "against", "welfare_act": "for", "security_act": "for", "utility_relief_act": "for", "industry_act": "against", "social_housing_act": "for"}
+    },
+    {
+      "member_id": "LC-028", "name": "鍾逸凡", "gender": "男性", "age": 44, "district": "中四", "region": "central", "caucus": "綠色未來聯盟",
+      "personality_tags": ["分析", "務實", "長期思考"],
+      "concerns": [{"key": "environment", "label": "環境", "weight": 40}, {"key": "execution_feasibility", "label": "執行可行性", "weight": 35}, {"key": "economic_growth", "label": "經濟成長", "weight": 25}],
+      "behavior": {"public_sensitivity": 62, "persuasion_resistance": 64, "caucus_discipline": 81, "risk_tolerance": 56},
+      "seed_votes": {"environment_act": "for", "transit_act": "for", "commerce_act": "against", "welfare_act": "for", "security_act": "for", "utility_relief_act": "for", "industry_act": "against", "social_housing_act": "for"}
+    },
+    {
+      "member_id": "LC-029", "name": "葉嘉玲", "gender": "女性", "age": 51, "district": "中五", "region": "central", "caucus": "社會民生聯盟",
+      "personality_tags": ["堅定", "細心", "重弱勢"],
+      "concerns": [{"key": "social_welfare", "label": "社會福利", "weight": 45}, {"key": "housing", "label": "住宅", "weight": 35}, {"key": "utility_affordability", "label": "公共服務可負擔性", "weight": 20}],
+      "behavior": {"public_sensitivity": 85, "persuasion_resistance": 78, "caucus_discipline": 90, "risk_tolerance": 26},
+      "seed_votes": {"environment_act": "for", "transit_act": "for", "commerce_act": "against", "welfare_act": "for", "security_act": "for", "utility_relief_act": "for", "industry_act": "against", "social_housing_act": "for"}
+    },
+    {
+      "member_id": "LC-030", "name": "莊文皓", "gender": "男性", "age": 39, "district": "中六", "region": "central", "caucus": "無黨籍",
+      "personality_tags": ["獨立", "懷疑", "重成效"],
+      "concerns": [{"key": "roi", "label": "投資報酬率", "weight": 40}, {"key": "execution_feasibility", "label": "執行可行性", "weight": 35}, {"key": "public_opinion", "label": "民意", "weight": 25}],
+      "behavior": {"public_sensitivity": 68, "persuasion_resistance": 74, "caucus_discipline": 12, "risk_tolerance": 50},
+      "seed_votes": {"environment_act": "against", "transit_act": "for", "commerce_act": "for", "welfare_act": "abstain", "security_act": "for", "utility_relief_act": "against", "industry_act": "for", "social_housing_act": "against"}
+    }
+  ]
+}
