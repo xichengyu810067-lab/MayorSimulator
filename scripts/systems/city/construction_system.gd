@@ -264,7 +264,7 @@ func start_infrastructure_job(
 		normalized_tiles.append(tile_index)
 	if normalized_tiles.is_empty():
 		return _error("invalid_infrastructure_tiles")
-	var work_per_tile := {
+	var work_per_tile: float = float({
 		"road": 5.0,
 		"metro_track": 9.0,
 		"rail_track": 8.0,
@@ -274,7 +274,7 @@ func start_infrastructure_job(
 		"metro_depot": 16.0,
 		"rail_depot": 16.0,
 		"rail_signal": 4.0,
-	}.get(infrastructure_kind, 7.0)
+	}.get(infrastructure_kind, 7.0))
 	var blueprint := {
 		"id": "transport_%s_%s" % [operation, infrastructure_kind],
 		"version": 1,

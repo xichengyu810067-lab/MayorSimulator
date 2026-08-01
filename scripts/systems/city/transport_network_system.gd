@@ -1033,7 +1033,11 @@ func _air_path_result(
 	for runway: Dictionary in valid_runways:
 		var runway_path: Array = runway.get("tile_path", [])
 		var taxi_goals: Dictionary = {}
-		for runway_tile_variant: Variant in runway_path:
+		# A taxiway joins a runway at an endpoint.  This makes the published air
+		# route a single cardinally contiguous polyline suitable for rendering;
+		# appending an arbitrary authored runway order could otherwise teleport a
+		# plane from the taxiway to the far end of the runway.
+		for runway_tile_variant: Variant in [runway_path.front(), runway_path.back()]:
 			var runway_tile := int(runway_tile_variant)
 			for neighbor: int in _cardinal_neighbors(runway_tile, _topology_map):
 				if taxiway_tiles.has(neighbor):
@@ -1041,9 +1045,13 @@ func _air_path_result(
 		var taxi_path := _shortest_path_between_sets(taxiway_tiles, taxi_starts, taxi_goals, _topology_map)
 		if taxi_path.is_empty():
 			continue
+		var taxi_end := int(taxi_path.back())
+		var ordered_runway: Array[int] = _int_array(runway_path)
+		if not _cardinal_neighbors(taxi_end, _topology_map).has(int(ordered_runway.front())):
+			ordered_runway.reverse()
 		var result: Array[int] = []
 		result.append_array(taxi_path)
-		for runway_tile_variant: Variant in runway_path:
+		for runway_tile_variant: Variant in ordered_runway:
 			result.append(int(runway_tile_variant))
 		return {"path_tile_ids": result, "errors": []}
 	return {"path_tile_ids": [], "errors": ["taxiway_runway_disconnected"]}

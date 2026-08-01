@@ -164,6 +164,7 @@ func _validate_complete_networks_and_persistence() -> void:
 		_check(not Array(line.get("path_tile_ids", [])).is_empty(), "operational route must publish its authoritative tile path")
 		_check(not Array(line.get("station_tile_ids", [])).is_empty(), "operational route must publish station tile ids")
 		_check(not str(line.get("vehicle_kind", "")).is_empty() and float(line.get("loop_seconds", 0.0)) > 0.0, "operational route must publish vehicle runtime semantics")
+		_check(_path_is_cardinal(Array(line.get("path_tile_ids", []))), "vehicle runtime path must remain cardinally contiguous across tile boundaries")
 
 	var crossing_plan := {
 		"title": "道路跨越捷運軌道",
@@ -254,6 +255,15 @@ func _horizontal_path(row: int, first_column: int, last_column: int) -> Array[in
 
 func _tile(column: int, row: int) -> int:
 	return int(terrain.tile_id_for_coordinate(Vector2i(column, row)))
+
+
+func _path_is_cardinal(path: Array) -> bool:
+	for index in range(1, path.size()):
+		var previous: Vector2i = terrain.coordinate_for_tile_id(int(path[index - 1]))
+		var current: Vector2i = terrain.coordinate_for_tile_id(int(path[index]))
+		if absi(current.x - previous.x) + absi(current.y - previous.y) != 1:
+			return false
+	return true
 
 
 func _issues_have(result: Dictionary, prefix: String) -> bool:

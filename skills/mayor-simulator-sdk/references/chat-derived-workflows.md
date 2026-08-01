@@ -7,9 +7,9 @@ Scope: All readable project sessions.
 ## Coverage
 
 - User-root chats: 22
-- Subagent chats: 129
-- Root user messages after scaffolding exclusion: 111
-- Root user characters classified: 307,077
+- Subagent chats: 131
+- Root user messages after scaffolding exclusion: 116
+- Root user characters classified: 307,490
 - Unreadable JSONL files: 0
 - Raw conversation text retained: no
 
@@ -19,7 +19,7 @@ Scope: All readable project sessions.
 | --- | ---: | --- |
 | `qa_and_evidence` | 15 | Use stable evidence-producing SDK gates and fresh output roots |
 | `visual_ui_ux` | 14 | Require visible traversal and screenshot acceptance for visual claims |
-| `save_and_data` | 11 | Preserve isolated app-data, schema boundaries, and OS-kill workflows |
+| `save_and_data` | 12 | Preserve isolated app-data, schema boundaries, and OS-kill workflows |
 | `npc_and_population` | 10 | Keep NPC authority, locomotion, navigation, and visual proof distinct |
 | `buildings_and_map` | 10 | Check complete catalog, rendering, terrain, and placement parity |
 | `architecture_and_sdk` | 9 | Keep manifest, SDK tests, installed skill, and references synchronized |
@@ -35,12 +35,12 @@ Counts are text occurrences, not unique incidents; retries and quoted logs can i
 
 | Signature | Occurrences | SDK response |
 | --- | ---: | --- |
-| `root_certificate_store` | 463 | Preserve and classify separately from product diagnostics |
-| `missing_export_templates` | 176 | Require exact Godot 4.7 templates before release builds |
-| `godot_signal_11` | 141 | Repair writable app-data and log paths before judging product code |
+| `root_certificate_store` | 467 | Preserve and classify separately from product diagnostics |
+| `missing_export_templates` | 178 | Require exact Godot 4.7 templates before release builds |
+| `godot_signal_11` | 142 | Repair writable app-data and log paths before judging product code |
 | `object_or_resource_leak` | 126 | Keep leak and process-cleanup checks in authoritative runners |
-| `unwritable_user_logs` | 112 | Use isolated APPDATA, LOCALAPPDATA, and explicit log files |
-| `permission_denied` | 74 | Use project .tmp or request only the exact external permission |
+| `unwritable_user_logs` | 113 | Use isolated APPDATA, LOCALAPPDATA, and explicit log files |
+| `permission_denied` | 76 | Use project .tmp or request only the exact external permission |
 | `godot_orphan_stringname` | 45 | Reproduce without --verbose; never whitelist unknown product errors |
 | `python_discovery_or_access` | 23 | Use SDK Python discovery; distinguish not found from access denied |
 
