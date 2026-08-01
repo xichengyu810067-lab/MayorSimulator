@@ -631,7 +631,7 @@ func _input(event: InputEvent) -> void:
 		_layout_map_stage()
 		get_viewport().set_input_as_handled()
 		return
-	if not placement_mode_active:
+	if not placement_mode_active and not _is_transport_map_action_active():
 		return
 	if municipal_overlay != null and municipal_overlay.is_open():
 		return
@@ -649,7 +649,7 @@ func _input(event: InputEvent) -> void:
 		cancel_requested = cancel_requested or (mouse_event.pressed and mouse_event.button_index == MOUSE_BUTTON_RIGHT)
 	if not cancel_requested:
 		return
-	_cancel_building_placement(true)
+	_cancel_active_map_action(true)
 	get_viewport().set_input_as_handled()
 
 
@@ -1047,7 +1047,7 @@ func _build_placement_banner() -> PanelContainer:
 	placement_cancel_button.custom_minimum_size = Vector2(176, 44)
 	placement_cancel_button.add_theme_font_size_override("font_size", 18)
 	placement_cancel_button.tooltip_text = "取消目前的建築放置（Esc／右鍵）"
-	placement_cancel_button.pressed.connect(func() -> void: _cancel_building_placement(true))
+	placement_cancel_button.pressed.connect(Callable(self, "_cancel_active_map_action").bind(true))
 	row.add_child(placement_cancel_button)
 	return panel
 
@@ -3933,6 +3933,7 @@ func _on_grid_pressed(index: int) -> void:
 func _enter_building_placement(building_name: String) -> void:
 	if vertical_slice == null or not buildings.has(building_name):
 		return
+	_cancel_transport_map_action(false)
 	selected_building = building_name
 	if vertical_slice_panel != null:
 		vertical_slice_panel.set_selected_building(building_name)
@@ -3951,6 +3952,13 @@ func _enter_building_placement(building_name: String) -> void:
 		settings_overlay.close()
 	_sync_placement_banner()
 	_update_ui()
+
+
+func _cancel_active_map_action(show_feedback: bool = true) -> void:
+	if _is_transport_map_action_active():
+		_cancel_transport_map_action(show_feedback)
+	else:
+		_cancel_building_placement(show_feedback)
 
 
 func _cancel_building_placement(show_feedback: bool) -> void:
@@ -3972,10 +3980,17 @@ func _cancel_building_placement(show_feedback: bool) -> void:
 func _sync_placement_banner() -> void:
 	if placement_banner == null or placement_label == null:
 		return
-	placement_banner.visible = placement_mode_active
+	var transport_active := _is_transport_map_action_active()
+	placement_banner.visible = placement_mode_active or transport_active
 	if placement_level_button != null:
 		placement_level_button.visible = false
-	if not placement_mode_active:
+	if placement_confirm_button != null:
+		placement_confirm_button.visible = false
+		placement_confirm_button.disabled = true
+	if placement_cancel_button != null:
+		placement_cancel_button.text = L10n.text("取消規劃" if transport_active else "取消放置")
+		placement_cancel_button.tooltip_text = L10n.text("取消目前的交通規劃（Esc／右鍵）" if transport_active else "取消目前的建築放置（Esc／右鍵）")
+	if not placement_mode_active and not transport_active:
 		return
 	if _pending_terrain_tile >= 0 and vertical_slice != null:
 		var quote: Dictionary = vertical_slice.terrain_flatten_quote(_pending_terrain_tile)
@@ -3987,13 +4002,40 @@ func _sync_placement_banner() -> void:
 			placement_level_button.disabled = not bool(quote.get("can_afford", false))
 			placement_level_button.visible = true
 		return
+	if transport_active:
+		if placement_confirm_button != null:
+			placement_confirm_button.visible = true
+		if map_action_mode == "transport_infrastructure":
+			var quote := _transport_project_quote(transport_plan_tiles) if not transport_plan_tiles.is_empty() else {}
+			var valid := not transport_plan_tiles.is_empty() and bool(quote.get("ok", false))
+			var can_afford := valid and bool(quote.get("can_afford", true))
+			var cost := int(quote.get("total_cost", 0))
+			var operation_label := "興建" if transport_plan_operation == "build" else "拆除"
+			placement_label.text = L10n.text("%s%s｜已選 %d 格｜預估 $%d｜逐格相鄰選取") % [
+				L10n.text(operation_label), L10n.text(_transport_kind_label(transport_plan_kind)),
+				transport_plan_tiles.size(), cost,
+			]
+			if placement_confirm_button != null:
+				placement_confirm_button.text = L10n.text("確認開工")
+				placement_confirm_button.disabled = not valid or not can_afford
+		else:
+			var minimum_stops := 1 if transport_route_mode == "air" else 2
+			placement_label.text = L10n.text("規劃%s｜已選 %d/%d 站｜車隊 %d｜班距 %d 分｜票價 $%d") % [
+				L10n.text(_transport_route_label(transport_route_mode)), transport_route_station_tiles.size(), minimum_stops,
+				transport_route_fleet_size, transport_route_headway_minutes, transport_route_fare,
+			]
+			if placement_confirm_button != null:
+				placement_confirm_button.text = L10n.text("建立並驗證路線")
+				placement_confirm_button.disabled = transport_route_station_tiles.size() < minimum_stops
+		return
 	placement_label.text = L10n.text("放置 %s｜點擊空地查看總價｜Esc／右鍵取消") % L10n.text(placement_building_name)
 
 
 func _flatten_pending_terrain() -> void:
-	if not placement_mode_active or vertical_slice == null or _pending_terrain_tile < 0:
+	if (not placement_mode_active and not _is_transport_map_action_active()) or vertical_slice == null or _pending_terrain_tile < 0:
 		return
 	var tile_index := _pending_terrain_tile
+	var was_transport_plan := _is_transport_map_action_active()
 	var result: Dictionary = vertical_slice.flatten_terrain(tile_index)
 	if not bool(result.get("ok", false)):
 		_set_hint("無法整平地形：%s" % _vertical_error_text(str(result.get("error", "unknown"))), true)
@@ -4011,7 +4053,11 @@ func _flatten_pending_terrain() -> void:
 	# keeps showing the pre-flatten balance until another unrelated UI action.
 	_update_ui()
 	_sync_placement_banner()
-	_set_hint("地形已整平，費用 $%d；現在可在此地格施工。" % int(result.get("cost", 0)), false)
+	if was_transport_plan:
+		_handle_transport_tile_pressed(tile_index)
+		_set_hint("地形已整平，費用 $%d；此格已加入目前交通規劃。" % int(result.get("cost", 0)), false)
+	else:
+		_set_hint("地形已整平，費用 $%d；現在可在此地格施工。" % int(result.get("cost", 0)), false)
 	_autosave("action:terrain_flattened")
 
 
