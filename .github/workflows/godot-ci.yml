@@ -68,6 +68,15 @@ jobs:
           }
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "godot_exe=$($console.FullName)"
 
+      - name: Import project assets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & '${{ steps.godot.outputs.godot_exe }}' --headless --path . --import
+          if ($LASTEXITCODE -ne 0) {
+            throw "Godot import failed with exit code $LASTEXITCODE."
+          }
+
       - name: Run isolated assertion manifest
         shell: pwsh
         run: |

@@ -77,13 +77,23 @@ func _validate_summary_contract() -> void:
 		"current_text": "學生家庭 88%",
 		"difference_text": "高於安全線 +28 個百分點",
 		"baseline_text": "安全線 60%",
-		"duration": 0.20,
+		"duration": 0.82,
 	}, true)
 	_check(bool(card.benchmark_chart.get_meta("animation_active", false)), "benchmark animation visibly starts from the safety line")
 	_check(is_equal_approx(card.benchmark_chart.displayed_value(), 60.0), "benchmark animation begins at the explicit safety line")
-	await create_timer(0.08).timeout
-	_check(card.benchmark_chart.displayed_value() > 60.0 and card.benchmark_chart.displayed_value() < 88.0, "benchmark chart moves through an observable intermediate value")
-	await create_timer(0.24).timeout
+	var observed_intermediate := false
+	var observation_deadline := Time.get_ticks_msec() + 650
+	while Time.get_ticks_msec() < observation_deadline and bool(card.benchmark_chart.get_meta("animation_active", false)):
+		await process_frame
+		var displayed_value: float = float(card.benchmark_chart.displayed_value())
+		if displayed_value > 60.0 and displayed_value < 88.0:
+			observed_intermediate = true
+			break
+	_check(observed_intermediate, "benchmark chart moves through an observable intermediate value")
+	var completion_deadline := Time.get_ticks_msec() + 1200
+	while Time.get_ticks_msec() < completion_deadline and bool(card.benchmark_chart.get_meta("animation_active", false)):
+		await process_frame
+	_check(not bool(card.benchmark_chart.get_meta("animation_active", false)), "benchmark animation completes within its bounded duration")
 	_check(is_equal_approx(card.benchmark_chart.displayed_value(), 88.0), "benchmark chart settles on the authoritative target")
 	_check(card.icon_view.texture != null, "semantic icon is loaded")
 	if card.icon_view.texture != null:

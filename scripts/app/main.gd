@@ -378,11 +378,13 @@ var monthly_data_service_charts: Dictionary = {}
 var is_dark_mode := false
 var tax_rates := {"income": 10, "consumption": 5, "business": 8, "industry": 10}
 var utility_fees := {"garbage": 20, "water": 25, "electricity": 30, "gas": 20}
-var service_fees := {"bus": 15, "metro": 30, "train": 45, "air": 120, "parking": 20, "medical": 50, "tuition": 100, "stadium": 80}
+var service_fees := {"parking": 20, "medical": 50, "tuition": 100, "stadium": 80}
 var announcements: Array[String] = []
 var last_population_reason := "人口維持穩定。"
 var selected_cell_index := -1
 var building_customizations: Dictionary = {}
+var healthcare_applied_bonus := 0
+var _healthcare_legacy_migration_applied := true
 var ambient_time := 0.0
 var group_satisfaction := {
 	"一般居民": 70,
@@ -737,6 +739,8 @@ func _initialize_fresh_game() -> void:
 	for _index in CELL_COUNT:
 		city_grid.append("")
 	building_customizations.clear()
+	healthcare_applied_bonus = 0
+	_healthcare_legacy_migration_applied = true
 	selected_cell_index = -1
 	selected_building = "住宅"
 	selected_building_group = "housing"
@@ -755,7 +759,7 @@ func _initialize_fresh_game() -> void:
 	_npc_dialogue_remaining_seconds = 0.0
 	tax_rates = {"income": 10, "consumption": 5, "business": 8, "industry": 10}
 	utility_fees = {"garbage": 20, "water": 25, "electricity": 30, "gas": 20}
-	service_fees = {"bus": 15, "metro": 30, "train": 45, "air": 120, "parking": 20, "medical": 50, "tuition": 100, "stadium": 80}
+	service_fees = {"parking": 20, "medical": 50, "tuition": 100, "stadium": 80}
 	tax_rate = 10
 	active_policies.clear()
 	for policy_name in policies.keys():
@@ -789,13 +793,14 @@ func _initialize_fresh_game() -> void:
 
 
 func _capture_player_shell_state() -> Dictionary:
+	_reconcile_healthcare_service()
 	_sync_city_metrics_to_core()
 	var serialized_customizations: Dictionary = {}
 	for tile_variant in building_customizations.keys():
 		serialized_customizations[str(tile_variant)] = Dictionary(building_customizations[tile_variant]).duplicate(true)
 	var report_history_snapshot := city_report_history_service.snapshot()
 	return {
-		"schema_version": 7,
+		"schema_version": 8,
 		"tax_rates": tax_rates.duplicate(true),
 		"utility_fees": utility_fees.duplicate(true),
 		"service_fees": service_fees.duplicate(true),
@@ -811,6 +816,8 @@ func _capture_player_shell_state() -> Dictionary:
 		"selected_building_group": selected_building_group,
 		"selected_cell_index": selected_cell_index,
 		"building_customizations": serialized_customizations,
+		"healthcare_applied_bonus": healthcare_applied_bonus,
+		"healthcare_service_base": clampi(healthcare - healthcare_applied_bonus, 0, 100),
 		"security": security,
 		"environment": environment,
 		"traffic": traffic,
@@ -913,6 +920,34 @@ func _restore_player_shell_state(state: Dictionary) -> void:
 	for announcement in state.get("announcements", []):
 		announcements.append(str(announcement))
 	last_population_reason = str(state.get("last_population_reason", last_population_reason))
+	var shell_schema := int(state.get("schema_version", 0))
+	if shell_schema >= 8:
+		var expected_bonus := maxi(0, int(_healthcare_service_result().get("metric_bonus", 0)))
+		var maximum_bonus := _healthcare_max_metric_bonus()
+		var saved_base := clampi(int(state.get("healthcare_service_base", healthcare - expected_bonus)), 0, 100)
+		var recovered_effective_bonus := clampi(healthcare - saved_base, 0, maximum_bonus)
+		if not state.has("healthcare_applied_bonus"):
+			# Fail-safe recovery for a partial schema-8 shell: the authoritative
+			# metric plus its persisted service-less base recover the effective
+			# (possibly saturation-limited) amount without applying it twice.
+			healthcare_applied_bonus = recovered_effective_bonus
+		else:
+			var saved_bonus := int(state.get("healthcare_applied_bonus", 0))
+			var saved_bonus_is_consistent := (
+				saved_bonus >= 0
+				and saved_bonus <= maximum_bonus
+				and saved_bonus <= expected_bonus
+				and saved_bonus == recovered_effective_bonus
+			)
+			healthcare_applied_bonus = (
+				saved_bonus if saved_bonus_is_consistent else recovered_effective_bonus
+			)
+		_healthcare_legacy_migration_applied = true
+	elif not _healthcare_legacy_migration_applied:
+		healthcare_applied_bonus = 0
+		_migrate_legacy_hospital_direct_effects()
+		_healthcare_legacy_migration_applied = true
+	_reconcile_healthcare_service()
 
 
 func _update_autosave_timer(delta: float) -> void:
@@ -968,7 +1003,9 @@ func _on_locale_changed(_locale: String) -> void:
 	if not is_node_ready():
 		return
 	var reopen_settings: bool = settings_overlay != null and settings_overlay.is_open()
-	_rebuild_ui()
+	_update_ui()
+	if city_data_dashboard != null and is_instance_valid(city_data_dashboard):
+		city_data_dashboard.refresh_localization()
 	if reopen_settings and settings_overlay != null:
 		settings_overlay.open()
 
@@ -1672,8 +1709,8 @@ func _build_fiscal_tab() -> ScrollContainer:
 			{"title": "環境能源", "kind": "utility", "keys": ["gas", "garbage"]},
 		]},
 		{"title": "服務收費", "specs": [
-			{"title": "交通收費", "kind": "service", "keys": ["bus", "metro", "parking"]},
-			{"title": "社會服務", "kind": "service", "keys": ["medical", "tuition", "stadium"]},
+			{"title": "城市服務", "kind": "service", "keys": ["parking", "medical"]},
+			{"title": "教育休閒", "kind": "service", "keys": ["tuition", "stadium"]},
 		]},
 	]
 	for family: Dictionary in category_families:
@@ -2070,7 +2107,7 @@ func _build_map_panel() -> Control:
 			cell.z_index = int(_iso_tile_center(index).y)
 			cell.pressed.connect(Callable(self, "_on_grid_pressed").bind(index))
 			grid_buttons[index] = cell
-		tile_layer.add_child(cell)
+			tile_layer.add_child(cell)
 
 	transport_vehicle_controller = TransportVehicleControllerScript.new()
 	transport_vehicle_controller.custom_minimum_size = MAP_STAGE_SIZE
@@ -2079,6 +2116,8 @@ func _build_map_panel() -> Control:
 		func(states: Dictionary) -> void:
 			if transport_network_layer != null:
 				transport_network_layer.set_crossing_states(states)
+			if npc_map_controller != null:
+				npc_map_controller.set_crossing_states(states)
 	)
 	map_stage.add_child(transport_vehicle_controller)
 
@@ -2162,6 +2201,15 @@ func _update_transport_runtime() -> void:
 	var preview_runtime := runtime.duplicate(true)
 	if map_action_mode == "transport_infrastructure" and not transport_plan_tiles.is_empty():
 		_apply_transport_preview(preview_runtime)
+	elif map_action_mode == "transport_route_stops" and not transport_route_station_tiles.is_empty():
+		var route_stop_preview: Array[Dictionary] = []
+		for stop_index in transport_route_station_tiles.size():
+			route_stop_preview.append({
+				"tile_id": transport_route_station_tiles[stop_index],
+				"order": stop_index + 1,
+				"mode": transport_route_mode,
+			})
+		preview_runtime["route_stop_preview"] = route_stop_preview
 	var centers := _transport_tile_centers()
 	if transport_network_layer != null:
 		transport_network_layer.set_network_snapshot(preview_runtime, centers)
@@ -2235,8 +2283,45 @@ func _npc_map_snapshot() -> Dictionary:
 	var terrain_blockers := {}
 	var terrain = _terrain_map()
 	var transport_blocked_tiles := PackedInt32Array()
+	var crossing_tile_ids := PackedInt32Array()
 	if vertical_slice != null and vertical_slice.has_method("transport_navigation_blocked_tile_ids"):
 		transport_blocked_tiles = vertical_slice.call("transport_navigation_blocked_tile_ids")
+	if vertical_slice != null and vertical_slice.has_method("transport_visual_snapshot"):
+		var transport_runtime: Dictionary = vertical_slice.call("transport_visual_snapshot", city_grid)
+		var crossing_records: Dictionary = transport_runtime.get("crossings", {})
+		var tile_states: Dictionary = transport_runtime.get("tile_states", {})
+		for crossing_variant: Variant in crossing_records.values():
+			if not crossing_variant is Dictionary:
+				continue
+			var crossing: Dictionary = crossing_variant
+			var crossing_tile_id := int(crossing.get("tile_id", -1))
+			if (
+				crossing_tile_id < 0
+				or crossing_tile_id >= city_grid.size()
+				or str(crossing.get("status", "completed")) != "completed"
+				or city_grid[crossing_tile_id] != ""
+				or (terrain != null and not terrain.is_walkable(crossing_tile_id))
+				or not vertical_slice.active_construction_for_tile(crossing_tile_id).is_empty()
+			):
+				continue
+			var tile_state_variant: Variant = tile_states.get(
+				str(crossing_tile_id), tile_states.get(crossing_tile_id, {})
+			)
+			var tile_state: Dictionary = (
+				tile_state_variant if tile_state_variant is Dictionary else {}
+			)
+			var crossing_segments: Array = tile_state.get("segments", [])
+			if (
+				str(tile_state.get("crossing", "")).is_empty()
+				or not crossing_segments.has("road")
+				or (not crossing_segments.has("rail_track") and not crossing_segments.has("metro_track"))
+			):
+				continue
+			# A facility or station remains a physical obstacle even if malformed
+			# transport data also points a crossing record at the same tile.
+			if not Array(tile_state.get("facilities", [])).is_empty():
+				continue
+			crossing_tile_ids.append(crossing_tile_id)
 	for tile_index in mini(CELL_COUNT, city_grid.size()):
 		var center := _iso_tile_center(tile_index)
 		tile_centers.append(center)
@@ -2264,6 +2349,7 @@ func _npc_map_snapshot() -> Dictionary:
 		"construction_centers": construction_centers,
 		"terrain_blockers": terrain_blockers,
 		"blocked_tiles": blocked_tiles,
+		"crossing_tile_ids": crossing_tile_ids,
 		"iso_tile_size": ISO_TILE_SIZE,
 		"iso_tile_step": ISO_TILE_STEP,
 		"terrain_blocker_half_extents": Vector2(ISO_TILE_SIZE.x * 0.48, ISO_TILE_STEP.y),
@@ -2926,6 +3012,18 @@ func _update_city_metric_cards() -> void:
 		var relevant_count := _building_count(building_name)
 		var localized_status := L10n.text(str(status["label"]))
 		var comparison_text := _benchmark_gap_text(float(value), 60.0)
+		var interpretation_text := "%s：%s × %d  ·  %s" % [L10n.text("主要服務"), L10n.text(building_name), relevant_count, localized_status]
+		var action_text := _city_metric_action_text(building_name, relevant_count, value)
+		if metric_id == "healthcare":
+			var healthcare_result := _healthcare_service_result()
+			var service_status := str(healthcare_result.get("status", "unavailable"))
+			status = {
+				"key": "good" if service_status == "operational" else ("attention" if service_status == "degraded" else "critical"),
+				"label": _healthcare_service_status_text(service_status),
+			}
+			localized_status = str(status["label"])
+			interpretation_text = _healthcare_service_visible_text(healthcare_result)
+			action_text = _healthcare_service_action_text(healthcare_result)
 		var config := {
 			"id": metric_id,
 			"icon_key": str(spec["icon_key"]),
@@ -2935,8 +3033,8 @@ func _update_city_metric_cards() -> void:
 			"status_label": localized_status,
 			"period_label": L10n.text("本月摘要"),
 			"delta_unavailable_text": L10n.text("新城市，尚無上月資料。"),
-			"interpretation_text": "%s：%s × %d  ·  %s" % [L10n.text("主要服務"), L10n.text(building_name), relevant_count, localized_status],
-			"action_text": _city_metric_action_text(building_name, relevant_count, value),
+			"interpretation_text": interpretation_text,
+			"action_text": action_text,
 			"baseline": 60.0,
 			"baseline_text": L10n.text("安全線 60%"),
 			"chart_current_text": "%s %d%%" % [L10n.text(str(spec["label"])), value],
@@ -2945,6 +3043,10 @@ func _update_city_metric_cards() -> void:
 			"chart_maximum_text": "100%",
 			"chart_tooltip": comparison_text,
 		}
+		if metric_id == "healthcare":
+			var service_result := _healthcare_service_result()
+			config["service_status_code"] = str(service_result.get("status", "unavailable"))
+			config["service_reason_code"] = str(service_result.get("reason_code", "facility_missing"))
 		city_metric_cards[metric_id].set_metric_from_month_summary(
 			config,
 			value,
@@ -3660,6 +3762,7 @@ func _on_transport_route_planning_requested(mode: String, fleet_size: int, headw
 	if municipal_overlay != null and municipal_overlay.is_open():
 		municipal_overlay.close_overlay()
 	_sync_placement_banner()
+	_update_transport_runtime()
 	_set_hint("請依營運順序點選%s；確認後才會驗證完整路網與車隊。" % _transport_route_label(mode), false)
 
 
@@ -3698,18 +3801,26 @@ func _handle_transport_tile_pressed(index: int) -> void:
 		return
 	if map_action_mode != "transport_infrastructure":
 		return
+	if transport_plan_operation == "demolish":
+		_handle_transport_demolition_tile(index)
+		return
 	var is_path_kind := transport_plan_kind in ["road", "metro_track", "rail_track", "runway", "taxiway"]
 	if not transport_plan_tiles.is_empty() and index == transport_plan_tiles.back():
+		_pending_terrain_tile = -1
 		transport_plan_tiles.pop_back()
 		_sync_placement_banner()
 		_update_transport_runtime()
 		return
 	if index in transport_plan_tiles:
+		_pending_terrain_tile = -1
+		_sync_placement_banner()
 		_set_hint("同一個地格不能在同一工程中重複選取。", true)
 		return
 	if is_path_kind and not transport_plan_tiles.is_empty():
 		var pair := _transport_direction_pair(transport_plan_tiles.back(), index)
 		if pair.is_empty():
+			_pending_terrain_tile = -1
+			_sync_placement_banner()
 			_set_hint("路廊必須逐格相鄰連接，不能跨越空地。", true)
 			return
 	if not is_path_kind and not transport_plan_tiles.is_empty():
@@ -3718,13 +3829,15 @@ func _handle_transport_tile_pressed(index: int) -> void:
 	candidate.append(index)
 	var quote := _transport_project_quote(candidate)
 	if not bool(quote.get("ok", false)):
-		var error := str(quote.get("error", "transport_plan_invalid"))
-		if error in ["terrain_not_flat", "terrain_not_flattened"]:
+		var error := _transport_quote_error(quote)
+		if error == "terrain_not_flat":
 			_pending_terrain_tile = index
 			selected_cell_index = index
 			_sync_placement_banner()
 			_set_hint("此地格不是平坦地形；必須先整平才能興建交通設施。", true)
 			return
+		_pending_terrain_tile = -1
+		_sync_placement_banner()
 		_set_hint("此路網規劃不可用：%s" % _vertical_error_text(error), true)
 		return
 	_pending_terrain_tile = -1
@@ -3732,6 +3845,33 @@ func _handle_transport_tile_pressed(index: int) -> void:
 	_sync_placement_banner()
 	_update_transport_runtime()
 	_set_hint("已選 %d 格｜目前工程估價 $%d。" % [transport_plan_tiles.size(), int(quote.get("total_cost", quote.get("cost", 0)))], false)
+
+
+func _handle_transport_demolition_tile(index: int) -> void:
+	_pending_terrain_tile = -1
+	if index in transport_plan_tiles:
+		transport_plan_tiles.clear()
+		_sync_placement_banner()
+		_update_transport_runtime()
+		_set_hint("已取消這一段%s的拆除選取。" % _transport_kind_label(transport_plan_kind), false)
+		return
+	var quote := _transport_project_quote([index])
+	if not bool(quote.get("ok", false)):
+		transport_plan_tiles.clear()
+		_sync_placement_banner()
+		_update_transport_runtime()
+		_set_hint("此格沒有可拆除的%s：%s" % [_transport_kind_label(transport_plan_kind), _vertical_error_text(_transport_quote_error(quote))], true)
+		return
+	var resolved_tiles: Array[int] = []
+	for tile_variant: Variant in quote.get("tile_indices", []):
+		var tile_id := int(tile_variant)
+		if tile_id >= 0 and not resolved_tiles.has(tile_id):
+			resolved_tiles.append(tile_id)
+	resolved_tiles.sort()
+	transport_plan_tiles = resolved_tiles
+	_sync_placement_banner()
+	_update_transport_runtime()
+	_set_hint("已選取完整%s區段，共 %d 格；確認後將整段拆除並重新驗證路線。" % [_transport_kind_label(transport_plan_kind), transport_plan_tiles.size()], false)
 
 
 func _handle_transport_station_tile(index: int) -> void:
@@ -3747,6 +3887,7 @@ func _handle_transport_station_tile(index: int) -> void:
 	else:
 		transport_route_station_tiles.append(index)
 	_sync_placement_banner()
+	_update_transport_runtime()
 	_set_hint("已依序選擇 %d 個站點。" % transport_route_station_tiles.size(), false)
 
 
@@ -3762,6 +3903,22 @@ func _transport_project_quote(tile_ids: Array[int]) -> Dictionary:
 		workers,
 		city_grid
 	)
+
+
+func _transport_quote_error(quote: Dictionary) -> String:
+	for issue_variant: Variant in quote.get("issues", []):
+		var issue := str(issue_variant)
+		if issue.begins_with("terrain_not_flat:"):
+			return "terrain_not_flat"
+		if issue.begins_with("tile_occupied:"):
+			return "tile_occupied"
+		if issue.begins_with("tile_under_construction:"):
+			return "transport_construction_conflict"
+		if issue.begins_with("non_cardinal_segment_path:"):
+			return "transport_path_not_contiguous"
+		if issue.begins_with("incompatible_segment_overlap:"):
+			return "transport_overlap_invalid"
+	return str(quote.get("error", "transport_plan_invalid"))
 
 
 func _confirm_transport_map_plan() -> void:
@@ -3814,7 +3971,7 @@ func _confirm_transport_route_plan() -> void:
 		transport_route_fare,
 		city_grid
 	)
-	if not bool(result.get("ok", false)):
+	if not bool(result.get("ok", false)) or not bool(result.get("valid", true)):
 		_set_hint("路線無法啟用：%s" % _vertical_error_text(str(result.get("error", "transport_route_invalid"))), true)
 		return
 	var route: Dictionary = result.get("route", {})
@@ -3855,6 +4012,27 @@ func _transport_kind_label(kind: String) -> String:
 		"runway": "跑道", "taxiway": "滑行道", "bus_depot": "公車車庫",
 		"metro_depot": "捷運機廠", "rail_depot": "鐵路機廠", "rail_signal": "鐵路號誌",
 	}.get(kind, "交通設施")
+
+
+func _transport_project_kind(project: Dictionary) -> String:
+	var plan: Dictionary = project.get("plan", {})
+	var segments: Array = plan.get("segments", [])
+	if not segments.is_empty() and segments[0] is Dictionary:
+		return str(Dictionary(segments[0]).get("kind", ""))
+	var facilities: Array = plan.get("facilities", [])
+	if not facilities.is_empty() and facilities[0] is Dictionary:
+		return str(Dictionary(facilities[0]).get("kind", ""))
+	for segment_id_variant: Variant in plan.get("segment_ids", []):
+		if vertical_slice != null and vertical_slice.transport != null:
+			var segment: Dictionary = vertical_slice.transport.segments.get(str(segment_id_variant), {})
+			if not segment.is_empty():
+				return str(segment.get("kind", ""))
+	for facility_id_variant: Variant in plan.get("facility_ids", []):
+		if vertical_slice != null and vertical_slice.transport != null:
+			var facility: Dictionary = vertical_slice.transport.facilities.get(str(facility_id_variant), {})
+			if not facility.is_empty():
+				return str(facility.get("kind", ""))
+	return ""
 
 
 func _refresh_transport_planning_panel() -> void:
@@ -3909,7 +4087,11 @@ func _on_grid_pressed(index: int) -> void:
 		var terrain_state: Dictionary = terrain.tile_state(index)
 		var terrain_label := str(TERRAIN_LABELS.get(str(terrain_state.get("effective_kind", "")), "非平坦地形"))
 		var flatten_quote: Dictionary = vertical_slice.terrain_flatten_quote(index)
-		_set_hint("%s不可興建；請先整平（費用 $%d）。" % [terrain_label, int(flatten_quote.get("cost", 0))], true)
+		_set_hint("%s不可興建；整地工程預估 $%d、%d 個遊戲日。" % [
+			terrain_label,
+			int(flatten_quote.get("total_cost", flatten_quote.get("cost", 0))),
+			int(flatten_quote.get("duration_days", 0)),
+		], true)
 		return
 	_pending_terrain_tile = -1
 	var workers: int = int(vertical_slice_panel.selected_worker_count()) if vertical_slice_panel else 5
@@ -3998,8 +4180,11 @@ func _sync_placement_banner() -> void:
 		var terrain_label := L10n.text(str(TERRAIN_LABELS.get(str(terrain.get("effective_kind", "")), "非平坦地形")))
 		placement_label.text = L10n.text("%s不可興建｜先整平地形才能施工") % terrain_label
 		if placement_level_button != null:
-			placement_level_button.text = L10n.text("整平地形 $%d") % int(quote.get("cost", 0))
-			placement_level_button.disabled = not bool(quote.get("can_afford", false))
+			placement_level_button.text = L10n.text("整地開工 $%d｜%d 日") % [
+				int(quote.get("total_cost", quote.get("cost", 0))),
+				int(quote.get("duration_days", 0)),
+			]
+			placement_level_button.disabled = not bool(quote.get("can_start", false))
 			placement_level_button.visible = true
 		return
 	if transport_active:
@@ -4035,7 +4220,6 @@ func _flatten_pending_terrain() -> void:
 	if (not placement_mode_active and not _is_transport_map_action_active()) or vertical_slice == null or _pending_terrain_tile < 0:
 		return
 	var tile_index := _pending_terrain_tile
-	var was_transport_plan := _is_transport_map_action_active()
 	var result: Dictionary = vertical_slice.flatten_terrain(tile_index)
 	if not bool(result.get("ok", false)):
 		_set_hint("無法整平地形：%s" % _vertical_error_text(str(result.get("error", "unknown"))), true)
@@ -4044,21 +4228,18 @@ func _flatten_pending_terrain() -> void:
 	_pending_terrain_tile = -1
 	selected_cell_index = tile_index
 	_consume_vertical_events(vertical_slice.drain_ui_events())
-	debug_sync_npc_navigation_obstacles()
-	if npc_map_controller != null:
-		npc_map_controller.repath_all()
 	_update_tile_visual(tile_index, city_grid[tile_index])
-	# Flattening is a treasury transaction, so refresh the HUD in the same frame.
-	# Otherwise the authoritative funds value changes immediately but the header
-	# keeps showing the pre-flatten balance until another unrelated UI action.
+	# Starting earthworks is a prepaid treasury transaction. Terrain and
+	# navigation remain blocked until the terrain_flattened completion event.
 	_update_ui()
 	_sync_placement_banner()
-	if was_transport_plan:
-		_handle_transport_tile_pressed(tile_index)
-		_set_hint("地形已整平，費用 $%d；此格已加入目前交通規劃。" % int(result.get("cost", 0)), false)
-	else:
-		_set_hint("地形已整平，費用 $%d；現在可在此地格施工。" % int(result.get("cost", 0)), false)
-	_autosave("action:terrain_flattened")
+	var job: Dictionary = result.get("job", {})
+	_set_hint("整地工程已開工：%d 名工人、預計 %d 日、預付 $%d；完工後請再安排建築或交通。" % [
+		int(job.get("worker_count", 0)),
+		int(job.get("projected_total_days", 0)),
+		int(result.get("total_cost", result.get("cost", 0))),
+	], false)
+	_autosave("action:terrain_flatten_started")
 
 
 func _confirm_pending_construction(tile_index: int) -> void:
@@ -4258,13 +4439,137 @@ func _animate_label_flash(label: Label) -> void:
 
 func _apply_building_effect(data: Dictionary) -> void:
 	_apply_city_metric_patch(
-		CitySimulationServiceScript.metric_effect_patch(_city_metrics_snapshot(), data, 1)
+		CitySimulationServiceScript.metric_effect_patch(
+			_city_metrics_snapshot(), _direct_building_effects(data), 1
+		)
 	)
 
 func _remove_building_effect(data: Dictionary) -> void:
 	_apply_city_metric_patch(
-		CitySimulationServiceScript.metric_effect_patch(_city_metrics_snapshot(), data, -1)
+		CitySimulationServiceScript.metric_effect_patch(
+			_city_metrics_snapshot(), _direct_building_effects(data), -1
+		)
 	)
+
+
+func _direct_building_effects(data: Dictionary) -> Dictionary:
+	var direct_effects := data.duplicate(true)
+	var service_value: Variant = direct_effects.get("public_service", {})
+	if service_value is Dictionary and str((service_value as Dictionary).get("id", "")) == "healthcare":
+		direct_effects.erase("healthcare")
+		direct_effects.erase("satisfaction")
+	return direct_effects
+
+
+func _healthcare_service_result() -> Dictionary:
+	if vertical_slice != null and vertical_slice.has_method("healthcare_service_result"):
+		return Dictionary(vertical_slice.call("healthcare_service_result", city_grid)).duplicate(true)
+	return CitySimulationServiceScript.healthcare_service_result({
+		"population": population,
+		"building_records": {},
+		"road_access_components": [],
+		"durability_records": {},
+		"maintenance_enabled": false,
+		"unpaid_maintenance_months": 0,
+		"capacity_per_facility": 0,
+		"max_metric_bonus": 0,
+	})
+
+
+func _healthcare_max_metric_bonus() -> int:
+	var hospital_data: Dictionary = buildings.get("醫院", {})
+	var service_value: Variant = hospital_data.get("public_service", {})
+	if not service_value is Dictionary:
+		return 0
+	return maxi(0, int((service_value as Dictionary).get("max_metric_bonus", 0)))
+
+
+func _reconcile_healthcare_service() -> Dictionary:
+	var result := _healthcare_service_result()
+	if vertical_slice == null or vertical_slice.session == null:
+		return result
+	var target_bonus := maxi(0, int(result.get("metric_bonus", 0)))
+	var base_healthcare := clampi(healthcare - healthcare_applied_bonus, 0, 100)
+	var next_healthcare := clampi(base_healthcare + target_bonus, 0, 100)
+	var effective_bonus := next_healthcare - base_healthcare
+	if next_healthcare == healthcare and effective_bonus == healthcare_applied_bonus:
+		return result
+	healthcare = next_healthcare
+	healthcare_applied_bonus = effective_bonus
+	_recalculate_satisfaction()
+	_recalculate_score()
+	return result
+
+
+func _migrate_legacy_hospital_direct_effects() -> void:
+	if vertical_slice == null or vertical_slice.session == null:
+		return
+	var active_legacy_count := 0
+	for building_variant: Variant in vertical_slice.session.state.buildings.values():
+		if not building_variant is Dictionary:
+			continue
+		var record: Dictionary = building_variant
+		if str(record.get("definition_id", "")) != "hospital" and str(record.get("building_name", "")) != "醫院":
+			continue
+		if str(record.get("status", "active")) == "scrapped":
+			continue
+		var tile_index := int(record.get("tile_index", -1))
+		var customization: Dictionary = building_customizations.get(tile_index, {})
+		if bool(customization.get("effects_inactive", false)):
+			continue
+		active_legacy_count += 1
+	if active_legacy_count <= 0:
+		return
+	var hospital_data: Dictionary = buildings.get("醫院", {})
+	_apply_city_metric_patch({
+		"healthcare": healthcare - int(hospital_data.get("healthcare", 0)) * active_legacy_count,
+		"satisfaction": total_satisfaction - int(hospital_data.get("satisfaction", 0)) * active_legacy_count,
+	})
+	_recalculate_satisfaction()
+	_recalculate_score()
+
+
+func _healthcare_service_visible_text(result: Dictionary) -> String:
+	return L10n.text("%s｜%s｜服務 %d/%d｜覆蓋 %d%%") % [
+		_healthcare_service_status_text(str(result.get("status", "unavailable"))),
+		_healthcare_service_reason_text(str(result.get("reason_code", "facility_missing"))),
+		maxi(0, int(result.get("served", 0))),
+		maxi(0, int(result.get("capacity", 0))),
+		clampi(int(round(float(result.get("coverage", 0.0)) * 100.0)), 0, 100),
+	]
+
+
+func _healthcare_service_status_text(status_code: String) -> String:
+	var source_text := str({
+		"operational": "正常",
+		"degraded": "容量不足",
+		"unavailable": "無法服務",
+	}.get(status_code, "無法服務"))
+	return L10n.text(source_text)
+
+
+func _healthcare_service_reason_text(reason_code: String) -> String:
+	var source_text := str({
+		"operational": "運作正常",
+		"capacity_shortfall": "容量低於需求",
+		"facility_missing": "缺少醫院",
+		"road_missing": "缺少道路連接",
+		"maintenance_unfunded": "維護未撥款",
+	}.get(reason_code, "服務條件未滿足"))
+	return L10n.text(source_text)
+
+
+func _healthcare_service_action_text(result: Dictionary) -> String:
+	match str(result.get("reason_code", "facility_missing")):
+		"facility_missing":
+			return L10n.text("優先建造：醫院")
+		"road_missing":
+			return L10n.text("請以道路連接醫院與城市建築。")
+		"maintenance_unfunded":
+			return L10n.text("恢復維護預算後才會提供醫療。")
+		"capacity_shortfall":
+			return L10n.text("醫療容量不足，請維修或增建醫院。")
+	return L10n.text("醫療服務運作正常。")
 
 func _next_day() -> void:
 	if vertical_slice == null:
@@ -4318,6 +4623,7 @@ func _settle_month(autosave_after: bool = true) -> void:
 		_vertical_city_context(),
 		false
 	)
+	_reconcile_healthcare_service()
 	expense = int(settlement.get("expense", expense))
 	_apply_monthly_policy_effects()
 	_apply_active_law_effects()
@@ -4391,9 +4697,12 @@ func _vertical_city_context() -> Dictionary:
 	var fee_total := 0
 	for fee_value in utility_fees.values():
 		fee_total += int(fee_value)
+	var healthcare_result := _healthcare_service_result()
 	return {
 		"park_count": _building_count("公園"),
 		"hospital_count": _building_count("醫院"),
+		"operational_hospital_count": maxi(0, int(healthcare_result.get("operational_facility_count", 0))),
+		"operational_hospital_capacity": maxi(0, int(healthcare_result.get("capacity", 0))),
 		"school_count": _building_count("學校"),
 		"utility_fee": int(round(float(fee_total) / maxf(1.0, float(utility_fees.size())))),
 		"economic_health": clampf(50.0 + float(funds) / 20_000.0, 0.0, 100.0),
@@ -4446,6 +4755,7 @@ func _consume_vertical_events(events: Array[Dictionary]) -> void:
 	var event_types := PackedStringArray()
 	var navigation_changed := false
 	var request_context_changed := false
+	var save_loaded := false
 	for event in events:
 		var event_type := str(event.get("type", ""))
 		var event_game_time := int(event.get("game_day", vertical_slice.game_day() if vertical_slice != null else 0))
@@ -4465,6 +4775,27 @@ func _consume_vertical_events(events: Array[Dictionary]) -> void:
 			"construction_started":
 				navigation_changed = true
 				_add_announcement("工程已排入全城 20 人工程隊。")
+			"terrain_flatten_started":
+				_add_announcement("整地工程已開工；完工前仍不可建造、通行或鋪設交通。")
+			"transport_project_started":
+				navigation_changed = true
+				var started_project: Dictionary = payload.get("project", {})
+				_add_announcement("%s工程已開工；完工前不會生成行駛中的載具。" % _transport_kind_label(_transport_project_kind(started_project)))
+			"transport_project_completed":
+				navigation_changed = true
+				var completed_project: Dictionary = payload.get("project", {})
+				_add_announcement("%s工程已完工，所有路線已重新檢查連通狀態。" % _transport_kind_label(_transport_project_kind(completed_project)))
+			"transport_project_completion_failed":
+				navigation_changed = true
+				_add_announcement("交通工程完工登錄失敗：%s。" % _vertical_error_text(str(payload.get("error", "transport_project_completion_failed"))))
+			"transport_route_created":
+				_add_announcement("「%s」已建立；只有連通且啟用的路線會派出載具。" % str(payload.get("name", "交通路線")))
+			"transport_route_enabled":
+				_add_announcement("「%s」已啟用並重新驗證路網。" % str(payload.get("name", "交通路線")))
+			"transport_route_disabled":
+				_add_announcement("「%s」已停駛，所屬載具已撤回。" % str(payload.get("name", "交通路線")))
+			"transport_route_deleted":
+				_add_announcement("交通路線已刪除，共用基礎設施仍保留。")
 			"building_completed":
 				navigation_changed = true
 				request_context_changed = true
@@ -4485,6 +4816,8 @@ func _consume_vertical_events(events: Array[Dictionary]) -> void:
 			"terrain_flattened":
 				navigation_changed = true
 				_add_announcement("地形已整平，該地格現在可供興建。")
+			"terrain_flatten_completion_failed":
+				_add_announcement("整地完工登錄失敗：%s。" % _vertical_error_text(str(payload.get("error", "terrain_flatten_completion_failed"))))
 			"demolition_started":
 				_add_announcement("拆除工程已開始；完成前建築仍占用原地格。")
 			"demolition_completed":
@@ -4569,8 +4902,11 @@ func _consume_vertical_events(events: Array[Dictionary]) -> void:
 					str(completed_request.get("npc_id", ""))
 				)
 			"save_loaded":
+				save_loaded = true
 				_rebuild_city_from_core()
 				_add_announcement("存檔讀取完成。")
+	if not save_loaded:
+		_reconcile_healthcare_service()
 	if request_context_changed:
 		_reconcile_resident_request_completion()
 	if navigation_changed:
@@ -4589,6 +4925,7 @@ func _start_selected_demolition() -> void:
 	var workers: int = int(vertical_slice_panel.selected_worker_count()) if vertical_slice_panel else 5
 	var result: Dictionary = vertical_slice.start_demolition(selected_cell_index, workers)
 	if bool(result.get("ok", false)):
+		_consume_vertical_events(vertical_slice.drain_ui_events())
 		var job: Dictionary = result.get("job", {})
 		_set_hint("拆除工程已排程：%d 名工人，預計 %d 天，費用 $%d。" % [workers, int(job.get("projected_total_days", 0)), int(result.get("total_cost", 0))], false)
 	else:
@@ -4667,6 +5004,8 @@ func _rebuild_city_from_core() -> void:
 	for _index in CELL_COUNT:
 		city_grid.append("")
 	building_customizations.clear()
+	healthcare_applied_bonus = 0
+	_healthcare_legacy_migration_applied = false
 	# SaveService restores CityState before emitting save_loaded. Rebuilding the
 	# visual grid must not re-derive or reset those already-authoritative metrics;
 	# legacy shell metrics are migrated by _restore_player_shell_state afterward.
@@ -4718,6 +5057,8 @@ func _vertical_error_text(error_code: String) -> String:
 		"terrain_not_flat": "地形尚未整平",
 		"terrain_not_flattenable": "該地形不可整平",
 		"terrain_in_use": "該地格有建物或工程，不能整平",
+		"terrain_flatten_already_active": "該地格的整地工程已在進行中",
+		"terrain_flatten_completion_failed": "整地完工狀態無法登錄",
 		"building_not_found": "找不到建築",
 		"demolition_already_active": "這棟建築已在拆除中",
 		"blueprint_not_approved": "藍圖尚未核准",
@@ -4728,6 +5069,20 @@ func _vertical_error_text(error_code: String) -> String:
 		"another_bill_is_in_review": "已有另一項法案正在審核",
 		"bill_already_active": "法案已經生效",
 		"duplicate_bill": "相同法案已存在",
+		"transport_system_unavailable": "交通系統尚未就緒",
+		"invalid_project_operation": "交通工程操作無效",
+		"invalid_worker_count": "工程人數必須介於 1 至 20 人",
+		"invalid_transport_kind": "交通設施類型無效",
+		"invalid_transport_plan": "交通規劃不符合地形、占用或連通規則",
+		"transport_targets_required": "尚未選取交通工程地格",
+		"transport_target_not_found": "所選地格沒有這類可拆除設施",
+		"transport_construction_conflict": "所選地格已有工程進行中",
+		"transport_path_not_contiguous": "道路或軌道必須逐格相鄰連接",
+		"transport_overlap_invalid": "這些交通設施不能重疊興建",
+		"transport_route_invalid": "站點、路網、機廠、號誌或跑道條件尚未完整",
+		"transport_station_not_found": "找不到相容且已完工的交通站點",
+		"duplicate_station_tile": "同一路線不能重複加入同一站點",
+		"route_not_found": "找不到指定交通路線",
 		"review_rules_satisfied": "審核通過",
 		"insufficient_budget": "審核認定預算不足",
 		"insufficient_public_support": "民意支持不足"
@@ -4894,21 +5249,36 @@ func _service_income() -> int:
 	return CitySimulationServiceScript.sum_int_values(_service_revenues())
 
 func _service_revenues() -> Dictionary:
-	return CitySimulationServiceScript.service_revenues(
+	var revenues := CitySimulationServiceScript.service_revenues(
 		population,
 		city_grid,
 		service_fees,
 		SERVICE_DEFS
 	)
+	for mode: String in ["bus", "metro", "train", "air"]:
+		revenues[mode] = 0
+		if vertical_slice != null and vertical_slice.has_method("transport_service_revenue"):
+			revenues[mode] = int(vertical_slice.call(
+				"transport_service_revenue",
+				mode,
+				population,
+				Dictionary(SERVICE_DEFS.get(mode, {})).duplicate(true)
+			))
+	var road_access_operational := false
+	if vertical_slice != null and vertical_slice.has_method("transport_has_private_road_traffic"):
+		road_access_operational = bool(vertical_slice.call("transport_has_private_road_traffic", city_grid))
+	if not road_access_operational:
+		revenues["parking"] = 0
+	revenues["medical"] = CitySimulationServiceScript.medical_service_revenue(
+		population,
+		int(service_fees.get("medical", 0)),
+		Dictionary(SERVICE_DEFS.get("medical", {})).duplicate(true),
+		_healthcare_service_result()
+	)
+	return revenues
 
 func _service_fee_income(service_key: String) -> int:
-	return CitySimulationServiceScript.service_fee_income(
-		service_key,
-		population,
-		city_grid,
-		service_fees,
-		SERVICE_DEFS
-	)
+	return int(_service_revenues().get(service_key, 0))
 
 func _utility_fee_income(fee_key: String, base_units: float) -> float:
 	return CitySimulationServiceScript.utility_fee_income(
@@ -4924,7 +5294,12 @@ func _utility_efficiency_bonus(fee_key: String) -> float:
 	return CitySimulationServiceScript.utility_efficiency_bonus(fee_key, city_grid, buildings)
 
 func _maintenance_cost() -> int:
-	return CitySimulationServiceScript.maintenance_cost(city_grid, buildings)
+	var total := CitySimulationServiceScript.maintenance_cost(city_grid, buildings)
+	if vertical_slice != null and vertical_slice.has_method("transport_incremental_monthly_maintenance"):
+		total += int(vertical_slice.call("transport_incremental_monthly_maintenance"))
+	elif vertical_slice != null and vertical_slice.has_method("transport_monthly_maintenance"):
+		total += int(vertical_slice.call("transport_monthly_maintenance"))
+	return total
 
 func _policy_expense() -> int:
 	return CitySimulationServiceScript.policy_expense(policies, active_policies)
@@ -5037,6 +5412,14 @@ func _utility_detail_text(fee_key: String) -> String:
 
 func _service_detail_text(service_key: String) -> String:
 	var def: Dictionary = SERVICE_DEFS[service_key]
+	if service_key == "medical":
+		var healthcare_result := _healthcare_service_result()
+		var medical_forecast := _fiscal_item_forecast("service", service_key)
+		return L10n.text("收入 $%d｜%s｜%s") % [
+			_service_fee_income(service_key),
+			_healthcare_service_visible_text(healthcare_result),
+			str(medical_forecast["summary"]),
+		]
 	var has_building := _building_count(def["building"]) > 0
 	var building_name := L10n.text(str(def["building"]))
 	var note := (L10n.text("有%s") % building_name) if has_building else (L10n.text("缺%s") % building_name)

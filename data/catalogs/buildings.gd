@@ -101,6 +101,12 @@ static func all() -> Dictionary:
 			"healthcare": 11,
 			"satisfaction": 3,
 			"maintenance": 140,
+			"public_service": {
+				"id": "healthcare",
+				"model": "simplified_access_capacity_v1",
+				"capacity_per_facility": 250,
+				"max_metric_bonus": 30,
+			},
 			"color": Color(1.0, 0.88, 0.90),
 			"text_color": Color(0.20, 0.06, 0.08),
 			"description": "醫療上升，滿意度上升。"

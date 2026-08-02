@@ -40,6 +40,159 @@ func snapshot() -> Dictionary:
 	}
 
 
+static func validate_snapshot(
+	next_sequence_value: Variant,
+	library_value: Variant,
+	active_value: Variant
+) -> Dictionary:
+	if not library_value is Dictionary:
+		return _snapshot_error("invalid_blueprint_library")
+	if not active_value is Dictionary:
+		return _snapshot_error("invalid_active_blueprint_mapping")
+	var library: Dictionary = library_value
+	var active: Dictionary = active_value
+	if not _is_integer_value(next_sequence_value) or int(next_sequence_value) < 1:
+		return _snapshot_error("invalid_next_blueprint_sequence")
+	var highest_generated_sequence := 0
+	var library_building_ids: Dictionary = {}
+	for library_key: Variant in library.keys():
+		var entry_value: Variant = library[library_key]
+		if not entry_value is Dictionary:
+			return _snapshot_error("invalid_blueprint_library_entry")
+		var entry: Dictionary = entry_value
+		var entry_error := _validate_snapshot_entry(library_key, entry)
+		if not entry_error.is_empty():
+			return _snapshot_error(entry_error)
+		var blueprint: Dictionary = entry["blueprint"]
+		library_building_ids[str(entry["building_id"])] = true
+		highest_generated_sequence = maxi(
+			highest_generated_sequence,
+			_generated_blueprint_sequence(str(blueprint["id"]))
+		)
+	if int(next_sequence_value) <= highest_generated_sequence:
+		return _snapshot_error("next_blueprint_sequence_not_ahead")
+	for building_key: Variant in active.keys():
+		if not building_key is String or str(building_key).is_empty():
+			return _snapshot_error("invalid_active_blueprint_building_id")
+		var selected_value: Variant = active[building_key]
+		if not selected_value is String or (selected_value as String).is_empty():
+			return _snapshot_error("invalid_active_blueprint_id")
+		var selected_id := str(selected_value)
+		if not library.has(selected_id):
+			return _snapshot_error("active_blueprint_missing_from_library")
+		var selected_entry_value: Variant = library[selected_id]
+		if not selected_entry_value is Dictionary:
+			return _snapshot_error("invalid_active_blueprint_entry")
+		if str((selected_entry_value as Dictionary).get("building_id", "")) != str(building_key):
+			return _snapshot_error("active_blueprint_building_mismatch")
+	for building_id_variant: Variant in library_building_ids.keys():
+		if not active.has(str(building_id_variant)):
+			return _snapshot_error("missing_active_blueprint_for_building")
+	return {"valid": true, "error": ""}
+
+
+static func _validate_snapshot_entry(library_key: Variant, entry: Dictionary) -> String:
+	if not library_key is String or str(library_key).is_empty():
+		return "invalid_blueprint_library_identity"
+	for field_name: String in [
+		"id", "building_id", "building_name", "title", "source", "status",
+		"approved_day", "approved_sequence", "usage_count", "blueprint",
+	]:
+		if not entry.has(field_name):
+			return "missing_blueprint_entry_field_%s" % field_name
+	var library_id := str(library_key)
+	if not entry["id"] is String or str(entry["id"]) != library_id:
+		return "invalid_blueprint_library_identity"
+	for string_field: String in ["building_id", "building_name", "title"]:
+		var string_value: Variant = entry[string_field]
+		if not string_value is String or str(string_value).is_empty():
+			return "invalid_blueprint_entry_%s" % string_field
+	var source_value: Variant = entry["source"]
+	if not source_value is String or str(source_value) not in ["default", "player"]:
+		return "invalid_blueprint_entry_source"
+	if not entry["status"] is String or str(entry["status"]) != "approved":
+		return "invalid_blueprint_entry_status"
+	for integer_field: String in ["approved_day", "approved_sequence", "usage_count"]:
+		if not _is_nonnegative_integer(entry[integer_field]):
+			return "invalid_blueprint_entry_%s" % integer_field
+	var blueprint_value: Variant = entry["blueprint"]
+	if not blueprint_value is Dictionary:
+		return "invalid_blueprint_library_payload"
+	var blueprint: Dictionary = blueprint_value
+	var blueprint_error := _validate_snapshot_blueprint(blueprint)
+	if not blueprint_error.is_empty():
+		return "invalid_blueprint_%s" % blueprint_error
+	var building_id := str(entry["building_id"])
+	if str(blueprint["building_id"]) != building_id:
+		return "blueprint_building_mismatch"
+	var usage_count := int(entry["usage_count"])
+	if usage_count > 0:
+		if (
+			not _is_nonnegative_integer(entry.get("last_used_day", null))
+			or int(entry["last_used_day"]) < int(entry["approved_day"])
+		):
+			return "invalid_blueprint_usage_lifecycle"
+	elif entry.has("last_used_day"):
+		return "invalid_unused_blueprint_lifecycle"
+	var source := str(source_value)
+	if source == "default":
+		if int(entry["approved_day"]) != 0 or int(entry["approved_sequence"]) != 0:
+			return "invalid_default_blueprint_approval"
+		if library_id != "default_%s" % building_id:
+			return "invalid_default_blueprint_identity"
+		if entry.has("review_id"):
+			return "invalid_default_blueprint_review"
+	else:
+		if int(entry["approved_sequence"]) < 1:
+			return "invalid_player_blueprint_approval"
+		var review_id_value: Variant = entry.get("review_id", null)
+		if not review_id_value is String or str(review_id_value).is_empty():
+			return "invalid_player_blueprint_review"
+		if library_id != "approved_%s" % str(blueprint["id"]):
+			return "invalid_player_blueprint_identity"
+	return ""
+
+
+static func _validate_snapshot_blueprint(blueprint: Dictionary) -> String:
+	for field_name: String in [
+		"id", "version", "building_id", "material_id", "floors", "size_tier",
+		"roof_color", "wall_color", "decoration_id", "decoration_count",
+		"requested_workers", "base_cost",
+	]:
+		if not blueprint.has(field_name):
+			return "missing_%s" % field_name
+	for string_field: String in ["id", "building_id", "material_id", "size_tier", "roof_color", "wall_color", "decoration_id"]:
+		var string_value: Variant = blueprint[string_field]
+		if not string_value is String or (string_field in ["id", "building_id", "material_id", "size_tier"] and str(string_value).is_empty()):
+			return string_field
+	if not _is_integer_value(blueprint["version"]) or int(blueprint["version"]) < 1:
+		return "version"
+	if not _is_integer_value(blueprint["floors"]) or int(blueprint["floors"]) < 1:
+		return "floors"
+	if not _is_integer_value(blueprint["decoration_count"]) or int(blueprint["decoration_count"]) < 0:
+		return "decoration_count"
+	if (
+		not _is_integer_value(blueprint["requested_workers"])
+		or int(blueprint["requested_workers"]) < 1
+		or int(blueprint["requested_workers"]) > 20
+	):
+		return "requested_workers"
+	if not _is_integer_value(blueprint["base_cost"]) or int(blueprint["base_cost"]) < 0:
+		return "base_cost"
+	if blueprint.has("workload") and not _is_positive_number(blueprint["workload"]):
+		return "workload"
+	return ""
+
+
+static func _generated_blueprint_sequence(blueprint_id: String) -> int:
+	if not blueprint_id.begins_with("blueprint_"):
+		return 0
+	var suffix := blueprint_id.trim_prefix("blueprint_")
+	if suffix.is_empty() or not suffix.is_valid_int():
+		return 0
+	return maxi(0, int(suffix))
+
+
 func create_submission_blueprint(payload: Dictionary, definition) -> Dictionary:
 	var blueprint_id := "blueprint_%06d" % next_blueprint_sequence
 	next_blueprint_sequence += 1
@@ -232,3 +385,26 @@ static func _sorted_keys(source: Dictionary) -> Array[String]:
 		result.append(str(key))
 	result.sort()
 	return result
+
+
+static func _snapshot_error(code: String) -> Dictionary:
+	return {"valid": false, "error": code}
+
+
+static func _is_integer_value(value: Variant) -> bool:
+	if value is int:
+		return true
+	if value is float:
+		return is_finite(float(value)) and float(value) == roundf(float(value))
+	return false
+
+
+static func _is_nonnegative_integer(value: Variant) -> bool:
+	return _is_integer_value(value) and int(value) >= 0
+
+
+static func _is_positive_number(value: Variant) -> bool:
+	return (
+		(value is int and int(value) > 0)
+		or (value is float and is_finite(float(value)) and float(value) > 0.0)
+	)

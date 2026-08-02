@@ -384,7 +384,10 @@ func _route_card(route_id: String, route: Dictionary) -> PanelContainer:
 	var status_label := _label(_status_label(status), BODY_FONT_SIZE)
 	status_label.name = "TransportRouteStatus_%s" % _safe_node_part(route_id)
 	status_label.set_meta("transport_status", status)
+	status_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	status_label.custom_minimum_size = Vector2(96, 0)
 	status_label.size_flags_horizontal = Control.SIZE_SHRINK_END
+	status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	header.add_child(status_label)
 
 	var stop_count := int(route.get("stop_count", _array_size(route.get("stop_ids", route.get("stops", [])))))
@@ -643,7 +646,7 @@ func _status_color(status: String) -> Color:
 		return Color(0.42, 0.93, 0.62) if _dark_mode else Color(0.03, 0.43, 0.20)
 	if status in ["building", "planned", "draft"]:
 		return Color(1.0, 0.80, 0.30) if _dark_mode else Color(0.68, 0.42, 0.02)
-	if status in ["suspended", "invalid", "blocked"]:
+	if status in ["disabled", "suspended", "invalid", "blocked"]:
 		return Color(1.0, 0.52, 0.42) if _dark_mode else Color(0.70, 0.12, 0.08)
 	return _text_color()
 
@@ -654,6 +657,7 @@ func _status_label(status: String) -> String:
 		"planned": return L10n.text("已規劃")
 		"building": return L10n.text("施工中")
 		"operational": return L10n.text("營運中")
+		"disabled": return L10n.text("已停駛")
 		"suspended": return L10n.text("已停駛")
 		"invalid": return L10n.text("路網不完整")
 		"blocked": return L10n.text("待排除衝突")

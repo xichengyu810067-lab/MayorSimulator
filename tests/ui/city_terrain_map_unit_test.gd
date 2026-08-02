@@ -68,6 +68,25 @@ func _run() -> void:
 
 	terrain.flatten_tile(0)
 	var serialized: Dictionary = terrain.to_dict()
+	_check(bool(CityTerrainMapScript.validate_snapshot(serialized).get("valid", false)), "canonical full terrain snapshot was rejected")
+	var duplicate_tile_snapshot: Dictionary = serialized.duplicate(true)
+	duplicate_tile_snapshot["tiles"][99]["tile_id"] = 98
+	_check(not bool(CityTerrainMapScript.validate_snapshot(duplicate_tile_snapshot).get("valid", true)), "duplicate terrain tile id was accepted")
+	var missing_tile_snapshot: Dictionary = serialized.duplicate(true)
+	missing_tile_snapshot["tiles"].resize(99)
+	_check(not bool(CityTerrainMapScript.validate_snapshot(missing_tile_snapshot).get("valid", true)), "incomplete terrain coverage was accepted")
+	var unknown_kind_snapshot: Dictionary = serialized.duplicate(true)
+	unknown_kind_snapshot["tiles"][5]["base_kind"] = "lava"
+	_check(not bool(CityTerrainMapScript.validate_snapshot(unknown_kind_snapshot).get("valid", true)), "unknown terrain kind was accepted by snapshot validation")
+	var impossible_flat_snapshot: Dictionary = serialized.duplicate(true)
+	impossible_flat_snapshot["tiles"][5]["flattened"] = true
+	_check(not bool(CityTerrainMapScript.validate_snapshot(impossible_flat_snapshot).get("valid", true)), "flat grass with flattened=true was accepted")
+	var non_boolean_snapshot: Dictionary = serialized.duplicate(true)
+	non_boolean_snapshot["tiles"][5]["flattened"] = 0
+	_check(not bool(CityTerrainMapScript.validate_snapshot(non_boolean_snapshot).get("valid", true)), "non-boolean flattened flag was accepted")
+	var wrong_layout_snapshot: Dictionary = serialized.duplicate(true)
+	wrong_layout_snapshot["layout_version"] = int(serialized["layout_version"]) + 1
+	_check(not bool(CityTerrainMapScript.validate_snapshot(wrong_layout_snapshot).get("valid", true)), "unknown terrain layout version was accepted")
 	var restored = CityTerrainMapScript.create_from_dict(serialized)
 	_check(restored.coordinate_for_tile_id(63) == Vector2i(8, 8), "serialization changed legacy mapping")
 	_check(restored.base_kind(0) == "trees" and restored.is_flattened(0), "flattened terrain did not round-trip")

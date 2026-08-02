@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -38,12 +40,56 @@ class MayorSdkTests(unittest.TestCase):
         ]
         self.assertEqual([], failures)
 
-    def test_assertion_count_is_derived_from_manifest(self):
+    def test_assertion_count_is_derived_from_live_tests(self):
         matrix = json.loads(
             (PROJECT_ROOT / "tests" / "assertion_matrix.json").read_text(encoding="utf-8-sig")
         )
-        self.assertEqual(matrix["expected_test_count"], len(matrix["tests"]))
-        self.assertEqual(len(matrix["tests"]), len({item["id"] for item in matrix["tests"]}))
+        tests = matrix["tests"]
+        self.assertNotIn("expected_test_count", matrix)
+        self.assertGreater(len(tests), 0)
+        self.assertEqual(len(tests), len({item["id"] for item in tests}))
+        self.assertEqual(len(tests), len({item["script"] for item in tests}))
+        self.assertTrue(
+            {
+                "transport_network_system",
+                "transport_network_layer",
+                "transport_planning_panel",
+                "transport_coordinator_integration",
+                "transport_network_integration",
+            }.issubset({item["id"] for item in tests})
+        )
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(0, mayor_sdk._cmd_tests(True))
+        inventory = json.loads(output.getvalue())
+        self.assertEqual(inventory["test_count"], len(inventory["tests"]))
+
+        runner = (PROJECT_ROOT / "tools" / "run_assertion_matrix.ps1").read_text(
+            encoding="utf-8-sig"
+        )
+        self.assertIn("$allTests.Count", runner)
+        self.assertNotIn("$manifest.expected_test_count", runner)
+        self.assertIn("Read-Utf8FileWithRetry", runner)
+        self.assertIn("$process.Dispose()", runner)
+
+        workflow = (
+            PROJECT_ROOT / ".github" / "workflows" / "godot-ci.yml"
+        ).read_text(encoding="utf-8")
+        import_step = workflow.index("- name: Import project assets")
+        assertion_step = workflow.index("- name: Run isolated assertion manifest")
+        self.assertLess(import_step, assertion_step)
+        self.assertIn(
+            "--headless --path . --import",
+            workflow[import_step:assertion_step],
+        )
+
+        release_runner = (
+            PROJECT_ROOT / "tools" / "write_release_evidence.ps1"
+        ).read_text(encoding="utf-8-sig")
+        self.assertIn("$manifestTests.Count", release_runner)
+        self.assertIn("unique ids and scripts", release_runner)
+        self.assertNotIn("$manifest.expected_test_count", release_runner)
 
     def test_version_inventory_keeps_layers_explicit_and_consistent(self):
         manifest = mayor_sdk.load_manifest()

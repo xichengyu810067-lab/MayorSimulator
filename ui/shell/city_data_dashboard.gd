@@ -101,7 +101,7 @@ func _build_dashboard() -> void:
 	overview_panel.add_child(overview_header)
 	overview_header.add_child(_illustrated_section_title("city_data", "九項月度數據"))
 	var overview_intro := _label(
-		L10n.text("第一個月與安全線比較；第二個月起與上月比較。紅色安全線警告永遠保留。"),
+		"第一個月與安全線比較；第二個月起與上月比較。紅色安全線警告永遠保留。",
 		16,
 		_theme_muted()
 	)
@@ -166,8 +166,9 @@ func _build_dashboard() -> void:
 	finance_box.add_theme_constant_override("separation", 14)
 	finance_panel.add_child(finance_box)
 	finance_box.add_child(_illustrated_section_title("funds", "即時財政"))
-	var finance_intro := _label(L10n.text("先看收入能覆蓋多少支出；金額明細放在下方供需要時查閱。"), 15, _theme_muted())
-	finance_intro.tooltip_text = L10n.text("圖上的金色直線是 100% 收支安全線。")
+	var finance_intro := _label("先看收入能覆蓋多少支出；金額明細放在下方供需要時查閱。", 15, _theme_muted())
+	finance_intro.name = "CityFinanceIntro"
+	_set_localized_tooltip(finance_intro, "圖上的金色直線是 100% 收支安全線。")
 	finance_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	finance_intro.custom_minimum_size = Vector2(0, 34)
 	finance_box.add_child(finance_intro)
@@ -183,16 +184,28 @@ func _build_dashboard() -> void:
 	finance_box.add_child(_finance_visual_row("right_utility_income", "公共事業"))
 	finance_box.add_child(_finance_visual_row("right_service_income", "交通與服務"))
 	finance_box.add_child(_finance_visual_row("right_net_income", "預估淨收支"))
-	var note := _label(L10n.text("調整稅費：市政 → 稅率與公共事業費"), 15, COLOR_WARNING)
-	note.tooltip_text = L10n.text("關閉此頁後，進入市政中心的稅率與公共事業費頁。")
+	var note := _label("調整稅費：市政 → 稅率與公共事業費", 15, COLOR_WARNING)
+	note.name = "CityFinanceNavigationNote"
+	_set_localized_tooltip(note, "關閉此頁後，進入市政中心的稅率與公共事業費頁。")
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	note.custom_minimum_size = Vector2(0, 40)
 	finance_box.add_child(note)
 	finance_page.add_child(finance_panel)
 
-	set_tab_title(0, L10n.text("月度總覽"))
-	set_tab_title(1, L10n.text("居民滿意"))
-	set_tab_title(2, L10n.text("即時財政"))
+	refresh_localization()
+
+
+func refresh_localization() -> void:
+	if get_tab_count() < 3:
+		return
+	var sources := ["月度總覽", "居民滿意", "即時財政"]
+	var translations: Array[String] = []
+	for index in sources.size():
+		var translated := L10n.text(sources[index])
+		set_tab_title(index, translated)
+		translations.append(translated)
+	set_meta("l10n_tab_sources", sources)
+	set_meta("l10n_tab_last", translations)
 
 
 func _monthly_data_kpi_card(card_key: String, icon_key: String, title_text: String) -> PanelContainer:
@@ -244,7 +257,7 @@ func _monthly_data_service_card(spec: Dictionary) -> PanelContainer:
 	var heading := HBoxContainer.new()
 	heading.add_theme_constant_override("separation", 5)
 	heading.add_child(_icon_texture_rect(str(spec["icon_key"]), Vector2(30, 30)))
-	var title := _label(L10n.text(str(spec["label"])), 14, _theme_muted())
+	var title := _label(str(spec["label"]), 14, _theme_muted())
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	heading.add_child(title)
 	stack.add_child(heading)
@@ -653,11 +666,21 @@ func _panel(color: Color, radius: int, padding: int = 14) -> PanelContainer:
 
 func _label(text: String, size: int, color: Color) -> Label:
 	var label := Label.new()
-	label.text = text
+	var translated := L10n.text(text)
+	label.text = translated
+	label.set_meta("l10n_source_text", text)
+	label.set_meta("l10n_last_text", translated)
 	label.add_theme_font_size_override("font_size", _readable_font_size(size))
 	label.add_theme_color_override("font_color", color)
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	return label
+
+
+func _set_localized_tooltip(control: Control, source: String) -> void:
+	var translated := L10n.text(source)
+	control.tooltip_text = translated
+	control.set_meta("l10n_source_tooltip_text", source)
+	control.set_meta("l10n_last_tooltip_text", translated)
 
 
 func _illustrated_section_title(icon_key: String, title_text: String) -> HBoxContainer:

@@ -914,6 +914,36 @@ function Assert-SourceUidCompanions {
 
 # Preflight is intentionally read-only. In particular, a reused OutputRoot or
 # a non-official template archive fails before any acceptance directory exists.
+$rootLicenseFiles = @(
+    Get-ChildItem -LiteralPath $projectRoot -File |
+        Where-Object { $_.Name -match '^(?i:LICENSE(?:\..*)?|COPYING(?:\..*)?)$' }
+)
+if ($rootLicenseFiles.Count -eq 0) {
+    throw 'Release license preflight failed: no root LICENSE or COPYING file exists.'
+}
+
+$runtimeLedgerPath = Join-Path $projectRoot 'docs\project-organization\RUNTIME_ASSET_LEDGER.json'
+$runtimeLedger = Read-JsonFile -Path $runtimeLedgerPath -Label 'Runtime asset ledger'
+$blockedProvenanceAssets = @($runtimeLedger.assets | Where-Object {
+    [string]$_.provenance_status -match '(?i:missing|unresolved|unknown|not_covered)'
+})
+$blockedRightsAssets = @($runtimeLedger.assets | Where-Object {
+    [string]$_.rights_license_status -match '(?i:missing|unresolved|unknown|unselected)'
+})
+if ([string]$runtimeLedger.project_distribution_license_status -match '(?i:missing|unresolved|unknown|unselected)' -or
+    [int]$runtimeLedger.unresolved_source_rights_asset_count -ne 0 -or
+    $blockedProvenanceAssets.Count -ne 0 -or
+    $blockedRightsAssets.Count -ne 0) {
+    $blockedPaths = @(
+        @($blockedProvenanceAssets + $blockedRightsAssets) |
+            ForEach-Object { [string]$_.res_path } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Sort-Object -Unique |
+            Select-Object -First 10
+    )
+    throw "Release asset-rights preflight failed: project_license=$($runtimeLedger.project_distribution_license_status) unresolved_source_rights=$($runtimeLedger.unresolved_source_rights_asset_count) blocked_provenance=$($blockedProvenanceAssets.Count) blocked_rights=$($blockedRightsAssets.Count) sample_paths=[$($blockedPaths -join ', ')]"
+}
+
 $outputFullPath = Resolve-NewDirectoryPath -Path $OutputRoot -Label 'OutputRoot'
 if (-not (Test-MayorPathInside -Candidate $outputFullPath -Parent $projectRoot) -or
     (Test-PathEqual -Left $outputFullPath -Right $projectRoot)) {
@@ -1015,8 +1045,15 @@ try {
     $manifestPath = Join-Path $projectRoot 'tests\assertion_matrix.json'
     $manifest = Read-JsonFile -Path $manifestPath -Label 'Assertion manifest'
     $manifestTests = @($manifest.tests)
-    if ($manifestTests.Count -lt 1 -or [int]$manifest.expected_test_count -ne $manifestTests.Count) {
-        throw 'Assertion manifest expected_test_count does not match its current tests array.'
+    $manifestTestIds = @($manifestTests | ForEach-Object { [string]$_.id })
+    $manifestTestScripts = @($manifestTests | ForEach-Object { [string]$_.script })
+    if ($null -ne $manifest.PSObject.Properties['expected_test_count'] -or
+        $manifestTests.Count -lt 1 -or
+        @($manifestTestIds | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count -gt 0 -or
+        @($manifestTestIds | Sort-Object -Unique).Count -ne $manifestTests.Count -or
+        @($manifestTestScripts | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count -gt 0 -or
+        @($manifestTestScripts | Sort-Object -Unique).Count -ne $manifestTests.Count) {
+        throw 'Assertion manifest must derive its count from a non-empty tests array with unique ids and scripts.'
     }
     $assertionCommand = Invoke-CapturedCommand `
         -Id 'assertion_matrix' `

@@ -529,7 +529,7 @@ func _run() -> void:
 	_check(int(authoritative_metrics.get("environment", -1)) == main.environment, "CityState owns the synchronized environment metric")
 	_check(int(authoritative_metrics.get("traffic", -1)) == main.traffic, "CityState owns the synchronized traffic metric")
 	_check(int(authoritative_metrics.get("education", -1)) == main.education and int(authoritative_metrics.get("healthcare", -1)) == main.healthcare, "CityState owns the synchronized service metrics")
-	_check(int(main._capture_player_shell_state().get("schema_version", 0)) == 7, "player shell schema marks metric authority plus audio and map zoom persistence")
+	_check(int(main._capture_player_shell_state().get("schema_version", 0)) == 8, "player shell schema marks metric authority, healthcare-service latch, audio, and map zoom persistence")
 	_check(main.last_report.contains("人口 320（+20）"), "concise monthly report uses authoritative active-law population change")
 	_check(bool(main.last_month_summary.get("available", false)), "monthly settlement records a structured summary")
 	_check(int(main.last_month_summary.get("population_change", 0)) == 20, "structured monthly summary preserves the authoritative population delta")
@@ -557,6 +557,8 @@ func _run() -> void:
 	_check(int(restored.get_player_shell_state().get("month_start_population", 0)) == 320, "current-month population baseline survives save and load")
 	for delta_key in ["security_change", "environment_change", "traffic_change", "education_change", "healthcare_change"]:
 		_check(restored_month_summary.has(delta_key), "service metric delta survives save and load: %s" % delta_key)
+	_test_main_level_crossing_navigation_policy(main)
+	_test_whole_segment_transport_demolition_preview(main)
 
 	var exit_code := 1 if _failed else 0
 	if not _failed:
@@ -576,6 +578,124 @@ func _rect_inside_viewport(rect: Rect2, viewport_size: Vector2) -> bool:
 
 func _on_application_quit_requested() -> void:
 	_quit_signal_count += 1
+
+
+func _test_whole_segment_transport_demolition_preview(main) -> void:
+	var segment_id := "main_integration_preview_road"
+	var segment_tiles: Array[int] = [91, 92, 93]
+	var clicked_tile := segment_tiles[1]
+	var non_target_tile := 94
+	main.vertical_slice.transport.segments[segment_id] = {
+		"id": segment_id,
+		"kind": "road",
+		"tile_path": segment_tiles.duplicate(),
+		"status": "completed",
+		"project_id": "main_integration_fixture",
+	}
+	main.call("_update_transport_runtime")
+	main.call("_on_transport_infrastructure_requested", "road", "demolish")
+	main.call("_on_grid_pressed", clicked_tile)
+
+	_check(
+		main.transport_plan_tiles == segment_tiles,
+		"clicking the middle of a transport segment selects its complete three-tile demolition target"
+	)
+	var layer_snapshot: Dictionary = main.transport_network_layer.get("_network_snapshot")
+	var tile_states: Dictionary = layer_snapshot.get("tile_states", {})
+	for tile_id: int in segment_tiles:
+		var state: Dictionary = tile_states.get(str(tile_id), {})
+		_check(
+			str(state.get("project_status", "")) == "demolishing",
+			"whole-segment demolition preview marks target tile %d" % tile_id
+		)
+	var non_target_state: Dictionary = tile_states.get(str(non_target_tile), {})
+	_check(
+		str(non_target_state.get("project_status", "")) != "demolishing",
+		"whole-segment demolition preview does not mark a neighboring non-target tile"
+	)
+
+	main.call("_confirm_transport_infrastructure_plan")
+	var job: Dictionary = main.vertical_slice.active_construction_for_tile(clicked_tile)
+	var metadata_tiles: Array = job.get("metadata", {}).get("tile_indices", [])
+	var normalized_metadata_tiles: Array[int] = []
+	for tile_variant: Variant in metadata_tiles:
+		normalized_metadata_tiles.append(int(tile_variant))
+	normalized_metadata_tiles.sort()
+	_check(not job.is_empty(), "confirming whole-segment demolition creates an active transport job")
+	_check(
+		normalized_metadata_tiles == segment_tiles,
+		"confirmed transport demolition metadata preserves all three segment tiles"
+	)
+	for tile_id: int in segment_tiles:
+		_check(
+			main.vertical_slice.active_construction_for_tile(tile_id).get("id", "") == job.get("id", ""),
+			"every segment tile resolves to the same confirmed demolition job"
+		)
+
+
+func _test_main_level_crossing_navigation_policy(main) -> void:
+	var crossing_tile := -1
+	var navigation = main.npc_map_controller.get("_navigation")
+	for candidate in main.city_grid.size():
+		if candidate in [91, 92, 93, 94]:
+			continue
+		var candidate_center: Vector2 = main.call("_iso_tile_center", candidate)
+		if (
+			main.city_grid[candidate] == ""
+			and main.vertical_slice.terrain_map.is_walkable(candidate)
+			and main.vertical_slice.active_construction_for_tile(candidate).is_empty()
+			and navigation != null
+			and navigation.is_position_walkable(candidate_center)
+		):
+			crossing_tile = candidate
+			break
+	_check(crossing_tile >= 0, "main crossing fixture found a walkable, empty, construction-free tile")
+	if crossing_tile < 0:
+		return
+
+	var road_id := "main_integration_crossing_road"
+	var rail_id := "main_integration_crossing_rail"
+	var crossing_id := "main_integration_level_crossing"
+	main.vertical_slice.transport.segments[road_id] = {
+		"id": road_id,
+		"kind": "road",
+		"tile_path": [crossing_tile],
+		"status": "completed",
+		"project_id": "main_integration_crossing_fixture",
+	}
+	main.vertical_slice.transport.segments[rail_id] = {
+		"id": rail_id,
+		"kind": "rail_track",
+		"tile_path": [crossing_tile],
+		"status": "completed",
+		"project_id": "main_integration_crossing_fixture",
+	}
+	main.vertical_slice.transport.crossings[crossing_id] = {
+		"id": crossing_id,
+		"kind": "level_crossing",
+		"tile_id": crossing_tile,
+		"track_kinds": ["rail_track"],
+		"status": "completed",
+		"build_cost": 900,
+		"monthly_maintenance": 40,
+	}
+	main.call("_update_transport_runtime")
+	main.debug_sync_npc_navigation_obstacles()
+	var crossing_center: Vector2 = main.call("_iso_tile_center", crossing_tile)
+	_check(not main.npc_map_controller.is_tile_blocked(crossing_tile), "main opens a completed level crossing for NPC navigation")
+	_check(navigation.is_position_walkable(crossing_center), "main crossing aperture reaches the live navigation grid")
+
+	main.npc_map_controller.set_crossing_states({str(crossing_tile): {"closed": true, "flash": false}})
+	_check(main.npc_map_controller.is_tile_blocked(crossing_tile), "closed main crossing blocks the NPC tile")
+	_check(not navigation.is_position_walkable(crossing_center), "closed main crossing seals the live navigation aperture")
+	main.npc_map_controller.set_crossing_states({str(crossing_tile): {"closed": false, "flash": false}})
+	_check(not main.npc_map_controller.is_tile_blocked(crossing_tile), "reopened main crossing restores NPC passage")
+
+	main.vertical_slice.transport.crossings.erase(crossing_id)
+	main.vertical_slice.transport.segments.erase(road_id)
+	main.vertical_slice.transport.segments.erase(rail_id)
+	main.call("_update_transport_runtime")
+	main.debug_sync_npc_navigation_obstacles()
 
 
 func _governance_mirror_case(raw_cases: Variant, case_id: String) -> Dictionary:

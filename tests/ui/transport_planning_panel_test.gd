@@ -111,7 +111,7 @@ func _run() -> void:
 				"route_id": "rail_west",
 				"name": "西部幹線",
 				"mode": "train",
-				"status": "suspended",
+				"status": "disabled",
 				"enabled": false,
 				"stop_ids": ["west", "central"],
 				"path_tile_count": 24,
@@ -130,7 +130,14 @@ func _run() -> void:
 	var metro_status := panel.find_child("TransportRouteStatus_metro_blue", true, false) as Label
 	var rail_status := panel.find_child("TransportRouteStatus_rail_west", true, false) as Label
 	_check(metro_status != null and metro_status.text == "營運中", "operational route status is not rendered")
-	_check(rail_status != null and rail_status.text == "已停駛", "suspended route status is not rendered")
+	_check(rail_status != null and rail_status.text == "已停駛", "player-disabled route status is not rendered")
+	for status_label: Label in [metro_status, rail_status]:
+		_check(
+			status_label != null
+			and status_label.autowrap_mode == TextServer.AUTOWRAP_OFF
+			and status_label.custom_minimum_size.x >= 96.0,
+			"route status can collapse into an unreadable vertical label"
+		)
 	var metro_details := panel.find_child("TransportRouteDetails_metro_blue", true, false) as Label
 	var rail_details := panel.find_child("TransportRouteDetails_rail_west", true, false) as Label
 	_check(metro_details != null and _contains_all(metro_details.text, ["站點 4", "路徑 18 格", "車隊 3 輛", "班距 6 分鐘", "票價 $35"]), "metro route card omits required operating facts")

@@ -9,7 +9,7 @@ extends RefCounted
 ## old saves retain every building/construction tile id without migration.
 
 const SCHEMA_VERSION := 1
-const LAYOUT_VERSION := 1
+const LAYOUT_VERSION := 2
 const GRID_COLUMNS := 10
 const GRID_ROWS := 10
 const CELL_COUNT := GRID_COLUMNS * GRID_ROWS
@@ -141,12 +141,6 @@ func apply_default_city_layout() -> void:
 		KIND_RIVER_LAKE: [
 			Vector2i(0, 5), Vector2i(1, 5), Vector2i(4, 4),
 			Vector2i(4, 5), Vector2i(9, 5),
-		],
-		KIND_ROAD_PATH: [
-			Vector2i(2, 6), Vector2i(3, 6), Vector2i(5, 6), Vector2i(6, 6),
-		],
-		KIND_RAIL_TRACK: [
-			Vector2i(2, 3), Vector2i(3, 3), Vector2i(5, 3), Vector2i(6, 3),
 		],
 	}
 	for kind_variant: Variant in authored_by_kind.keys():
@@ -303,6 +297,56 @@ func to_dict() -> Dictionary:
 	}
 
 
+static func validate_snapshot(snapshot: Dictionary) -> Dictionary:
+	var required_top_level := [
+		"schema_version", "layout_version", "grid_columns", "grid_rows", "tiles",
+	]
+	if snapshot.size() != required_top_level.size():
+		return _snapshot_error("invalid_snapshot_shape")
+	for field_name: String in required_top_level:
+		if not snapshot.has(field_name):
+			return _snapshot_error("missing_%s" % field_name)
+	if not _is_integer_value(snapshot["schema_version"]) or int(snapshot["schema_version"]) != SCHEMA_VERSION:
+		return _snapshot_error("unsupported_schema")
+	if not _is_integer_value(snapshot["layout_version"]) or int(snapshot["layout_version"]) != LAYOUT_VERSION:
+		return _snapshot_error("unsupported_layout")
+	if not _is_integer_value(snapshot["grid_columns"]) or int(snapshot["grid_columns"]) != GRID_COLUMNS:
+		return _snapshot_error("invalid_grid_columns")
+	if not _is_integer_value(snapshot["grid_rows"]) or int(snapshot["grid_rows"]) != GRID_ROWS:
+		return _snapshot_error("invalid_grid_rows")
+	var tiles_value: Variant = snapshot["tiles"]
+	if not tiles_value is Array or (tiles_value as Array).size() != CELL_COUNT:
+		return _snapshot_error("invalid_tile_count")
+	var seen_tile_ids: Dictionary = {}
+	for tile_value: Variant in tiles_value:
+		if not tile_value is Dictionary:
+			return _snapshot_error("invalid_tile_record")
+		var tile: Dictionary = tile_value
+		if tile.size() != 3 or not tile.has("tile_id") or not tile.has("base_kind") or not tile.has("flattened"):
+			return _snapshot_error("invalid_tile_record_shape")
+		var tile_id_value: Variant = tile["tile_id"]
+		if not _is_integer_value(tile_id_value):
+			return _snapshot_error("invalid_tile_id")
+		var tile_id := int(tile_id_value)
+		if tile_id < 0 or tile_id >= CELL_COUNT or seen_tile_ids.has(tile_id):
+			return _snapshot_error("invalid_tile_id")
+		var kind_value: Variant = tile["base_kind"]
+		if not kind_value is String or not TERRAIN_RULES.has(str(kind_value)):
+			return _snapshot_error("invalid_terrain_kind")
+		var flattened_value: Variant = tile["flattened"]
+		if not flattened_value is bool:
+			return _snapshot_error("invalid_flattened_flag")
+		if str(kind_value) == KIND_FLAT_GRASS and bool(flattened_value):
+			return _snapshot_error("flat_grass_cannot_be_flattened")
+		seen_tile_ids[tile_id] = true
+	if seen_tile_ids.size() != CELL_COUNT:
+		return _snapshot_error("incomplete_tile_coverage")
+	for tile_id: int in range(CELL_COUNT):
+		if not seen_tile_ids.has(tile_id):
+			return _snapshot_error("incomplete_tile_coverage")
+	return {"valid": true, "error": ""}
+
+
 func load_dict(data: Dictionary) -> void:
 	_reset_terrain_state()
 	var raw_tiles: Variant = data.get("tiles", [])
@@ -373,3 +417,11 @@ func _reset_terrain_state() -> void:
 	for _tile_id in range(CELL_COUNT):
 		_base_kinds.append(KIND_FLAT_GRASS)
 		_flattened.append(0)
+
+
+static func _snapshot_error(code: String) -> Dictionary:
+	return {"valid": false, "error": code}
+
+
+static func _is_integer_value(value: Variant) -> bool:
+	return value is int or (value is float and is_finite(float(value)) and float(value) == roundf(float(value)))

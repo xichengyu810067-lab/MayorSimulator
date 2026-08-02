@@ -70,6 +70,8 @@ var _runtime_snapshot: Dictionary = {}
 var _tile_centers: Dictionary = {}
 var _actors: Dictionary = {}
 var _actor_specs: Dictionary = {}
+var _actor_route_times: Dictionary = {}
+var _actor_positions_initialized: Dictionary = {}
 var _simulation_time := 0.0
 var _crossing_states: Dictionary = {}
 var _interaction_enabled := true
@@ -87,7 +89,7 @@ func set_runtime_snapshot(snapshot: Dictionary, tile_centers: Dictionary) -> voi
 	_tile_centers = tile_centers.duplicate(true)
 	_rebuild_actor_specs()
 	_sync_actors()
-	_update_actors()
+	_update_actors(0.0)
 
 
 func set_interaction_enabled(enabled: bool) -> void:
@@ -95,13 +97,19 @@ func set_interaction_enabled(enabled: bool) -> void:
 
 
 func debug_set_simulation_time(seconds: float) -> void:
-	_simulation_time = maxf(0.0, seconds)
-	_update_actors()
+	var next_time := maxf(0.0, seconds)
+	var moved_backwards := next_time < _simulation_time
+	var elapsed := maxf(0.0, next_time - _simulation_time)
+	_simulation_time = next_time
+	if moved_backwards:
+		_reset_actor_route_times(next_time)
+	_update_actors(elapsed)
 
 
 func debug_advance_simulation(delta: float) -> void:
-	_simulation_time = maxf(0.0, _simulation_time + maxf(0.0, delta))
-	_update_actors()
+	var elapsed := maxf(0.0, delta)
+	_simulation_time = maxf(0.0, _simulation_time + elapsed)
+	_update_actors(elapsed)
 
 
 func debug_route_snapshot() -> Dictionary:
@@ -122,6 +130,7 @@ func debug_route_snapshot() -> Dictionary:
 			"path_tile_ids": Array(spec.get("path_tile_ids", [])).duplicate(),
 			"operational_source": true,
 			"on_authoritative_path": bool(spec.get("sample_valid", false)),
+			"route_time": float(_actor_route_times.get(key, _simulation_time)),
 		})
 	return {
 		"simulation_time": _simulation_time,
@@ -137,11 +146,17 @@ func active_vehicle_count() -> int:
 	return _actors.size()
 
 
+func _reset_actor_route_times(seconds: float) -> void:
+	for key_variant: Variant in _actors.keys():
+		_actor_route_times[str(key_variant)] = seconds
+
+
 func _process(delta: float) -> void:
 	if not is_visible_in_tree():
 		return
-	_simulation_time = fposmod(_simulation_time + minf(maxf(delta, 0.0), MAX_FRAME_DELTA), 86_400.0)
-	_update_actors()
+	var elapsed := minf(maxf(delta, 0.0), MAX_FRAME_DELTA)
+	_simulation_time = fposmod(_simulation_time + elapsed, 86_400.0)
+	_update_actors(elapsed)
 
 
 func _rebuild_actor_specs() -> void:
@@ -156,7 +171,7 @@ func _rebuild_actor_specs() -> void:
 		var path: Array = line.get("path_tile_ids", [])
 		if route_id.is_empty() or path.size() < 2:
 			continue
-		var fleet_size := clampi(int(line.get("fleet_size", 1)), 1, 12)
+		var fleet_size := clampi(int(line.get("fleet_size", 1)), 1, 40)
 		for fleet_index in fleet_size:
 			var key := "%s:%02d" % [route_id, fleet_index]
 			var spec := line.duplicate(true)
@@ -195,6 +210,8 @@ func _sync_actors() -> void:
 			continue
 		var old_actor := _actors[key] as VehicleActor
 		_actors.erase(key)
+		_actor_route_times.erase(key)
+		_actor_positions_initialized.erase(key)
 		if is_instance_valid(old_actor):
 			old_actor.queue_free()
 	for key_variant: Variant in _actor_specs.keys():
@@ -208,20 +225,33 @@ func _sync_actors() -> void:
 		var actor := VehicleActor.new(key, kind, route_id, mode, _vehicle_color(route_id, kind))
 		add_child(actor)
 		_actors[key] = actor
+		_actor_route_times[key] = _simulation_time
+		_actor_positions_initialized[key] = false
+	for key_variant: Variant in _actors.keys():
+		var key := str(key_variant)
+		if not _actor_route_times.has(key):
+			_actor_route_times[key] = _simulation_time
+		if not _actor_positions_initialized.has(key):
+			_actor_positions_initialized[key] = false
 
 
-func _update_actors() -> void:
+func _update_actors(elapsed: float) -> void:
+	var safe_elapsed := maxf(0.0, elapsed)
 	var proposed: Dictionary = {}
 	for key_variant: Variant in _actors.keys():
 		var key := str(key_variant)
 		var actor := _actors[key] as VehicleActor
 		var spec: Dictionary = _actor_specs.get(key, {})
-		var sample := _sample_spec(spec)
+		var route_time := float(_actor_route_times.get(key, _simulation_time))
+		var candidate_route_time := route_time + safe_elapsed
+		var sample := _sample_spec(spec, candidate_route_time)
 		spec["sample_valid"] = bool(sample.get("valid", false))
 		_actor_specs[key] = spec
 		if not bool(sample.get("valid", false)):
 			actor.hide()
+			_actor_positions_initialized[key] = false
 			continue
+		sample["route_time"] = candidate_route_time
 		proposed[key] = sample
 
 	var next_crossing_states := _crossing_proximity_states(proposed)
@@ -232,17 +262,39 @@ func _update_actors() -> void:
 	for key_variant: Variant in proposed.keys():
 		var key := str(key_variant)
 		var actor := _actors[key] as VehicleActor
+		var spec: Dictionary = _actor_specs.get(key, {})
 		var sample: Dictionary = proposed[key]
 		var next_position: Vector2 = sample["position"]
-		if actor.vehicle_kind in ["car", "motorcycle", "bus"] and _must_stop_for_crossing(next_position):
-			next_position = actor.position + actor.size * 0.5 if actor.visible else next_position
+		var next_angle := float(sample.get("angle", 0.0))
+		var initialized := bool(_actor_positions_initialized.get(key, false))
+		var current_position := actor.position + actor.size * 0.5 if initialized else next_position
+		var stopped_for_crossing := (
+			actor.vehicle_kind in ["car", "motorcycle", "bus"]
+			and _must_stop_for_crossing(current_position, next_position)
+		)
+		if stopped_for_crossing:
+			if initialized:
+				next_position = current_position
+			else:
+				var stop_sample := _sample_before_closed_crossing(
+					spec, float(sample.get("route_time", _simulation_time))
+				)
+				if stop_sample.is_empty():
+					actor.hide()
+					continue
+				next_position = Vector2(stop_sample.get("position", next_position))
+				next_angle = float(stop_sample.get("angle", next_angle))
+				_actor_route_times[key] = float(stop_sample.get("route_time", _simulation_time))
+		else:
+			_actor_route_times[key] = float(sample.get("route_time", _simulation_time))
 		actor.position = next_position - actor.size * 0.5
-		actor.rotation = float(sample.get("angle", 0.0))
+		actor.rotation = next_angle
 		actor.z_index = int(round(next_position.y)) + 2
 		actor.visible = _interaction_enabled or true
+		_actor_positions_initialized[key] = true
 
 
-func _sample_spec(spec: Dictionary) -> Dictionary:
+func _sample_spec(spec: Dictionary, sample_time: float) -> Dictionary:
 	var points := PackedVector2Array()
 	for tile_variant: Variant in spec.get("path_tile_ids", []):
 		var center := _center_for(int(tile_variant))
@@ -265,7 +317,7 @@ func _sample_spec(spec: Dictionary) -> Dictionary:
 	var loop_seconds := maxf(1.0, float(spec.get("loop_seconds", maxf(5.0, total_length / 42.0))))
 	var actor_index := int(spec.get("actor_index", 0))
 	var actor_count := maxi(1, int(spec.get("actor_count", 1)))
-	var phase := fposmod(_simulation_time / loop_seconds + float(actor_index) / float(actor_count), 1.0)
+	var phase := fposmod(sample_time / loop_seconds + float(actor_index) / float(actor_count), 1.0)
 	var target_distance := phase * total_length
 	var consumed := 0.0
 	for index in segment_lengths.size():
@@ -283,6 +335,24 @@ func _sample_spec(spec: Dictionary) -> Dictionary:
 			"segment_index": index,
 		}
 	return {"valid": true, "position": travel[-1], "angle": 0.0, "segment_index": travel.size() - 2}
+
+
+func _sample_before_closed_crossing(spec: Dictionary, candidate_route_time: float) -> Dictionary:
+	var loop_seconds := maxf(1.0, float(spec.get("loop_seconds", 12.0)))
+	# Search one full loop backwards.  This is used only when a vehicle actor is
+	# first materialized while its next authoritative sample is already inside a
+	# closed crossing, so placing it at the nearest preceding stop point is both
+	# deterministic and bounded.
+	for step_index in range(1, 257):
+		var sample_time := candidate_route_time - loop_seconds * float(step_index) / 256.0
+		var sample := _sample_spec(spec, sample_time)
+		if not bool(sample.get("valid", false)):
+			continue
+		var position := Vector2(sample.get("position", Vector2.INF))
+		if position != Vector2.INF and not _must_stop_for_crossing(position, position):
+			sample["route_time"] = sample_time
+			return sample
+	return {}
 
 
 func _crossing_proximity_states(samples: Dictionary) -> Dictionary:
@@ -310,13 +380,18 @@ func _crossing_proximity_states(samples: Dictionary) -> Dictionary:
 	return result
 
 
-func _must_stop_for_crossing(position: Vector2) -> bool:
+func _must_stop_for_crossing(from_position: Vector2, to_position: Vector2) -> bool:
 	for tile_key_variant: Variant in _crossing_states.keys():
 		var state: Dictionary = _crossing_states[tile_key_variant]
 		if not bool(state.get("closed", false)):
 			continue
 		var center := _center_for(int(str(tile_key_variant)))
-		if center != Vector2.INF and position.distance_to(center) <= 31.0:
+		if center == Vector2.INF:
+			continue
+		if from_position.distance_to(center) <= 31.0 or to_position.distance_to(center) <= 31.0:
+			return true
+		var closest := Geometry2D.get_closest_point_to_segment(center, from_position, to_position)
+		if closest.distance_to(center) <= 31.0:
 			return true
 	return false
 

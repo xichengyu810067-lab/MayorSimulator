@@ -39,6 +39,7 @@ func _initialize() -> void:
 	_test_request_completion_fact()
 	_test_build_and_demolish_flow()
 	_test_demolition_financial_preflight()
+	_test_demolition_durability_interlock()
 	_test_population_building_lifecycle()
 	_test_population_scrap_and_legacy_migration()
 	_test_stale_core_population_reconcile()
@@ -57,7 +58,10 @@ func _initialize() -> void:
 
 func _test_content_registry() -> void:
 	var buildings: Dictionary = ContentRegistry.buildings_by_id()
-	_check(buildings.size() == 26, "content registry exposes all 26 buildings")
+	_check(
+		buildings.size() == ContentRegistry.BUILDING_IDS.size(),
+		"content registry exposes every canonical building id"
+	)
 	_check(buildings.has("court"), "content registry exposes the court")
 	_check(buildings.has("oversight_office"), "content registry exposes the oversight office")
 	var core_count := 0
@@ -213,6 +217,81 @@ func _test_demolition_financial_preflight() -> void:
 		_check(coordinator.treasury_balance() == balance_before, "zero-fund demolition attempt %d does not change treasury" % (attempt + 1))
 		_check(coordinator.session.state.ledger.get_entries() == ledger_before, "zero-fund demolition attempt %d does not append a ledger entry" % (attempt + 1))
 		_check(coordinator.deterministic_hash() == hash_before, "zero-fund demolition attempt %d leaves the persisted state hash unchanged" % (attempt + 1))
+
+
+func _test_demolition_durability_interlock() -> void:
+	var coordinator = _coordinator_script.new(TEST_SEED + 32, TEST_FUNDS)
+	var baseline_population: int = coordinator.population.sorted_npc_ids().size()
+	var residence_definition = ContentRegistry.buildings_by_id().get("residence")
+	_check(residence_definition != null, "demolition durability fixture resolves the residence definition")
+	if residence_definition == null:
+		return
+	var building: Dictionary = coordinator.register_existing_building(
+		17, str(residence_definition.display_name)
+	)
+	_check(not building.is_empty(), "demolition durability fixture registers a populated building")
+	if building.is_empty():
+		return
+	var building_id := str(building.get("building_id", ""))
+	var resident_ids: Array = Array(building.get("resident_ids", [])).duplicate()
+	var population_during_demolition: int = coordinator.population.sorted_npc_ids().size()
+	var demolition: Dictionary = coordinator.start_demolition(17, 1)
+	_check(bool(demolition.get("ok", false)), "long demolition starts before durability interlock test")
+	if not bool(demolition.get("ok", false)):
+		return
+	var job_id := str(demolition.get("job", {}).get("id", ""))
+	var projected_days := int(demolition.get("job", {}).get("projected_remaining_days", 0))
+	_check(projected_days > 7, "one-worker demolition spans the weekly durability boundary")
+	if projected_days <= 7:
+		return
+	var repair_during_demolition: Dictionary = coordinator.repair_building(17)
+	_check(not bool(repair_during_demolition.get("ok", false)) and str(repair_during_demolition.get("error", "")) == "demolition_in_progress", "repair cannot break the demolition status/job invariant")
+	coordinator.advance_days(6, CITY_CONTEXT, false)
+	coordinator.drain_ui_events()
+
+	var damage: Dictionary = coordinator.durability.apply_damage(
+		building_id,
+		61,
+		"test.demolition_durability_tick",
+		coordinator.game_day() + 1
+	)
+	_check(bool(damage.get("ok", false)), "durability tick can reduce a building below the scrap threshold during demolition")
+	if not bool(damage.get("ok", false)):
+		return
+	coordinator._handle_durability_fact(damage["event"])
+	var during: Dictionary = coordinator.get_building_by_tile(17)
+	_check(str(during.get("status", "")) == "demolition", "durability tick cannot overwrite an active demolition marker")
+	_check(int(during.get("durability", 100)) == 39, "durability still updates while demolition owns the building")
+	_check(Array(during.get("resident_ids", [])) == resident_ids, "suppressed scrap does not evict residents before demolition completes")
+	_check(coordinator.population.sorted_npc_ids().size() == population_during_demolition, "suppressed scrap leaves authoritative population unchanged")
+	_check(coordinator.construction.jobs.has(job_id), "durability tick preserves the subsystem demolition job")
+	_check(coordinator.session.state.construction_jobs.has(job_id), "durability tick preserves the core demolition-job mirror")
+	if coordinator.construction.jobs.has(job_id) and coordinator.session.state.construction_jobs.has(job_id):
+		var subsystem_job: Dictionary = coordinator.construction.jobs[job_id]
+		var core_job: Dictionary = coordinator.session.state.construction_jobs[job_id]
+		var normalized_core_job := core_job.duplicate(true)
+		var core_job_id_matches := str(normalized_core_job.get("job_id", "")) == job_id
+		normalized_core_job.erase("job_id")
+		_check(
+			core_job_id_matches and subsystem_job == normalized_core_job,
+			"durability tick keeps subsystem and core job records identical: subsystem=%s core=%s" % [
+				JSON.stringify(subsystem_job), JSON.stringify(core_job),
+			]
+		)
+	var durability_ui_events: Array[Dictionary] = coordinator.drain_ui_events()
+	_check(_event_count(durability_ui_events, "building_scrapped") == 0, "durability tick emits no scrap UI side effect during demolition")
+	_check(_event_count(coordinator.session.state.event_book, "building_scrapped") == 0, "durability tick records damage instead of a false scrap fact during demolition")
+
+	var remaining_days := int(coordinator.construction.jobs.get(job_id, {}).get("projected_remaining_days", 0))
+	_check(remaining_days > 0, "demolition remains active after the injected durability tick")
+	var completion_events: Array[Dictionary] = coordinator.advance_days(remaining_days, CITY_CONTEXT, false)
+	_check(_event_count(completion_events, "demolition_completed") == 1, "interlocked demolition completes exactly once")
+	_check(coordinator.get_building_by_tile(17).is_empty(), "interlocked demolition removes the building at completion")
+	_check(not coordinator.session.state.construction_jobs.has(job_id), "completion removes the core demolition-job mirror")
+	_check(str(coordinator.construction.jobs.get(job_id, {}).get("status", "")) == "completed", "completion retains one historical subsystem job")
+	_check(coordinator.population.sorted_npc_ids().size() == baseline_population, "residents are removed once at demolition completion")
+	var follow_up_events: Array[Dictionary] = coordinator.advance_days(1, CITY_CONTEXT, false)
+	_check(_event_count(follow_up_events, "demolition_completed") == 0, "completed demolition cannot emit a second completion")
 
 
 func _test_population_building_lifecycle() -> void:
@@ -435,6 +514,14 @@ func _event_seen(events: Array[Dictionary], event_type: String) -> bool:
 		if str(event.get("type", "")) == event_type:
 			return true
 	return false
+
+
+func _event_count(events: Array[Dictionary], event_type: String) -> int:
+	var count := 0
+	for event: Dictionary in events:
+		if str(event.get("type", "")) == event_type:
+			count += 1
+	return count
 
 
 func _ledger_entries_for_reason(coordinator, reason_tag: String) -> Array[Dictionary]:

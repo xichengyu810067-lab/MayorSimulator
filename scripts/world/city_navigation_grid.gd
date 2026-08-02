@@ -23,6 +23,7 @@ var _astar := AStarGrid2D.new()
 var _foot_radius := DEFAULT_FOOT_RADIUS
 var _static_polygons: Array[Dictionary] = []
 var _dynamic_blockers: Dictionary = {}
+var _transport_crossing_apertures: Dictionary = {}
 var _static_solid := PackedByteArray()
 var _last_raw_path := PackedVector2Array()
 var _last_path := PackedVector2Array()
@@ -58,6 +59,8 @@ func is_position_walkable(position: Vector2) -> bool:
 			return false
 	for blocker_variant: Variant in _dynamic_blockers.values():
 		var blocker: Dictionary = blocker_variant
+		if _blocker_has_open_transport_aperture(blocker):
+			continue
 		if _point_touches_polygon(position, blocker["points"], _foot_radius):
 			return false
 	return true
@@ -391,10 +394,37 @@ func set_dynamic_diamond(
 
 
 func clear_dynamic_blockers() -> void:
-	if _dynamic_blockers.is_empty():
+	if _dynamic_blockers.is_empty() and _transport_crossing_apertures.is_empty():
 		return
 	_dynamic_blockers.clear()
+	_transport_crossing_apertures.clear()
 	_refresh_grid_solidity()
+
+
+## Opens completed level-crossing tiles for pedestrian navigation.  The
+## aperture only overrides a map-owned transport blocker with the same tile id;
+## buildings, construction, natural terrain, and arbitrary gameplay blockers
+## remain solid even if a malformed crossing record points at their tile.
+func set_transport_crossing_apertures(tile_ids: PackedInt32Array) -> void:
+	var next_apertures: Dictionary = {}
+	for tile_id: int in tile_ids:
+		if tile_id >= 0:
+			next_apertures[tile_id] = true
+	if next_apertures == _transport_crossing_apertures:
+		return
+	_transport_crossing_apertures = next_apertures
+	_refresh_grid_solidity()
+
+
+func get_debug_transport_crossing_aperture_tile_ids() -> PackedInt32Array:
+	var tile_ids := PackedInt32Array()
+	var sorted_ids: Array[int] = []
+	for tile_variant: Variant in _transport_crossing_apertures.keys():
+		sorted_ids.append(int(tile_variant))
+	sorted_ids.sort()
+	for tile_id: int in sorted_ids:
+		tile_ids.append(tile_id)
+	return tile_ids
 
 
 func get_debug_static_polygons() -> Array[Dictionary]:
@@ -502,9 +532,18 @@ func _point_blocked_by_static(position: Vector2) -> bool:
 func _point_blocked_by_dynamic(position: Vector2) -> bool:
 	for blocker_variant: Variant in _dynamic_blockers.values():
 		var blocker: Dictionary = blocker_variant
+		if _blocker_has_open_transport_aperture(blocker):
+			continue
 		if _point_touches_polygon(position, blocker["points"], _foot_radius):
 			return true
 	return false
+
+
+func _blocker_has_open_transport_aperture(blocker: Dictionary) -> bool:
+	return (
+		str(blocker.get("kind", "")) == "transport_network"
+		and _transport_crossing_apertures.has(int(blocker.get("tile_index", -1)))
+	)
 
 
 func _point_touches_polygon(
