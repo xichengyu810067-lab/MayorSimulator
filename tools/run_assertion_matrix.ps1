@@ -99,6 +99,27 @@ $leakPatterns = @(
     'unclaimed string names at exit'
 )
 
+function Read-Utf8FileWithRetry {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$LiteralPath,
+        [int]$MaxAttempts = 20,
+        [int]$DelayMilliseconds = 100
+    )
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            return [IO.File]::ReadAllText($LiteralPath, [Text.Encoding]::UTF8)
+        }
+        catch [IO.IOException] {
+            if ($attempt -eq $MaxAttempts) {
+                throw
+            }
+            Start-Sleep -Milliseconds $DelayMilliseconds
+        }
+    }
+}
+
 $hadAppData = Test-Path Env:APPDATA
 $hadLocalAppData = Test-Path Env:LOCALAPPDATA
 $originalAppData = $env:APPDATA
@@ -136,19 +157,38 @@ try {
 
         Write-Output ('[{0}/{1}] RUN {2}' -f $caseNumber, $selectedTests.Count, $id)
         $caseStartedAt = Get-Date
-        $process = Start-Process -FilePath $GodotExe -ArgumentList $arguments -NoNewWindow -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
-        $completed = $process.WaitForExit($timeoutSeconds * 1000)
-        if (-not $completed) {
-            $process.Kill()
+        $process = $null
+        $completed = $false
+        $exitCode = -1
+        try {
+            $process = Start-Process -FilePath $GodotExe -ArgumentList $arguments -NoNewWindow -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+            $completed = $process.WaitForExit($timeoutSeconds * 1000)
+            if (-not $completed) {
+                if ($PSVersionTable.PSEdition -eq 'Core') {
+                    $process.Kill($true)
+                }
+                else {
+                    $process.Kill()
+                }
+            }
+            # The parameterless overload also waits for asynchronous redirected
+            # output to finish, so the log handles are safe to release and read.
             $process.WaitForExit()
+            if ($completed) {
+                $exitCode = [int]$process.ExitCode
+            }
+        }
+        finally {
+            if ($null -ne $process) {
+                $process.Dispose()
+            }
         }
         $durationSeconds = [Math]::Round(((Get-Date) - $caseStartedAt).TotalSeconds, 3)
-        $exitCode = if ($completed) { [int]$process.ExitCode } else { -1 }
 
         $logParts = [System.Collections.Generic.List[string]]::new()
         foreach ($logPath in @($stdoutPath, $stderrPath, $godotLogPath)) {
             if (Test-Path -LiteralPath $logPath -PathType Leaf) {
-                $logParts.Add([IO.File]::ReadAllText($logPath, [Text.Encoding]::UTF8))
+                $logParts.Add((Read-Utf8FileWithRetry -LiteralPath $logPath))
             }
         }
         $plainLog = [regex]::Replace(($logParts -join "`n"), $ansiPattern, '')

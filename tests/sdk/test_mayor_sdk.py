@@ -70,6 +70,19 @@ class MayorSdkTests(unittest.TestCase):
         )
         self.assertIn("$allTests.Count", runner)
         self.assertNotIn("$manifest.expected_test_count", runner)
+        self.assertIn("Read-Utf8FileWithRetry", runner)
+        self.assertIn("$process.Dispose()", runner)
+
+        workflow = (
+            PROJECT_ROOT / ".github" / "workflows" / "godot-ci.yml"
+        ).read_text(encoding="utf-8")
+        import_step = workflow.index("- name: Import project assets")
+        assertion_step = workflow.index("- name: Run isolated assertion manifest")
+        self.assertLess(import_step, assertion_step)
+        self.assertIn(
+            "--headless --path . --import",
+            workflow[import_step:assertion_step],
+        )
 
         release_runner = (
             PROJECT_ROOT / "tools" / "write_release_evidence.ps1"
