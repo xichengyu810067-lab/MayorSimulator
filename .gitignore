@@ -16,15 +16,25 @@ _appdata/
 _local_appdata/
 LocalLow/
 .tmp*/
+!.tmp/
+.tmp/*
+!.tmp/.gdignore
 *.log
 __pycache__/
 *.pyc
 
 # Generated QA, backup, and release output.
-artifacts/
-backups/
-builds/
+artifacts/*
+!artifacts/.gdignore
+backups/*
+!backups/.gdignore
+builds/*
+!builds/.gdignore
 dist/
+
+# Embedded handoff evidence is archived with delivery packages, not source.
+專案移交_2026-08-02/*
+!專案移交_2026-08-02/.gdignore
 
 # Export credentials are machine-local secrets. The current Godot location is
 # already covered by .godot/, while this also protects legacy/manual copies.

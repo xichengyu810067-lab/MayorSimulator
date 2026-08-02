@@ -105,8 +105,8 @@
 | `tests/ui/capture_main_ui.gd` | UI 擷取 | 啟動主場景並輸出主畫面截圖。 |
 | `tests/ui/capture_ui_readability.gd` | UI 擷取 | 依序擷取主頁、市政中心、法院、監察、治理、財政、藍圖與離開視窗，並實際提交兩種辯護。 |
 | `tests/ui/playtest_building_blueprint_flow.gd` | UI 實玩 | 使用實際按鈕完成選建築、藍圖送審、日期推進、地圖開工與完工。 |
-| `tests/ui/playtest_fiscal_warnings.gd` | UI 實玩 | 驗證六個財政分類與低／建議／高費率的黃綠紅狀態；內容未溢出時不得出現虛假捲動範圍，短畫面溢出時則須能捲到底、逐一捲入全部 14 項財政控制，並在驗收後恢復頁籤與捲動位置。 |
-| `tests/helpers/fiscal_scroll_contract.gd` | UI 共用契約 | 依實際內容高度判斷財政頁是否需要捲動，驗證 range、實體位移、14 個控制可達與狀態還原。 |
+| `tests/ui/playtest_fiscal_warnings.gd` | UI 實玩 | 驗證六個財政分類與低／建議／高費率的黃綠紅狀態；內容未溢出時不得出現虛假捲動範圍，短畫面溢出時則須能捲到底、逐一捲入由正式財政資料推導的全部控制，並在驗收後恢復頁籤與捲動位置。 |
+| `tests/helpers/fiscal_scroll_contract.gd` | UI 共用契約 | 依實際內容高度判斷財政頁是否需要捲動，驗證 range、實體位移、正式資料推導的精確控制集合可達與狀態還原。 |
 
 ## 驗收與發行工具
 
