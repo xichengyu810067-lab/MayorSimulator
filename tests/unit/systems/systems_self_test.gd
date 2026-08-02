@@ -34,6 +34,7 @@ func _test_construction() -> void:
 	var normalized: Dictionary = submission["review"]["blueprint"]
 	assert(not normalized.has("workload"), "Absent workload must remain absent")
 	assert(system.calculate_workload(normalized, "build") == rule_workload)
+	assert(bool(Construction.validate_snapshot(system.to_dict()).get("valid", false)), "Canonical pending review must validate")
 	var review_days := int(submission["review"]["review_days"])
 	assert(review_days >= 2 and review_days <= 7)
 	var review_events: Array[Dictionary] = system.advance_reviews(
@@ -41,6 +42,14 @@ func _test_construction() -> void:
 		{"available_budget": 1_000_000, "citizen_support": 60}
 	)
 	assert(review_events.size() == 1)
+	assert(bool(Construction.validate_snapshot(system.to_dict()).get("valid", false)), "Canonical approved review must validate")
+	var rejected = Construction.new(12345)
+	var rejected_submission: Dictionary = rejected.submit_blueprint(blueprint, 10)
+	rejected.advance_reviews(
+		10 + int(rejected_submission["review"]["review_days"]),
+		{"available_budget": 0, "citizen_support": 60}
+	)
+	assert(bool(Construction.validate_snapshot(rejected.to_dict()).get("valid", false)), "Canonical rejected review must validate")
 	var started: Dictionary = system.start_approved_job(
 		str(submission["review"]["id"]), 20, 10 + review_days, "cell_12"
 	)
@@ -58,10 +67,117 @@ func _test_construction() -> void:
 	assert(Construction.duration_days(100.0, 20) == 6)
 	assert(Construction.daily_labor_cost(5) == 10_000)
 	assert(Construction.daily_labor_cost(6) == 15_000)
-	var json_state = JSON.parse_string(JSON.stringify(system.to_dict()))
+	var active_snapshot: Dictionary = system.to_dict()
+	assert(bool(Construction.validate_snapshot(active_snapshot).get("valid", false)), "Live active construction snapshot must validate")
+	var json_state = JSON.parse_string(JSON.stringify(active_snapshot))
+	assert(json_state is Dictionary)
+	assert(bool(Construction.validate_snapshot(json_state).get("valid", false)), "Integral JSON floats must remain valid snapshot numbers")
 	var restored = Construction.create_from_dict(json_state)
 	assert(restored.available_workers() == 0)
 	assert(restored.calculate_workload(normalized, "build") == rule_workload)
+	var active_job_id := str(started["job"]["id"])
+	var active_start_day := int(started["job"]["start_day"])
+	var reassigned = Construction.create_from_dict(json_state)
+	assert(bool(reassigned.reassign_workers(active_job_id, 5, active_start_day + 1).get("ok", false)))
+	reassigned.advance_jobs_day(active_start_day + 2)
+	assert(bool(Construction.validate_snapshot(reassigned.to_dict()).get("valid", false)), "Reassigned job projections and paid labor must validate")
+	var cancelled = Construction.create_from_dict(json_state)
+	assert(bool(cancelled.cancel_job(active_job_id, active_start_day + 1).get("ok", false)))
+	assert(bool(Construction.validate_snapshot(cancelled.to_dict()).get("valid", false)), "Canonical cancelled job lifecycle must validate")
+	var completed = Construction.create_from_dict(json_state)
+	for day_offset: int in range(1, int(started["job"]["projected_remaining_days"]) + 1):
+		completed.advance_jobs_day(active_start_day + day_offset)
+	assert(bool(Construction.validate_snapshot(completed.to_dict()).get("valid", false)), "Canonical completed job lifecycle must validate")
+	_test_construction_snapshot_corruptions(active_snapshot)
+
+
+func _test_construction_snapshot_corruptions(valid_snapshot: Dictionary) -> void:
+	var corruption_cases: Array[String] = [
+		"string_top_sequence",
+		"stale_review_sequence",
+		"stale_job_sequence",
+		"review_sequence_mismatch",
+		"review_timing_mismatch",
+		"review_negative_submitted_day",
+		"review_negative_base_cost",
+		"workload_rule_non_finite",
+		"job_missing_remaining_work",
+		"job_non_integral_workers",
+		"job_negative_base_cost",
+		"job_non_finite_workload",
+		"job_workload_mismatch",
+		"job_remaining_exceeds_workload",
+		"active_job_zero_remaining",
+		"job_remaining_projection_mismatch",
+		"job_total_projection_mismatch",
+		"job_zero_elapsed_labor",
+		"job_negative_labor_paid",
+		"job_non_finite_metadata",
+		"review_job_reference_mismatch",
+	]
+	for case_name: String in corruption_cases:
+		var corrupted := _corrupt_construction_snapshot(valid_snapshot, case_name)
+		var result: Dictionary = Construction.validate_snapshot(corrupted)
+		assert(
+			not bool(result.get("valid", true)),
+			"Construction corruption must be rejected: %s" % case_name
+		)
+
+
+func _corrupt_construction_snapshot(source: Dictionary, case_name: String) -> Dictionary:
+	var corrupted := source.duplicate(true)
+	var review_id := str((corrupted["reviews"] as Dictionary).keys()[0])
+	var job_id := str((corrupted["jobs"] as Dictionary).keys()[0])
+	var review: Dictionary = corrupted["reviews"][review_id]
+	var job: Dictionary = corrupted["jobs"][job_id]
+	match case_name:
+		"string_top_sequence":
+			corrupted["next_review_sequence"] = "2"
+		"stale_review_sequence":
+			corrupted["next_review_sequence"] = 1
+		"stale_job_sequence":
+			corrupted["next_job_sequence"] = 1
+		"review_sequence_mismatch":
+			review["sequence"] = 7
+		"review_timing_mismatch":
+			review["decision_day"] = int(review["decision_day"]) + 1
+		"review_negative_submitted_day":
+			review["submitted_day"] = -1
+		"review_negative_base_cost":
+			(review["blueprint"] as Dictionary)["base_cost"] = -1
+		"workload_rule_non_finite":
+			(corrupted["workload_rules"]["build"] as Dictionary)["base"] = INF
+		"job_missing_remaining_work":
+			job.erase("remaining_work")
+		"job_non_integral_workers":
+			job["worker_count"] = 19.5
+		"job_negative_base_cost":
+			(job["blueprint"] as Dictionary)["base_cost"] = -1
+		"job_non_finite_workload":
+			job["workload"] = INF
+		"job_workload_mismatch":
+			job["workload"] = float(job["workload"]) + 1.0
+			job["remaining_work"] = job["workload"]
+		"job_remaining_exceeds_workload":
+			job["remaining_work"] = float(job["workload"]) + 1.0
+		"active_job_zero_remaining":
+			job["remaining_work"] = 0.0
+			job["projected_remaining_days"] = 0
+		"job_remaining_projection_mismatch":
+			job["projected_remaining_days"] = int(job["projected_remaining_days"]) + 1
+		"job_total_projection_mismatch":
+			job["projected_labor_cost"] = int(job["projected_labor_cost"]) + 1
+		"job_zero_elapsed_labor":
+			job["labor_cost_paid"] = 2_000
+		"job_negative_labor_paid":
+			job["labor_cost_paid"] = -1
+		"job_non_finite_metadata":
+			(job["metadata"] as Dictionary)["bad"] = INF
+		"review_job_reference_mismatch":
+			review["job_id"] = "job_missing"
+	corrupted["reviews"][review_id] = review
+	corrupted["jobs"][job_id] = job
+	return corrupted
 
 
 func _test_durability() -> void:

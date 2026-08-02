@@ -48,7 +48,14 @@ func _run() -> void:
 	if fiscal_scroll == null:
 		_fail("Fiscal page is missing its responsive ScrollContainer.")
 		return
-	var fiscal_scroll_contract: Dictionary = await FiscalScrollContract.validate(self, overlay, tabs)
+	var expected_slider_names := FiscalScrollContract.expected_slider_names(scene)
+	var expected_slider_count := expected_slider_names.size()
+	var fiscal_scroll_contract: Dictionary = await FiscalScrollContract.validate(
+		self,
+		overlay,
+		tabs,
+		expected_slider_names
+	)
 	if not bool(fiscal_scroll_contract.get("ok", false)):
 		_fail("Fiscal responsive scroll contract failed: %s" % "; ".join(fiscal_scroll_contract.get("errors", [])))
 		return
@@ -109,8 +116,13 @@ func _run() -> void:
 	(tabs.get_child(0) as TabContainer).current_tab = 0
 	await _settle(5)
 	var high_counts := _state_counts([tax_sliders, utility_sliders, service_sliders])
-	if int(high_counts.get("high", 0)) != 14:
-		_fail("Maximum-rate scenario should mark all 14 sliders red; found %d." % int(high_counts.get("high", 0)))
+	if int(high_counts.get("high", 0)) != expected_slider_count:
+		_fail(
+			"Maximum-rate scenario should mark all %d authoritative sliders red; found %d." % [
+				expected_slider_count,
+				int(high_counts.get("high", 0)),
+			]
+		)
 		return
 	if not _save_capture(HIGH_CAPTURE):
 		return
@@ -120,6 +132,8 @@ func _run() -> void:
 		"root_category_count": tabs.get_tab_count(),
 		"leaf_category_count": leaf_category_count,
 		"max_visible_rows": max_visible_rows,
+		"expected_slider_count": expected_slider_count,
+		"expected_slider_names": expected_slider_names,
 		"responsive_scroll_contract": fiscal_scroll_contract,
 		"low_state_counts": low_counts,
 		"low_projected_net": low_net,

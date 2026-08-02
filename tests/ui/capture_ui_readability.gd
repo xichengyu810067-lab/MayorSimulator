@@ -3,9 +3,31 @@ extends SceneTree
 const FiscalScrollContract := preload("res://tests/helpers/fiscal_scroll_contract.gd")
 const FULLSCREEN_SETTLE_LIMIT := 120
 const TEST_SAVE_PATH := "user://mayor_simulator/tests/ui_readability_autosave.json"
+const NATIVE_TEST_SAVE_PATH := "user://mayor_simulator/tests/native_ui_readability_autosave.json"
 const OUTPUT_ARGUMENT_PREFIX := "--ui-capture-output-dir="
+const NATIVE_OUTPUT_ARGUMENT_PREFIX := "--ui-native-output-dir="
 const REQUIRED_PHYSICAL_SIZE := Vector2i(2880, 1800)
+const REQUIRED_FALLBACK_LOGICAL_SIZE := Vector2i(1280, 800)
+const MINIMUM_NATIVE_PHYSICAL_SIZE := Vector2i(1280, 720)
+const CAPTURE_SANITY_SAMPLE_COLUMNS := 32
+const CAPTURE_SANITY_SAMPLE_ROWS := 20
+const CAPTURE_MIN_OPAQUE_RATIO := 0.99
+const CAPTURE_MIN_LUMINANCE_SD := 8.0
+const CAPTURE_MIN_LUMINANCE_RANGE := 40.0
 const RESULT_FILENAME := "capture-result.json"
+const NATIVE_RESULT_FILENAME := "native-result.json"
+const NATIVE_OUTPUTS := {
+	"start": "native-start-screen.png",
+	"main": "native-main.png",
+	"settings": "native-settings.png",
+	"municipal_overlay": "native-municipal-overlay.png",
+}
+const NATIVE_LANDMARKS := {
+	"start": "start_actions",
+	"main": "status_hud",
+	"settings": "settings_panel",
+	"municipal_overlay": "municipal_overlay",
+}
 const OUTPUTS := {
 	"start": "fullscreen-start-screen.png",
 	"start_loading": "fullscreen-start-loading.png",
@@ -43,28 +65,54 @@ const OUTPUTS := {
 }
 
 var _output_directory := ""
+var _native_output_directory := ""
 var _capture_records: Array[Dictionary] = []
 var _captured_states: Dictionary = {}
+var _native_capture_records: Array[Dictionary] = []
+var _native_captured_states: Dictionary = {}
+var _native_captured_hashes: Dictionary = {}
 var _started_at_utc := ""
+var _native_started_at_utc := ""
+var _expected_fiscal_slider_names: Array[String] = []
+var _capture_viewport: Viewport = null
+var _capture_surface_kind := ""
+var _capture_surface_mirrored := false
+var _native_physical_size := Vector2i.ZERO
+var _native_window_size := Vector2i.ZERO
+var _native_backing_size := Vector2i.ZERO
+var _native_logical_size := Vector2i.ZERO
+var _native_screen_index := -1
+var _native_screen_dpi := 0
+var _native_screen_scale := 0.0
+var _native_screen_size := Vector2i.ZERO
+var _offscreen_notice: Label = null
 
 
 func _initialize() -> void:
-	if not _prepare_output_directory():
+	if not _prepare_output_directories():
 		quit(1)
 		return
-	_started_at_utc = Time.get_datetime_string_from_system(true, true)
 	call_deferred("_capture_states")
 
 
+func _utc_now() -> String:
+	return Time.get_datetime_string_from_system(true, true).replace(" ", "T") + "Z"
+
+
 func _capture_states() -> void:
-	if not await _enter_stable_fullscreen():
+	if not await _capture_native_gui_phase():
+		quit(1)
+		return
+	_started_at_utc = _utc_now()
+	if not await _prepare_capture_surface():
 		quit(1)
 		return
 
 	var packed_scene: PackedScene = load("res://scenes/Main.tscn")
 	var scene := packed_scene.instantiate()
-	root.add_child(scene)
+	_active_capture_viewport().add_child(scene)
 	await _settle()
+	_expected_fiscal_slider_names = FiscalScrollContract.expected_slider_names(scene)
 	scene.start_save_path = TEST_SAVE_PATH
 	if not _validate_start_screen(scene.get("start_screen")) or not _save_capture(OUTPUTS["start"]):
 		quit(1)
@@ -185,6 +233,10 @@ func _capture_states() -> void:
 	settings.language_selector.select_choice(original_locale)
 	settings.language_selector.emit_signal("choice_selected", original_locale)
 	await _settle()
+	if str(root.get_node("L10n").current_locale) != original_locale:
+		push_error("Settings did not restore the original locale after the multilingual capture.")
+		quit(1)
+		return
 	settings = scene.get("settings_overlay")
 	settings.close()
 	await _settle()
@@ -243,7 +295,12 @@ func _capture_states() -> void:
 		await _settle()
 		if page_id == "finance":
 			var fiscal_tabs := overlay.find_child("FiscalCategoryTabs", true, false) as TabContainer
-			var fiscal_scroll_contract: Dictionary = await FiscalScrollContract.validate(self, overlay, fiscal_tabs)
+			var fiscal_scroll_contract: Dictionary = await FiscalScrollContract.validate(
+				self,
+				overlay,
+				fiscal_tabs,
+				_expected_fiscal_slider_names
+			)
 			if not bool(fiscal_scroll_contract.get("ok", false)):
 				push_error("Finance responsive scroll contract failed: %s" % "; ".join(fiscal_scroll_contract.get("errors", [])))
 				quit(1)
@@ -420,46 +477,316 @@ func _capture_states() -> void:
 	if not _publish_capture_result():
 		quit(1)
 		return
-	print("Fullscreen UI readability captures saved at %s." % root.get_visible_rect().size)
-	print("UI_CAPTURE_ACCEPTANCE_PASSED captures=%d physical=%dx%d" % [OUTPUTS.size(), REQUIRED_PHYSICAL_SIZE.x, REQUIRED_PHYSICAL_SIZE.y])
+	print(
+		"Offscreen UI evidence captures saved with surface=%s logical=%s." % [
+			_capture_surface_kind,
+			_capture_logical_size(),
+		]
+	)
+	print(
+		"UI_CAPTURE_CANONICAL_ACCEPTANCE_PASSED native_gui=PASS native_captures=%d offscreen_evidence=PASS offscreen_captures=%d physical=%dx%d logical=%dx%d" % [
+			NATIVE_OUTPUTS.size(),
+			OUTPUTS.size(),
+			REQUIRED_PHYSICAL_SIZE.x,
+			REQUIRED_PHYSICAL_SIZE.y,
+			REQUIRED_FALLBACK_LOGICAL_SIZE.x,
+			REQUIRED_FALLBACK_LOGICAL_SIZE.y,
+		]
+	)
 	quit(0)
 
 
-func _enter_stable_fullscreen() -> bool:
+func _capture_native_gui_phase() -> bool:
+	var packed_scene: PackedScene = load("res://scenes/Main.tscn")
+	if packed_scene == null:
+		push_error("Native GUI acceptance could not load Main.tscn.")
+		return false
+	var scene := packed_scene.instantiate()
+	scene.start_save_path = NATIVE_TEST_SAVE_PATH
+	root.add_child(scene)
+	if scene.get_parent() != root:
+		push_error("Native GUI acceptance requires Main.tscn to be attached directly to the root Window viewport.")
+		if scene.get_parent() != null:
+			scene.get_parent().remove_child(scene)
+		scene.free()
+		return false
+	_native_started_at_utc = _utc_now()
+	# Attach the production scene before changing display mode.  This makes the
+	# native phase a real visible playtest instead of an empty bootstrap window.
+	if not await _prepare_native_fullscreen_surface():
+		await _release_native_scene(scene)
+		return false
+	await _settle_frames(24)
+	var phase_ok := await _capture_native_gui_states(scene)
+	if phase_ok:
+		phase_ok = _publish_native_capture_result()
+	var release_ok := await _release_native_scene(scene)
+	_capture_viewport = null
+	_capture_surface_kind = ""
+	return phase_ok and release_ok
+
+
+func _prepare_native_fullscreen_surface() -> bool:
 	if DisplayServer.get_name().to_lower() == "headless":
-		push_error("Fullscreen readability capture cannot run with the headless display driver.")
+		push_error("Native fullscreen GUI acceptance cannot run with the headless display driver.")
 		return false
 
+	DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_BORDERLESS, false)
 	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
 	var previous_size := Vector2i.ZERO
+	var previous_texture_size := Vector2i.ZERO
+	var previous_logical_size := Vector2i.ZERO
 	var stable_frames := 0
+	var last_window_size := Vector2i.ZERO
+	var last_texture_size := Vector2i.ZERO
+	var last_logical_size := Vector2i.ZERO
+	var last_mode := DisplayServer.WINDOW_MODE_WINDOWED
 	for _frame in range(FULLSCREEN_SETTLE_LIMIT):
 		await process_frame
 		var current_size := DisplayServer.window_get_size()
 		var mode := DisplayServer.window_get_mode()
 		var is_fullscreen := mode == DisplayServer.WINDOW_MODE_FULLSCREEN or mode == DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN
-		if is_fullscreen and current_size == previous_size and current_size.x > 0 and current_size.y > 0:
+		var texture := root.get_texture()
+		var texture_size := Vector2i(texture.get_width(), texture.get_height())
+		var logical_size_value := root.get_visible_rect().size
+		var logical_size := Vector2i(roundi(logical_size_value.x), roundi(logical_size_value.y))
+		var screen_index := DisplayServer.window_get_current_screen()
+		var screen_size := DisplayServer.screen_get_size(screen_index)
+		var window_scale_x := float(current_size.x) / float(maxi(logical_size.x, 1))
+		var window_scale_y := float(current_size.y) / float(maxi(logical_size.y, 1))
+		var backing_scale_x := float(texture_size.x) / float(maxi(logical_size.x, 1))
+		var backing_scale_y := float(texture_size.y) / float(maxi(logical_size.y, 1))
+		last_window_size = current_size
+		last_texture_size = texture_size
+		last_logical_size = logical_size
+		last_mode = mode
+		var valid_native_surface: bool = (
+			is_fullscreen
+			and current_size.x >= MINIMUM_NATIVE_PHYSICAL_SIZE.x
+			and current_size.y >= MINIMUM_NATIVE_PHYSICAL_SIZE.y
+			and current_size == screen_size
+			and texture_size.x >= MINIMUM_NATIVE_PHYSICAL_SIZE.x
+			and texture_size.y >= MINIMUM_NATIVE_PHYSICAL_SIZE.y
+			and logical_size.x >= 1280
+			and logical_size.y >= 720
+			and absf(window_scale_x - window_scale_y) <= 0.01
+			and absf(backing_scale_x - backing_scale_y) <= 0.01
+		)
+		if (
+			valid_native_surface
+			and current_size == previous_size
+			and texture_size == previous_texture_size
+			and logical_size == previous_logical_size
+		):
 			stable_frames += 1
 		else:
 			stable_frames = 0
 		previous_size = current_size
+		previous_texture_size = texture_size
+		previous_logical_size = logical_size
 		if stable_frames >= 3:
-			print("Fullscreen stabilized at %s." % current_size)
+			_capture_viewport = root
+			_capture_surface_kind = "native_fullscreen_root"
+			_native_physical_size = current_size
+			_native_window_size = current_size
+			_native_backing_size = texture_size
+			_native_logical_size = logical_size
+			_native_screen_index = screen_index
+			_native_screen_dpi = DisplayServer.screen_get_dpi(_native_screen_index)
+			_native_screen_scale = DisplayServer.screen_get_scale(_native_screen_index)
+			_native_screen_size = DisplayServer.screen_get_size(_native_screen_index)
+			if _native_screen_dpi <= 0 or _native_screen_scale <= 0.0 or _native_screen_size.x <= 0 or _native_screen_size.y <= 0:
+				push_error(
+					"Native display metrics are invalid: screen=%d dpi=%d scale=%.3f size=%s." % [
+						_native_screen_index,
+						_native_screen_dpi,
+						_native_screen_scale,
+						_native_screen_size,
+					]
+				)
+				return false
+			print(
+				"Native fullscreen root stabilized at capture=%s backing=%s window=%s logical=%s screen=%d dpi=%d scale=%.3f." % [
+					_native_physical_size,
+					_native_backing_size,
+					_native_window_size,
+					_native_logical_size,
+					_native_screen_index,
+					_native_screen_dpi,
+					_native_screen_scale,
+				]
+			)
 			return true
 
-	push_error("Fullscreen did not stabilize within %d frames." % FULLSCREEN_SETTLE_LIMIT)
+	push_error(
+		"Native fullscreen root did not stabilize with a fullscreen, screen-sized, uniformly scaled surface at >=%s within %d frames; last mode=%d window=%s root_texture=%s logical=%s." % [
+			MINIMUM_NATIVE_PHYSICAL_SIZE,
+			FULLSCREEN_SETTLE_LIMIT,
+			last_mode,
+			last_window_size,
+			last_texture_size,
+			last_logical_size,
+		]
+	)
 	return false
+
+
+func _capture_native_gui_states(scene) -> bool:
+	var start_screen = scene.get("start_screen")
+	if not _validate_start_screen(start_screen):
+		return false
+	if not _save_native_capture(NATIVE_OUTPUTS["start"], start_screen.new_game_button as Control):
+		return false
+
+	start_screen.animation_duration = 0.35
+	start_screen.new_game_button.emit_signal("pressed")
+	for _frame in range(240):
+		await process_frame
+		if not start_screen.is_loading():
+			break
+	if start_screen.is_loading() or start_screen.visible:
+		push_error("Native GUI new-game loading did not reach the playable scene.")
+		return false
+	var tutorial = scene.get("tutorial_overlay")
+	if tutorial == null or not tutorial.is_open():
+		push_error("Native GUI new game did not expose the story tutorial.")
+		return false
+	tutorial.skip_button.emit_signal("pressed")
+	await _settle_frames(24)
+	if tutorial.is_open() or not _validate_main_hud(scene):
+		push_error("Native GUI could not reach a validated main HUD after skipping the tutorial.")
+		return false
+	var status_hud := scene.find_child("StatusHud", true, false) as Control
+	if status_hud == null or not _save_native_capture(NATIVE_OUTPUTS["main"], status_hud):
+		return false
+
+	var settings_button = scene.get("settings_button") as Button
+	settings_button.emit_signal("pressed")
+	await _settle_frames(18)
+	var settings = scene.get("settings_overlay")
+	if not _validate_settings(settings):
+		return false
+	var settings_panel := settings.find_child("SettingsPanel", true, false) as Control
+	if settings_panel == null or not _save_native_capture(NATIVE_OUTPUTS["settings"], settings_panel):
+		return false
+	settings.close()
+	await _settle()
+
+	scene.call("_open_municipal_center")
+	await _settle_frames(18)
+	var overlay = scene.get("municipal_overlay")
+	if not _validate_overlay(overlay, "hub"):
+		return false
+	if not _save_native_capture(NATIVE_OUTPUTS["municipal_overlay"], overlay as Control):
+		return false
+	overlay.call("close_overlay")
+	await _settle()
+	return true
+
+
+func _release_native_scene(scene: Node) -> bool:
+	if scene != null and is_instance_valid(scene):
+		if scene.get_parent() != null:
+			scene.get_parent().remove_child(scene)
+		scene.free()
+	await _settle_frames(4)
+	if is_instance_valid(scene):
+		push_error("Native GUI scene remained alive before offscreen evidence capture.")
+		return false
+	print("Native GUI scene fully released before offscreen evidence capture.")
+	return true
+
+
+func _prepare_capture_surface() -> bool:
+	if DisplayServer.get_name().to_lower() == "headless":
+		push_error("Offscreen UI evidence capture requires a non-headless display driver.")
+		return false
+
+	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+	await process_frame
+	DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_BORDERLESS, false)
+	DisplayServer.window_set_size(Vector2i(960, 600))
+	DisplayServer.window_set_position(Vector2i(32, 32))
+	DisplayServer.window_set_title("Mayor Simulator - Automated Offscreen Evidence (Native GUI phase complete)")
+	_show_offscreen_notice()
+	var offscreen := SubViewport.new()
+	offscreen.name = "UICaptureViewport"
+	offscreen.size = REQUIRED_PHYSICAL_SIZE
+	offscreen.size_2d_override = REQUIRED_FALLBACK_LOGICAL_SIZE
+	offscreen.size_2d_override_stretch = true
+	offscreen.transparent_bg = false
+	offscreen.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	root.add_child(offscreen)
+	_capture_viewport = offscreen
+	_capture_surface_kind = "offscreen_subviewport"
+	var exact_frames := 0
+	for _frame in range(FULLSCREEN_SETTLE_LIMIT):
+		await process_frame
+		var texture := offscreen.get_texture()
+		var texture_size := Vector2i(texture.get_width(), texture.get_height())
+		var logical_size_value := offscreen.get_visible_rect().size
+		var logical_size := Vector2i(roundi(logical_size_value.x), roundi(logical_size_value.y))
+		if texture_size == REQUIRED_PHYSICAL_SIZE and logical_size == REQUIRED_FALLBACK_LOGICAL_SIZE:
+			exact_frames += 1
+		else:
+			exact_frames = 0
+		if exact_frames >= 3:
+			print(
+				"Offscreen capture surface stabilized at physical=%s logical=%s." % [
+					texture_size,
+					logical_size,
+				]
+			)
+			return true
+
+	push_error(
+		"Offscreen evidence surface failed to produce physical=%s logical=%s within %d frames." % [
+			REQUIRED_PHYSICAL_SIZE,
+			REQUIRED_FALLBACK_LOGICAL_SIZE,
+			FULLSCREEN_SETTLE_LIMIT,
+		]
+	)
+	return false
+
+
+func _show_offscreen_notice() -> void:
+	if _offscreen_notice != null and is_instance_valid(_offscreen_notice):
+		return
+	var notice := Label.new()
+	notice.name = "OffscreenEvidenceNotice"
+	notice.position = Vector2(80, 80)
+	notice.size = Vector2(1120, 640)
+	notice.text = "Automated 2880×1800 offscreen evidence capture\nNative GUI acceptance phase is complete\nThis preview window is not the game UI"
+	notice.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	notice.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	notice.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	notice.add_theme_font_size_override("font_size", 30)
+	notice.add_theme_color_override("font_color", Color("f3f6fa"))
+	root.add_child(notice)
+	_offscreen_notice = notice
+
+
+func _active_capture_viewport() -> Viewport:
+	if _capture_viewport != null and is_instance_valid(_capture_viewport):
+		return _capture_viewport
+	return root
+
+
+func _capture_logical_size() -> Vector2:
+	return _active_capture_viewport().get_visible_rect().size
 
 
 func _settle() -> void:
 	await process_frame
 	await process_frame
 	await process_frame
+	await RenderingServer.frame_post_draw
 
 
 func _settle_frames(frame_count: int) -> void:
 	for _frame in range(frame_count):
 		await process_frame
+	await RenderingServer.frame_post_draw
 
 
 func _validate_overlay(overlay, expected_page: String) -> bool:
@@ -494,7 +821,18 @@ func _validate_city_data_tabs(overlay) -> bool:
 	var expected_benchmark_charts := [9, 4, 1]
 	var expected_metric_cards := [9, 0, 0]
 	var l10n = root.get_node_or_null("L10n")
-	var logical_rect := Rect2(Vector2.ZERO, root.get_visible_rect().size)
+	var comparison_rule := tabs.find_child("MonthlyDataComparisonRule", true, false) as Label
+	var finance_intro := tabs.find_child("CityFinanceIntro", true, false) as Label
+	if (
+		l10n == null
+		or comparison_rule == null
+		or comparison_rule.text != str(l10n.text("第一個月與安全線比較；第二個月起與上月比較。紅色安全線警告永遠保留。"))
+		or finance_intro == null
+		or finance_intro.text != str(l10n.text("先看收入能覆蓋多少支出；金額明細放在下方供需要時查閱。"))
+	):
+		push_error("City data static guidance did not return to the active locale after language switching.")
+		return false
+	var logical_rect := Rect2(Vector2.ZERO, _capture_logical_size())
 	if not logical_rect.encloses(tabs.get_global_rect()):
 		push_error("City data tab container extends outside the logical viewport: %s." % tabs.get_global_rect())
 		return false
@@ -601,12 +939,12 @@ func _validate_start_screen(screen) -> bool:
 	if screen.background_picture == null or screen.background_picture.texture.resource_path != "res://assets/images/world/backgrounds/city-map-background.png":
 		push_error("Start screen does not reuse the city background image.")
 		return false
-	var logical_rect := Rect2(Vector2.ZERO, root.get_visible_rect().size)
+	var logical_rect := Rect2(Vector2.ZERO, _capture_logical_size())
 	for button in [screen.new_game_button, screen.continue_game_button]:
 		if not logical_rect.encloses((button as Button).get_global_rect()):
 			push_error("Start action is outside the logical viewport: %s." % (button as Button).get_global_rect())
 			return false
-	print("Start screen validation passed at logical=%s." % root.get_visible_rect().size)
+	print("Start screen validation passed at logical=%s." % _capture_logical_size())
 	return true
 
 
@@ -626,7 +964,7 @@ func _validate_start_loading(screen) -> bool:
 
 
 func _validate_main_hud(scene) -> bool:
-	var logical_size := root.get_visible_rect().size
+	var logical_size := _capture_logical_size()
 	var map_viewport = scene.get("map_viewport")
 	if map_viewport == null or not is_instance_valid(map_viewport):
 		push_error("Readability capture could not find the main map viewport.")
@@ -717,7 +1055,7 @@ func _validate_settings(settings) -> bool:
 		push_error("Settings overlay is missing appearance controls.")
 		return false
 	var panel := settings.find_child("SettingsPanel", true, false) as Control
-	if panel == null or not Rect2(Vector2.ZERO, root.get_visible_rect().size).encloses(panel.get_global_rect()):
+	if panel == null or not Rect2(Vector2.ZERO, _capture_logical_size()).encloses(panel.get_global_rect()):
 		push_error("Settings panel is outside the logical viewport.")
 		return false
 	return true
@@ -727,7 +1065,7 @@ func _validate_building_context(panel) -> bool:
 	if panel == null or not is_instance_valid(panel) or not panel.is_visible_in_tree():
 		push_error("Clicking a building did not expose the contextual action panel.")
 		return false
-	var logical_rect := Rect2(Vector2.ZERO, root.get_visible_rect().size)
+	var logical_rect := Rect2(Vector2.ZERO, _capture_logical_size())
 	if not logical_rect.encloses(panel.get_global_rect()):
 		push_error("Building context extends outside the logical viewport: %s." % panel.get_global_rect())
 		return false
@@ -924,8 +1262,20 @@ func _validate_visual_data(overlay, expected_page: String) -> bool:
 			push_error("Finance page must expose its responsive ScrollContainer.")
 			return false
 		var fiscal_sliders: Array[Node] = overlay.find_children("FiscalSlider_*", "HSlider", true, false)
-		if fiscal_sliders.size() != 14:
-			push_error("Finance page must retain all 14 tax and fee controls; found %d." % fiscal_sliders.size())
+		if _expected_fiscal_slider_names.is_empty():
+			push_error("Finance page could not derive its slider count from the authoritative fiscal dictionaries.")
+			return false
+		var fiscal_slider_names: Array[String] = []
+		for slider_variant in fiscal_sliders:
+			fiscal_slider_names.append(str(slider_variant.name))
+		fiscal_slider_names.sort()
+		if fiscal_slider_names != _expected_fiscal_slider_names:
+			push_error(
+				"Finance page slider names must match the authoritative tax and fee dictionaries: actual=%s expected=%s." % [
+					fiscal_slider_names,
+					_expected_fiscal_slider_names,
+				]
+			)
 			return false
 	if expected_page == "public_affairs":
 		var affairs_pictures: Array = []
@@ -1094,7 +1444,7 @@ func _validate_exit_confirmation(exit_confirmation) -> bool:
 	if not exit_confirmation.is_visible_in_tree():
 		push_error("Exit confirmation did not become visible after pressing the exit button.")
 		return false
-	var logical_size := root.get_visible_rect().size
+	var logical_size := _capture_logical_size()
 	var logical_rect := Rect2(Vector2.ZERO, logical_size)
 	for property_name in ["cancel_button", "confirm_button", "close_button"]:
 		var button := exit_confirmation.get(property_name) as Button
@@ -1109,35 +1459,53 @@ func _validate_exit_confirmation(exit_confirmation) -> bool:
 	return true
 
 
-func _prepare_output_directory() -> bool:
+func _prepare_output_directories() -> bool:
 	var output_arguments: PackedStringArray = []
+	var native_output_arguments: PackedStringArray = []
 	for argument in OS.get_cmdline_user_args():
 		if argument.begins_with(OUTPUT_ARGUMENT_PREFIX):
 			output_arguments.append(argument.substr(OUTPUT_ARGUMENT_PREFIX.length()))
+		if argument.begins_with(NATIVE_OUTPUT_ARGUMENT_PREFIX):
+			native_output_arguments.append(argument.substr(NATIVE_OUTPUT_ARGUMENT_PREFIX.length()))
 	if output_arguments.size() != 1:
 		push_error("UI capture requires exactly one %s<absolute-directory> user argument." % OUTPUT_ARGUMENT_PREFIX)
 		return false
+	if native_output_arguments.size() != 1:
+		push_error("UI capture requires exactly one %s<absolute-directory> user argument." % NATIVE_OUTPUT_ARGUMENT_PREFIX)
+		return false
 
 	var candidate := str(output_arguments[0]).strip_edges().simplify_path()
-	if candidate.is_empty() or not candidate.is_absolute_path():
-		push_error("UI capture output directory must be an absolute path: %s" % candidate)
+	var native_candidate := str(native_output_arguments[0]).strip_edges().simplify_path()
+	if candidate.is_empty() or not candidate.is_absolute_path() or native_candidate.is_empty() or not native_candidate.is_absolute_path():
+		push_error("UI capture output directories must be absolute: offscreen=%s native=%s" % [candidate, native_candidate])
 		return false
-	if DirAccess.dir_exists_absolute(candidate) or FileAccess.file_exists(candidate):
-		push_error("UI capture output directory already exists; evidence is append-only: %s" % candidate)
+	if candidate == native_candidate:
+		push_error("Native and offscreen evidence directories must be distinct.")
 		return false
-	# The wrapper creates the parent OutputRoot first. A single-directory create
-	# preserves the append-only race contract: ERR_ALREADY_EXISTS is a failure.
-	var create_error := DirAccess.make_dir_absolute(candidate)
-	if create_error != OK:
-		push_error("Could not create UI capture output directory %s: %d" % [candidate, create_error])
-		return false
+	for directory in [native_candidate, candidate]:
+		if DirAccess.dir_exists_absolute(directory) or FileAccess.file_exists(directory):
+			push_error("UI capture output directory already exists; evidence is append-only: %s" % directory)
+			return false
+		# The wrapper creates the parent OutputRoot first. A single-directory create
+		# preserves the append-only race contract: ERR_ALREADY_EXISTS is a failure.
+		var create_error := DirAccess.make_dir_absolute(directory)
+		if create_error != OK:
+			push_error("Could not create UI capture output directory %s: %d" % [directory, create_error])
+			return false
 
 	_output_directory = candidate
+	_native_output_directory = native_candidate
 	for filename_variant in OUTPUTS.values():
 		var filename := str(filename_variant)
 		var target := _output_directory.path_join(filename)
 		if FileAccess.file_exists(target) or DirAccess.dir_exists_absolute(target):
 			push_error("UI capture target already exists: %s" % target)
+			return false
+	for filename_variant in NATIVE_OUTPUTS.values():
+		var filename := str(filename_variant)
+		var target := _native_output_directory.path_join(filename)
+		if FileAccess.file_exists(target) or DirAccess.dir_exists_absolute(target):
+			push_error("Native UI capture target already exists: %s" % target)
 			return false
 	return true
 
@@ -1150,6 +1518,247 @@ func _state_for_filename(filename: String) -> String:
 	return ""
 
 
+func _validate_capture_content(image: Image, state: String) -> bool:
+	var image_size := image.get_size()
+	var sample_count := CAPTURE_SANITY_SAMPLE_COLUMNS * CAPTURE_SANITY_SAMPLE_ROWS
+	var opaque_count := 0
+	var luminance_sum := 0.0
+	var luminance_square_sum := 0.0
+	var luminance_min := 255.0
+	var luminance_max := 0.0
+	for sample_y in range(CAPTURE_SANITY_SAMPLE_ROWS):
+		var pixel_y := clampi(
+			floori((float(sample_y) + 0.5) * float(image_size.y) / float(CAPTURE_SANITY_SAMPLE_ROWS)),
+			0,
+			image_size.y - 1
+		)
+		for sample_x in range(CAPTURE_SANITY_SAMPLE_COLUMNS):
+			var pixel_x := clampi(
+				floori((float(sample_x) + 0.5) * float(image_size.x) / float(CAPTURE_SANITY_SAMPLE_COLUMNS)),
+				0,
+				image_size.x - 1
+			)
+			var pixel := image.get_pixel(pixel_x, pixel_y)
+			if pixel.a >= 0.99:
+				opaque_count += 1
+			var luminance := (0.2126 * pixel.r + 0.7152 * pixel.g + 0.0722 * pixel.b) * 255.0
+			luminance_sum += luminance
+			luminance_square_sum += luminance * luminance
+			luminance_min = minf(luminance_min, luminance)
+			luminance_max = maxf(luminance_max, luminance)
+
+	var opaque_ratio := float(opaque_count) / float(sample_count)
+	var luminance_mean := luminance_sum / float(sample_count)
+	var luminance_variance := maxf(
+		0.0,
+		luminance_square_sum / float(sample_count) - luminance_mean * luminance_mean
+	)
+	var luminance_sd := sqrt(luminance_variance)
+	var luminance_range := luminance_max - luminance_min
+	if (
+		opaque_ratio < CAPTURE_MIN_OPAQUE_RATIO
+		or luminance_sd < CAPTURE_MIN_LUMINANCE_SD
+		or luminance_range < CAPTURE_MIN_LUMINANCE_RANGE
+	):
+		push_error(
+			"Capture %s failed content sanity: opaque_ratio=%.4f luminance_sd=%.3f luminance_range=%.3f." % [
+				state,
+				opaque_ratio,
+				luminance_sd,
+				luminance_range,
+			]
+		)
+		return false
+	print(
+		"Capture %s content sanity passed: opaque_ratio=%.4f luminance_sd=%.3f luminance_range=%.3f." % [
+			state,
+			opaque_ratio,
+			luminance_sd,
+			luminance_range,
+		]
+	)
+	return true
+
+
+func _native_state_for_filename(filename: String) -> String:
+	for state_variant in NATIVE_OUTPUTS.keys():
+		var state := str(state_variant)
+		if str(NATIVE_OUTPUTS[state]) == filename:
+			return state
+	return ""
+
+
+func _save_native_capture(filename: String, landmark: Control) -> bool:
+	var state := _native_state_for_filename(filename)
+	if state.is_empty():
+		push_error("Native UI capture filename is not part of the four-state contract: %s" % filename)
+		return false
+	if _native_captured_states.has(state):
+		push_error("Native UI capture state was written more than once: %s" % state)
+		return false
+	if _capture_viewport != root or _capture_surface_kind != "native_fullscreen_root":
+		push_error("Native UI capture is not attached directly to the root viewport for %s." % state)
+		return false
+	if landmark == null or not is_instance_valid(landmark) or not landmark.is_visible_in_tree():
+		push_error("Native UI landmark is missing or hidden for %s." % state)
+		return false
+
+	var path := _native_output_directory.path_join(filename)
+	if FileAccess.file_exists(path) or DirAccess.dir_exists_absolute(path):
+		push_error("Native UI capture target already exists; refusing overwrite: %s" % path)
+		return false
+	var image := root.get_texture().get_image()
+	var image_size := image.get_size()
+	var window_size := DisplayServer.window_get_size()
+	var root_texture := root.get_texture()
+	var root_texture_size := Vector2i(root_texture.get_width(), root_texture.get_height())
+	var logical_size_value := root.get_visible_rect().size
+	var logical_size := Vector2i(roundi(logical_size_value.x), roundi(logical_size_value.y))
+	var mode := DisplayServer.window_get_mode()
+	var is_fullscreen := mode == DisplayServer.WINDOW_MODE_FULLSCREEN or mode == DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN
+	if (
+		not is_fullscreen
+		or image_size != _native_physical_size
+		or image_size != window_size
+		or window_size != _native_window_size
+		or root_texture_size != _native_backing_size
+		or logical_size != _native_logical_size
+		or image_size.x < MINIMUM_NATIVE_PHYSICAL_SIZE.x
+		or image_size.y < MINIMUM_NATIVE_PHYSICAL_SIZE.y
+	):
+		push_error(
+			"Native UI surface drifted for %s: image=%s window=%s root_texture=%s logical=%s expected_capture=%s expected_backing=%s expected_window=%s expected_logical=%s." % [
+				state,
+				image_size,
+				window_size,
+				root_texture_size,
+				logical_size,
+				_native_physical_size,
+				_native_backing_size,
+				_native_window_size,
+				_native_logical_size,
+			]
+		)
+		return false
+	var logical_rect := Rect2(Vector2.ZERO, Vector2(_native_logical_size))
+	var landmark_rect := landmark.get_global_rect()
+	if landmark_rect.size.x <= 0.0 or landmark_rect.size.y <= 0.0 or not logical_rect.encloses(landmark_rect):
+		push_error("Native UI landmark is clipped for %s: rect=%s logical=%s." % [state, landmark_rect, logical_rect])
+		return false
+	if not _validate_capture_content(image, "native:%s" % state):
+		return false
+
+	var error := image.save_png(path)
+	if error != OK:
+		push_error("Failed to save native UI capture %s: %d" % [path, error])
+		return false
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		push_error("Could not reopen native UI capture for evidence: %s" % path)
+		return false
+	var byte_count := file.get_length()
+	file.close()
+	var sha256 := FileAccess.get_sha256(path).to_lower()
+	if byte_count <= 0 or sha256.length() != 64 or _native_captured_hashes.has(sha256):
+		push_error("Native UI capture evidence is incomplete or duplicated for %s: bytes=%d sha256=%s" % [path, byte_count, sha256])
+		return false
+	_native_capture_records.append({
+		"state": state,
+		"filename": filename,
+		"width": image_size.x,
+		"height": image_size.y,
+		"bytes": byte_count,
+		"sha256": sha256,
+		"landmark": str(NATIVE_LANDMARKS[state]),
+		"landmark_rect": [landmark_rect.position.x, landmark_rect.position.y, landmark_rect.size.x, landmark_rect.size.y],
+	})
+	_native_captured_states[state] = true
+	_native_captured_hashes[sha256] = state
+	print("Saved native root UI %s at physical=%s logical=%s sha256=%s." % [path, image_size, logical_size, sha256])
+	return true
+
+
+func _publish_native_capture_result() -> bool:
+	if _native_capture_records.size() != NATIVE_OUTPUTS.size() or _native_captured_states.size() != NATIVE_OUTPUTS.size():
+		push_error(
+			"Native UI capture result is incomplete: records=%d states=%d required=%d" % [
+				_native_capture_records.size(),
+				_native_captured_states.size(),
+				NATIVE_OUTPUTS.size(),
+			]
+		)
+		return false
+	for state_variant in NATIVE_OUTPUTS.keys():
+		if not _native_captured_states.has(str(state_variant)):
+			push_error("Native UI capture result is missing state: %s" % state_variant)
+			return false
+	var window_size := DisplayServer.window_get_size()
+	var root_texture := root.get_texture()
+	var root_texture_size := Vector2i(root_texture.get_width(), root_texture.get_height())
+	var logical_size_value := root.get_visible_rect().size
+	var measured_logical_size := Vector2i(roundi(logical_size_value.x), roundi(logical_size_value.y))
+	var mode := DisplayServer.window_get_mode()
+	var mode_name := "exclusive_fullscreen" if mode == DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN else "fullscreen"
+	if (
+		(mode != DisplayServer.WINDOW_MODE_FULLSCREEN and mode != DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN)
+		or window_size != _native_window_size
+		or window_size != _native_physical_size
+		or root_texture_size != _native_backing_size
+		or measured_logical_size != _native_logical_size
+		or DisplayServer.window_get_current_screen() != _native_screen_index
+	):
+		push_error("Native GUI result cannot be published after display-surface drift.")
+		return false
+
+	var result_path := _native_output_directory.path_join(NATIVE_RESULT_FILENAME)
+	var partial_path := result_path + ".partial"
+	if FileAccess.file_exists(result_path) or DirAccess.dir_exists_absolute(result_path) or FileAccess.file_exists(partial_path) or DirAccess.dir_exists_absolute(partial_path):
+		push_error("Native UI capture result target already exists; refusing overwrite: %s" % result_path)
+		return false
+	var result := {
+		"schema_version": 1,
+		"suite": "mayor-simulator-native-window-ui-acceptance",
+		"status": "PASS",
+		"native_gui_status": "PASS",
+		"capture_role": "native_gui",
+		"started_at_utc": _native_started_at_utc,
+		"finished_at_utc": _utc_now(),
+		"output_directory": _native_output_directory,
+		"capture_surface_kind": "native_fullscreen_root",
+		"scene_parent": "root_window",
+		"uses_subviewport": false,
+		"capture_surface_mirrored": false,
+		"window_mode": mode_name,
+		"physical_size": [_native_physical_size.x, _native_physical_size.y],
+		"physical_size_role": "native_root_capture_and_os_window_pixels",
+		"logical_size": [_native_logical_size.x, _native_logical_size.y],
+		"window_size": [window_size.x, window_size.y],
+		"window_size_role": "os_fullscreen_window",
+		"root_texture_size": [root_texture_size.x, root_texture_size.y],
+		"display_server": DisplayServer.get_name(),
+		"current_screen_index": _native_screen_index,
+		"current_screen_dpi": _native_screen_dpi,
+		"current_screen_scale": _native_screen_scale,
+		"current_screen_size": [_native_screen_size.x, _native_screen_size.y],
+		"required_capture_count": NATIVE_OUTPUTS.size(),
+		"capture_count": _native_capture_records.size(),
+		"captures": _native_capture_records,
+	}
+	var result_file := FileAccess.open(partial_path, FileAccess.WRITE)
+	if result_file == null:
+		push_error("Could not open native UI capture result for writing: %s" % partial_path)
+		return false
+	result_file.store_string(JSON.stringify(result, "\t"))
+	result_file.flush()
+	result_file.close()
+	var publish_error := DirAccess.rename_absolute(partial_path, result_path)
+	if publish_error != OK:
+		push_error("Could not atomically publish native UI capture result %s: %d" % [result_path, publish_error])
+		return false
+	print("Native GUI acceptance result published with four direct-root states.")
+	return true
+
+
 func _save_capture(filename: String) -> bool:
 	var state := _state_for_filename(filename)
 	if state.is_empty():
@@ -1158,24 +1767,35 @@ func _save_capture(filename: String) -> bool:
 	if _captured_states.has(state):
 		push_error("UI capture state was written more than once: %s" % state)
 		return false
+	if _capture_surface_kind != "offscreen_subviewport" or _active_capture_viewport() == root:
+		push_error("The 33-state evidence contract must be captured only from the isolated offscreen SubViewport.")
+		return false
 	var path := _output_directory.path_join(filename)
 	if FileAccess.file_exists(path) or DirAccess.dir_exists_absolute(path):
 		push_error("UI capture target already exists; refusing overwrite: %s" % path)
 		return false
 
-	var image := root.get_texture().get_image()
+	var image := _active_capture_viewport().get_texture().get_image()
 	var image_size := image.get_size()
 	var window_size := DisplayServer.window_get_size()
-	var logical_size_value := root.get_visible_rect().size
+	var logical_size_value := _capture_logical_size()
 	var logical_size := Vector2i(roundi(logical_size_value.x), roundi(logical_size_value.y))
 	if image_size != REQUIRED_PHYSICAL_SIZE:
 		push_error("Capture %s must be exactly %s; actual=%s." % [state, REQUIRED_PHYSICAL_SIZE, image_size])
 		return false
-	if abs(image_size.x - window_size.x) > 1 or abs(image_size.y - window_size.y) > 1:
+	if (
+		_capture_surface_kind != "offscreen_subviewport"
+		and (abs(image_size.x - window_size.x) > 1 or abs(image_size.y - window_size.y) > 1)
+	):
 		push_error("Capture size %s does not match fullscreen window backing size %s for %s." % [image_size, window_size, path])
+		return false
+	if _capture_surface_kind == "offscreen_subviewport" and logical_size != REQUIRED_FALLBACK_LOGICAL_SIZE:
+		push_error("Offscreen capture %s must preserve the exact logical UI area %s; actual=%s." % [path, REQUIRED_FALLBACK_LOGICAL_SIZE, logical_size])
 		return false
 	if logical_size.x < 1280 or logical_size.y < 720:
 		push_error("Capture %s has insufficient logical UI area for fullscreen readability acceptance: %s." % [path, logical_size])
+		return false
+	if not _validate_capture_content(image, state):
 		return false
 
 	var error := image.save_png(path)
@@ -1213,6 +1833,17 @@ func _publish_capture_result() -> bool:
 		if not _captured_states.has(str(state_variant)):
 			push_error("UI capture result is missing state: %s" % state_variant)
 			return false
+	var logical_size_value := _capture_logical_size()
+	var measured_logical_size := Vector2i(roundi(logical_size_value.x), roundi(logical_size_value.y))
+	if _capture_surface_kind != "offscreen_subviewport" or measured_logical_size != REQUIRED_FALLBACK_LOGICAL_SIZE:
+		push_error(
+			"Offscreen evidence result requires surface=offscreen_subviewport and measured logical=%s; actual surface=%s logical=%s." % [
+				REQUIRED_FALLBACK_LOGICAL_SIZE,
+				_capture_surface_kind,
+				measured_logical_size,
+			]
+		)
+		return false
 
 	var result_path := _output_directory.path_join(RESULT_FILENAME)
 	var partial_path := result_path + ".partial"
@@ -1223,12 +1854,18 @@ func _publish_capture_result() -> bool:
 		"schema_version": 1,
 		"suite": "mayor-simulator-ui-capture-acceptance",
 		"status": "PASS",
+		"offscreen_evidence_status": "PASS",
+		"capture_role": "offscreen_evidence_only",
 		"started_at_utc": _started_at_utc,
-		"finished_at_utc": Time.get_datetime_string_from_system(true, true),
+		"finished_at_utc": _utc_now(),
 		"output_directory": _output_directory,
+		"capture_surface_kind": _capture_surface_kind,
+		"capture_surface_mirrored": _capture_surface_mirrored,
+		"native_window_size": [DisplayServer.window_get_size().x, DisplayServer.window_get_size().y],
 		"required_capture_count": OUTPUTS.size(),
 		"capture_count": _capture_records.size(),
 		"physical_size": [REQUIRED_PHYSICAL_SIZE.x, REQUIRED_PHYSICAL_SIZE.y],
+		"logical_size": [measured_logical_size.x, measured_logical_size.y],
 		"captures": _capture_records,
 	}
 	var result_file := FileAccess.open(partial_path, FileAccess.WRITE)

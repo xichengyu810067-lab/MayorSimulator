@@ -75,6 +75,7 @@ function Get-MayorSourceFingerprint {
     )
     $singleFileInputs = @(
         'project.godot',
+        'default_bus_layout.tres',
         'export_presets.cfg',
         'README.md',
         'THIRD_PARTY_NOTICES.md',

@@ -14,6 +14,8 @@ const TERRAIN_HALF_EXTENTS := Vector2(22, 14)
 const STRUCTURE_HALF_EXTENTS := Vector2(24, 16)
 const BUILDING_TILE_ID := 90
 const BUILDING_CENTER := Vector2(820, 500)
+const CROSSING_TILE_ID := 91
+const CROSSING_CENTER := Vector2(620, 500)
 
 var _failed := false
 var _checks := 0
@@ -92,13 +94,18 @@ func _run() -> void:
 		str(final_records.get("building:%d" % BUILDING_TILE_ID, {}).get("source", "")) == "building",
 		"final structure blocker lost its building classification"
 	)
+	_validate_transport_crossing_aperture(controller, navigation, building_centers)
 
 	if not _failed:
 		print("Terrain navigation blocker test passed. Checks=%d TerrainKinds=5 BuildingRetained=1" % _checks)
 	await _finish(controller)
 
 
-func _map_snapshot(terrain_blockers: Dictionary, building_centers: Dictionary) -> Dictionary:
+func _map_snapshot(
+	terrain_blockers: Dictionary,
+	building_centers: Dictionary,
+	crossing_tile_ids: PackedInt32Array = PackedInt32Array()
+) -> Dictionary:
 	return {
 		"tile_centers": PackedVector2Array(),
 		"iso_tile_size": Vector2(104, 104),
@@ -106,9 +113,50 @@ func _map_snapshot(terrain_blockers: Dictionary, building_centers: Dictionary) -
 		"terrain_blockers": terrain_blockers,
 		"building_centers": building_centers,
 		"construction_centers": {},
+		"crossing_tile_ids": crossing_tile_ids,
 		"terrain_blocker_half_extents": TERRAIN_HALF_EXTENTS,
 		"structure_blocker_half_extents": STRUCTURE_HALF_EXTENTS,
 	}
+
+
+func _validate_transport_crossing_aperture(controller, navigation, building_centers: Dictionary) -> void:
+	var transport_blockers := {
+		CROSSING_TILE_ID: {
+			"center": CROSSING_CENTER,
+			"kind": "transport_network",
+		},
+	}
+	var before := CROSSING_CENTER - Vector2(70, 0)
+	var after := CROSSING_CENTER + Vector2(70, 0)
+	controller.sync_map_snapshot(_map_snapshot(transport_blockers, building_centers))
+	_check(not navigation.is_position_walkable(CROSSING_CENTER), "road/rail barrier must be solid without a crossing record")
+	_check(not navigation.is_segment_walkable(before, after), "road/rail barrier allowed an undeclared crossing")
+	_check(controller.is_tile_blocked(CROSSING_TILE_ID), "undeclared transport crossing tile was reported open")
+
+	controller.sync_map_snapshot(_map_snapshot(
+		transport_blockers,
+		building_centers,
+		PackedInt32Array([CROSSING_TILE_ID])
+	))
+	_check(navigation.is_position_walkable(CROSSING_CENTER), "completed open crossing did not create a navigation aperture")
+	_check(navigation.is_segment_walkable(before, after), "open crossing aperture did not connect both sides")
+	_check(not controller.is_tile_blocked(CROSSING_TILE_ID), "open crossing still reports a blocked NPC tile")
+	_check(
+		navigation.get_debug_transport_crossing_aperture_tile_ids() == PackedInt32Array([CROSSING_TILE_ID]),
+		"debug contract does not expose the open crossing aperture"
+	)
+
+	controller.set_crossing_states({str(CROSSING_TILE_ID): {"closed": true, "flash": false}})
+	_check(not navigation.is_position_walkable(CROSSING_CENTER), "closed gate left its NPC aperture walkable")
+	_check(not navigation.is_segment_walkable(before, after), "closed gate still permits a crossing segment")
+	_check(controller.is_tile_blocked(CROSSING_TILE_ID), "closed crossing is not reported as blocked")
+
+	# Warning-light animation must not alter the closed/open policy.
+	controller.set_crossing_states({str(CROSSING_TILE_ID): {"closed": true, "flash": true}})
+	_check(navigation.get_debug_transport_crossing_aperture_tile_ids().is_empty(), "flash-only update reopened a closed aperture")
+	controller.set_crossing_states({str(CROSSING_TILE_ID): {"closed": false, "flash": false}})
+	_check(navigation.is_segment_walkable(before, after), "reopened gate did not restore its aperture")
+	_check(not navigation.is_position_walkable(BUILDING_CENTER), "crossing aperture overrode an unrelated building blocker")
 
 
 func _validate_all_terrain_blockers(navigation, centers: PackedVector2Array) -> void:

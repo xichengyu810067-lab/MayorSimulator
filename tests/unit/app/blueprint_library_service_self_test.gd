@@ -88,6 +88,7 @@ func _initialize() -> void:
 		definitions
 	)
 	_check(restored.snapshot() == compatible_snapshot, "complete service snapshot round-trips without shape or value drift")
+	_test_snapshot_validation(compatible_snapshot, first_library_id)
 	restored.select_approved_blueprint("park", "default_park")
 	_check(str(restored.active_blueprint_by_building.get("park", "")) == "default_park", "restored library still permits an explicit default selection")
 	_check(restored.archive_approved_blueprint(first_review, definitions, 99) == first_library_id, "historical duplicate archival retains its existing library ID")
@@ -102,6 +103,124 @@ func _initialize() -> void:
 	else:
 		print("Blueprint library service self-test passed. Defaults=%d ParkVersions=%d" % [definitions.size(), approved.size()])
 		quit(0)
+
+
+func _test_snapshot_validation(valid_snapshot: Dictionary, player_library_id: String) -> void:
+	_check(
+		bool(BlueprintLibraryServiceScript.validate_snapshot(1, {}, {}).get("valid", false)),
+		"empty current-schema library keeps sequence one valid"
+	)
+	var direct_result: Dictionary = BlueprintLibraryServiceScript.validate_snapshot(
+		valid_snapshot["next_blueprint_sequence"],
+		valid_snapshot["blueprint_library"],
+		valid_snapshot["active_blueprint_by_building"]
+	)
+	_check(bool(direct_result.get("valid", false)), "live blueprint library snapshot passes schema validation")
+	var json_value: Variant = JSON.parse_string(JSON.stringify(valid_snapshot))
+	_check(json_value is Dictionary, "blueprint snapshot survives JSON encoding")
+	if json_value is Dictionary:
+		var json_snapshot: Dictionary = json_value
+		var json_result: Dictionary = BlueprintLibraryServiceScript.validate_snapshot(
+			json_snapshot["next_blueprint_sequence"],
+			json_snapshot["blueprint_library"],
+			json_snapshot["active_blueprint_by_building"]
+		)
+		_check(bool(json_result.get("valid", false)), "integral JSON floats remain valid blueprint numbers")
+
+	var custom_snapshot := valid_snapshot.duplicate(true)
+	var custom_entry: Dictionary = custom_snapshot["blueprint_library"][player_library_id].duplicate(true)
+	var custom_blueprint: Dictionary = custom_entry["blueprint"].duplicate(true)
+	custom_blueprint["id"] = "blueprint_custom_import"
+	custom_entry["id"] = "approved_blueprint_custom_import"
+	custom_entry["blueprint"] = custom_blueprint
+	custom_snapshot["blueprint_library"][custom_entry["id"]] = custom_entry
+	var custom_result: Dictionary = BlueprintLibraryServiceScript.validate_snapshot(
+		custom_snapshot["next_blueprint_sequence"],
+		custom_snapshot["blueprint_library"],
+		custom_snapshot["active_blueprint_by_building"]
+	)
+	_check(bool(custom_result.get("valid", false)), "custom and default blueprint IDs do not consume generated numeric sequence space")
+
+	var corruption_cases: Array[String] = [
+		"string_sequence",
+		"stale_generated_sequence",
+		"missing_base_cost",
+		"negative_base_cost",
+		"zero_version",
+		"zero_floors",
+		"non_integral_floors",
+		"negative_decoration_count",
+		"worker_overflow",
+		"invalid_source",
+		"invalid_status",
+		"negative_usage_count",
+		"missing_last_used_day",
+		"invalid_last_used_day",
+		"player_zero_approved_sequence",
+		"player_missing_review_id",
+		"default_nonzero_approved_day",
+		"blueprint_building_mismatch",
+		"missing_active_building",
+		"invalid_active_id_type",
+	]
+	for case_name: String in corruption_cases:
+		var corrupted := _corrupt_blueprint_snapshot(valid_snapshot, player_library_id, case_name)
+		var result: Dictionary = BlueprintLibraryServiceScript.validate_snapshot(
+			corrupted["next_blueprint_sequence"],
+			corrupted["blueprint_library"],
+			corrupted["active_blueprint_by_building"]
+		)
+		_check(not bool(result.get("valid", true)), "blueprint corruption is rejected: %s" % case_name)
+
+
+func _corrupt_blueprint_snapshot(source: Dictionary, player_library_id: String, case_name: String) -> Dictionary:
+	var corrupted := source.duplicate(true)
+	var default_entry: Dictionary = corrupted["blueprint_library"]["default_park"]
+	var player_entry: Dictionary = corrupted["blueprint_library"][player_library_id]
+	match case_name:
+		"string_sequence":
+			corrupted["next_blueprint_sequence"] = "3"
+		"stale_generated_sequence":
+			corrupted["next_blueprint_sequence"] = 2
+		"missing_base_cost":
+			(player_entry["blueprint"] as Dictionary).erase("base_cost")
+		"negative_base_cost":
+			(player_entry["blueprint"] as Dictionary)["base_cost"] = -1
+		"zero_version":
+			(player_entry["blueprint"] as Dictionary)["version"] = 0
+		"zero_floors":
+			(player_entry["blueprint"] as Dictionary)["floors"] = 0
+		"non_integral_floors":
+			(player_entry["blueprint"] as Dictionary)["floors"] = 1.5
+		"negative_decoration_count":
+			(player_entry["blueprint"] as Dictionary)["decoration_count"] = -1
+		"worker_overflow":
+			(player_entry["blueprint"] as Dictionary)["requested_workers"] = 21
+		"invalid_source":
+			player_entry["source"] = "external"
+		"invalid_status":
+			player_entry["status"] = "archived"
+		"negative_usage_count":
+			default_entry["usage_count"] = -1
+		"missing_last_used_day":
+			default_entry.erase("last_used_day")
+		"invalid_last_used_day":
+			default_entry["last_used_day"] = -1
+		"player_zero_approved_sequence":
+			player_entry["approved_sequence"] = 0
+		"player_missing_review_id":
+			player_entry.erase("review_id")
+		"default_nonzero_approved_day":
+			default_entry["approved_day"] = 1
+		"blueprint_building_mismatch":
+			(player_entry["blueprint"] as Dictionary)["building_id"] = "residence"
+		"missing_active_building":
+			corrupted["active_blueprint_by_building"].erase("park")
+		"invalid_active_id_type":
+			corrupted["active_blueprint_by_building"]["park"] = 7
+	corrupted["blueprint_library"]["default_park"] = default_entry
+	corrupted["blueprint_library"][player_library_id] = player_entry
+	return corrupted
 
 
 func _sorted_strings(values: Array) -> Array[String]:

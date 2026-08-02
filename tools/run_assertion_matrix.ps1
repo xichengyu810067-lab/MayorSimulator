@@ -24,10 +24,18 @@ if ($DefaultTimeoutSeconds -lt 1) {
 }
 
 $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
+if ([int]$manifest.schema_version -ne 1) {
+    throw "Unsupported assertion manifest schema_version: $($manifest.schema_version)"
+}
+if ([string]::IsNullOrWhiteSpace([string]$manifest.name)) {
+    throw 'Assertion manifest name must not be empty.'
+}
+if ($null -ne $manifest.PSObject.Properties['expected_test_count']) {
+    throw 'Assertion manifest count must be derived from the live tests array; remove expected_test_count.'
+}
 $allTests = @($manifest.tests)
-$expectedCount = [int]$manifest.expected_test_count
-if ($allTests.Count -ne $expectedCount) {
-    throw "Manifest count mismatch: expected $expectedCount, found $($allTests.Count)."
+if ($allTests.Count -lt 1) {
+    throw 'Assertion manifest tests array must not be empty.'
 }
 
 $seenIds = @{}

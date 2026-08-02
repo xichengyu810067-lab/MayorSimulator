@@ -93,6 +93,69 @@ func _init() -> void:
 	second.reject_request(str(second_created[1].request_id), 367)
 	_assert(first.stable_hash() == second.stable_hash(), "same seed and commands")
 
+	var operational_requests = PopulationSystem.new()
+	operational_requests.initialize(300, 73_001)
+	var operational_created: Array[Dictionary] = operational_requests.generate_requests(1, {
+		"park_count": 99,
+		"hospital_count": 99,
+		"operational_hospital_count": 0,
+		"operational_hospital_capacity": 0,
+		"school_count": 99,
+		"utility_fee": 0,
+	}, 4)
+	_assert(operational_created.size() == 1 and str(operational_created[0].get("request_type", "")) == "hospital", "operational hospital count takes precedence over the raw placed count")
+	var operational_request_id := str(operational_created[0].get("request_id", ""))
+	var operational_payload: Dictionary = operational_created[0].get("payload", {})
+	_assert(int(operational_payload.get("target_min", 0)) == 2 and int(operational_payload.get("target_capacity", 0)) == 300, "new hospital requests preserve count and effective-capacity targets")
+	_assert(operational_requests.accept_request(operational_request_id, 2), "operational healthcare request can be accepted")
+	_assert(not operational_requests.can_complete_request(operational_request_id, {
+		"hospital_count": 99,
+		"operational_hospital_count": 2,
+		"operational_hospital_capacity": 250,
+	}), "placed hospital count cannot complete a request while effective capacity is insufficient")
+	_assert(operational_requests.complete_request(operational_request_id, 3, {
+		"hospital_count": 0,
+		"operational_hospital_count": 2,
+		"operational_hospital_capacity": 300,
+	}), "operational count and sufficient effective capacity complete a healthcare request")
+
+	var sufficient_healthcare = PopulationSystem.new()
+	sufficient_healthcare.initialize(300, 73_002)
+	var sufficient_created: Array[Dictionary] = sufficient_healthcare.generate_requests(1, {
+		"park_count": 99,
+		"hospital_count": 0,
+		"operational_hospital_count": 2,
+		"operational_hospital_capacity": 300,
+		"school_count": 99,
+		"utility_fee": 0,
+	}, 4)
+	_assert(sufficient_created.is_empty(), "sufficient operational healthcare suppresses the hospital request even when raw count is stale")
+
+	var capacity_shortfall = PopulationSystem.new()
+	capacity_shortfall.initialize(300, 73_003)
+	var capacity_created: Array[Dictionary] = capacity_shortfall.generate_requests(1, {
+		"park_count": 99,
+		"hospital_count": 2,
+		"operational_hospital_count": 2,
+		"operational_hospital_capacity": 250,
+		"school_count": 99,
+		"utility_fee": 0,
+	}, 4)
+	_assert(capacity_created.size() == 1 and str(capacity_created[0].get("request_type", "")) == "hospital", "effective-capacity shortfall creates a hospital request even when count is sufficient")
+
+	var legacy_healthcare = PopulationSystem.new()
+	legacy_healthcare.initialize(300, 73_004)
+	var legacy_created: Array[Dictionary] = legacy_healthcare.generate_requests(1, {
+		"park_count": 99,
+		"hospital_count": 0,
+		"school_count": 99,
+		"utility_fee": 0,
+	}, 4)
+	_assert(legacy_created.size() == 1 and str(legacy_created[0].get("request_type", "")) == "hospital", "legacy raw hospital contexts still create requests")
+	var legacy_request_id := str(legacy_created[0].get("request_id", ""))
+	_assert(legacy_healthcare.accept_request(legacy_request_id, 2), "legacy healthcare request can be accepted")
+	_assert(legacy_healthcare.complete_request(legacy_request_id, 3, {"hospital_count": 2}), "legacy raw hospital count still completes requests without a capacity key")
+
 	var capped = PopulationSystem.new()
 	capped.initialize(900, 7)
 	_assert(capped.population_count() == 500, "population hard cap")

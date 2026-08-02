@@ -2,6 +2,7 @@ extends SceneTree
 
 const CitySimulationServiceScript = preload("res://scripts/app/city_simulation_service.gd")
 const CityStateScript = preload("res://scripts/core/city_state.gd")
+const BuildingsCatalogScript = preload("res://data/catalogs/buildings.gd")
 
 const TAX_DEFINITIONS := {
 	"income": {"name": "所得稅", "max": 30, "reasonable": 10},
@@ -28,6 +29,13 @@ var failed := false
 
 
 func _initialize() -> void:
+	var hospital_service: Dictionary = BuildingsCatalogScript.all().get("醫院", {}).get("public_service", {})
+	_check(hospital_service == {
+		"id": "healthcare",
+		"model": "simplified_access_capacity_v1",
+		"capacity_per_facility": 250,
+		"max_metric_bonus": 30,
+	}, "hospital catalog declares the deterministic access-capacity service contract")
 	var buildings := {
 		"商店": {"commercial_income": 1000, "maintenance": 50, "score_bonus": 2},
 		"大型商場": {"commercial_income": 3000, "maintenance": 200, "score_bonus": 3},
@@ -99,6 +107,73 @@ func _initialize() -> void:
 	_check(int(service_revenues.get("bus", 0)) == 630, "bus uses keep the building and population formula")
 	_check(int(service_revenues.get("tuition", 0)) == 6600, "tuition keeps the population share formula")
 	_check(CitySimulationServiceScript.sum_int_values(service_revenues) == 7230, "missing service buildings still produce zero revenue")
+
+	var healthcare_input := _healthcare_input()
+	var healthcare_result: Dictionary = CitySimulationServiceScript.healthcare_service_result(healthcare_input)
+	_check(str(healthcare_result.get("model_version", "")) == "simplified_access_capacity_v1", "healthcare model exposes its stable version")
+	_check(str(healthcare_result.get("status", "")) == "operational" and str(healthcare_result.get("reason_code", "")) == "operational", "two accessible maintained hospitals are operational")
+	_check(int(healthcare_result.get("count", 0)) == 2 and int(healthcare_result.get("capacity", 0)) == 500, "two hospitals provide 500 effective capacity")
+	_check(int(healthcare_result.get("demand", 0)) == 300 and int(healthcare_result.get("served", 0)) == 300, "healthcare demand is capped by effective capacity")
+	_check(is_equal_approx(float(healthcare_result.get("coverage", 0.0)), 1.0) and int(healthcare_result.get("metric_bonus", 0)) == 30, "full healthcare coverage grants the configured metric bonus")
+	_check(
+		CitySimulationServiceScript.medical_service_revenue(300, 50, SERVICE_DEFINITIONS.medical, healthcare_result) == 2000,
+		"medical revenue uses two operational facilities and 300 served residents"
+	)
+
+	var no_facility_input: Dictionary = healthcare_input.duplicate(true)
+	no_facility_input["building_records"] = {}
+	var no_facility_result: Dictionary = CitySimulationServiceScript.healthcare_service_result(no_facility_input)
+	_check(str(no_facility_result.get("reason_code", "")) == "facility_missing" and _healthcare_outputs_are_zero(no_facility_result), "missing facilities produce the stable unavailable result")
+
+	var no_road_input: Dictionary = healthcare_input.duplicate(true)
+	no_road_input["road_access_components"] = []
+	var no_road_result: Dictionary = CitySimulationServiceScript.healthcare_service_result(no_road_input)
+	_check(str(no_road_result.get("reason_code", "")) == "road_missing" and _healthcare_outputs_are_zero(no_road_result), "facilities without road access produce no service")
+	_check(CitySimulationServiceScript.medical_service_revenue(300, 50, SERVICE_DEFINITIONS.medical, no_road_result) == 0, "road-disconnected healthcare produces no medical revenue")
+
+	var maintenance_off_input: Dictionary = healthcare_input.duplicate(true)
+	maintenance_off_input["maintenance_enabled"] = false
+	var maintenance_off_result: Dictionary = CitySimulationServiceScript.healthcare_service_result(maintenance_off_input)
+	_check(str(maintenance_off_result.get("reason_code", "")) == "maintenance_unfunded" and _healthcare_outputs_are_zero(maintenance_off_result), "disabled maintenance gates all healthcare output")
+	_check(CitySimulationServiceScript.medical_service_revenue(300, 50, SERVICE_DEFINITIONS.medical, maintenance_off_result) == 0, "maintenance-disabled healthcare produces no revenue")
+
+	var unpaid_input: Dictionary = healthcare_input.duplicate(true)
+	unpaid_input["unpaid_maintenance_months"] = 1
+	var unpaid_result: Dictionary = CitySimulationServiceScript.healthcare_service_result(unpaid_input)
+	_check(str(unpaid_result.get("reason_code", "")) == "maintenance_unfunded" and _healthcare_outputs_are_zero(unpaid_result), "one unpaid maintenance month gates all healthcare output")
+	_check(CitySimulationServiceScript.medical_service_revenue(300, 50, SERVICE_DEFINITIONS.medical, unpaid_result) == 0, "unpaid healthcare produces no revenue")
+
+	var one_hospital_input: Dictionary = healthcare_input.duplicate(true)
+	var one_hospital_buildings: Dictionary = one_hospital_input["building_records"]
+	one_hospital_buildings.erase("hospital_2")
+	one_hospital_input["building_records"] = one_hospital_buildings
+	var one_hospital_durability: Dictionary = one_hospital_input["durability_records"]
+	one_hospital_durability.erase("hospital_2")
+	one_hospital_input["durability_records"] = one_hospital_durability
+	var one_hospital_result: Dictionary = CitySimulationServiceScript.healthcare_service_result(one_hospital_input)
+	_check(str(one_hospital_result.get("reason_code", "")) == "capacity_shortfall", "one hospital reports a stable capacity shortfall")
+	_check(int(one_hospital_result.get("capacity", 0)) == 250 and int(one_hospital_result.get("served", 0)) == 250, "one hospital serves its exact 250-resident capacity")
+	_check(is_equal_approx(float(one_hospital_result.get("coverage", 0.0)), 250.0 / 300.0) and int(one_hospital_result.get("metric_bonus", 0)) == 25, "partial coverage scales the metric bonus deterministically")
+	_check(
+		CitySimulationServiceScript.medical_service_revenue(300, 50, SERVICE_DEFINITIONS.medical, one_hospital_result) == 1400,
+		"medical revenue uses one operational facility and 250 served residents"
+	)
+
+	var worn_input: Dictionary = one_hospital_input.duplicate(true)
+	worn_input["durability_records"] = {"hospital_1": {"durability": 80, "efficiency": 0.8, "status": "active"}}
+	var worn_result: Dictionary = CitySimulationServiceScript.healthcare_service_result(worn_input)
+	_check(int(worn_result.get("capacity", 0)) == 200 and int(worn_result.get("served", 0)) == 200, "0.8 durability efficiency scales one hospital to capacity 200")
+
+	var repeated_result: Dictionary = CitySimulationServiceScript.healthcare_service_result(healthcare_input.duplicate(true))
+	var healthcare_json := JSON.stringify(healthcare_result)
+	var round_trip_value: Variant = JSON.parse_string(healthcare_json)
+	_check(JSON.stringify(repeated_result) == healthcare_json, "repeated healthcare evaluation is byte-stable")
+	_check(
+		round_trip_value is Dictionary
+		and _healthcare_results_match(round_trip_value as Dictionary, healthcare_result),
+		"healthcare output survives a JSON round trip"
+	)
+
 	_check(CitySimulationServiceScript.maintenance_cost(city_grid, buildings) == 1090, "maintenance remains the sum of placed buildings")
 	_check(CitySimulationServiceScript.policy_expense(policies, active_policies) == 250, "only active policy expenses are counted")
 
@@ -191,6 +266,86 @@ func _sum_float_values(values: Dictionary) -> float:
 	for value: Variant in values.values():
 		total += float(value)
 	return total
+
+
+func _healthcare_input() -> Dictionary:
+	return {
+		"population": 300,
+		"building_records": {
+			"hospital_2": {
+				"building_id": "hospital_2",
+				"definition_id": "hospital",
+				"building_name": "醫院",
+				"tile_index": 11,
+				"status": "active",
+			},
+			"hospital_1": {
+				"building_id": "hospital_1",
+				"definition_id": "hospital",
+				"building_name": "醫院",
+				"tile_index": 10,
+				"status": "active",
+			},
+			"hospital_scrapped": {
+				"building_id": "hospital_scrapped",
+				"definition_id": "hospital",
+				"building_name": "醫院",
+				"tile_index": 12,
+				"status": "scrapped",
+			},
+			"hospital_demolition": {
+				"building_id": "hospital_demolition",
+				"definition_id": "hospital",
+				"building_name": "醫院",
+				"tile_index": 13,
+				"status": "demolition",
+			},
+		},
+		"road_access_components": [
+			{"id": "road_b", "access_tile_ids": [11, 13]},
+			{"id": "road_a", "access_tile_ids": [10, 12]},
+		],
+		"durability_records": {
+			"hospital_1": {"durability": 100, "efficiency": 1.0, "status": "active"},
+			"hospital_2": {"durability": 100, "efficiency": 1.0, "status": "active"},
+		},
+		"maintenance_enabled": true,
+		"unpaid_maintenance_months": 0,
+		"capacity_per_facility": 250,
+		"max_metric_bonus": 30,
+	}
+
+
+func _healthcare_outputs_are_zero(result: Dictionary) -> bool:
+	return (
+		int(result.get("count", -1)) == 0
+		and int(result.get("capacity", -1)) == 0
+		and int(result.get("served", -1)) == 0
+		and is_zero_approx(float(result.get("coverage", -1.0)))
+		and int(result.get("metric_bonus", -1)) == 0
+	)
+
+
+func _healthcare_results_match(actual: Dictionary, expected: Dictionary) -> bool:
+	for key: String in ["model_version", "status", "reason_code"]:
+		if str(actual.get(key, "")) != str(expected.get(key, "")):
+			return false
+	for key: String in [
+		"count",
+		"facility_count",
+		"road_accessible_facility_count",
+		"operational_facility_count",
+		"capacity",
+		"demand",
+		"served",
+		"metric_bonus",
+	]:
+		if int(actual.get(key, -1)) != int(expected.get(key, -1)):
+			return false
+	return is_equal_approx(
+		float(actual.get("coverage", -1.0)),
+		float(expected.get("coverage", -1.0))
+	)
 
 
 func _check(condition: bool, label: String) -> void:

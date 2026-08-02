@@ -37,7 +37,7 @@ func _run() -> void:
 	_check(main.ISO_TILE_SIZE.x < 128.0 and main.ISO_TILE_STEP.x < 72.0, "expanded map did not reduce individual tile dimensions")
 	_check(main.vertical_slice.terrain_map.coordinate_for_tile_id(0) == Vector2i(1, 1), "legacy tile 0 did not keep its stable central coordinate")
 	_check(main.vertical_slice.terrain_map.coordinate_for_tile_id(64) == Vector2i(0, 0), "new outer-ring tile 64 is not mapped to the expanded edge")
-	for kind: String in ["trees", "hill_cliff", "river_lake", "road_path", "rail_track"]:
+	for kind: String in ["trees", "hill_cliff", "river_lake"]:
 		var found := false
 		for state_variant: Variant in main.vertical_slice.terrain_map.all_tile_states():
 			var state: Dictionary = state_variant
@@ -45,6 +45,13 @@ func _run() -> void:
 				found = true
 				break
 		_check(found, "default city terrain omits %s" % kind)
+	for legacy_transport_kind: String in ["road_path", "rail_track"]:
+		var found_legacy_transport := false
+		for state_variant: Variant in main.vertical_slice.terrain_map.all_tile_states():
+			if str(Dictionary(state_variant).get("effective_kind", "")) == legacy_transport_kind:
+				found_legacy_transport = true
+				break
+		_check(not found_legacy_transport, "new games must not pre-seed an arbitrary %s network" % legacy_transport_kind)
 
 	var previous_zoom: float = main.map_zoom
 	var previous_stage_scale: float = main.map_stage.scale.x
@@ -95,14 +102,38 @@ func _run() -> void:
 	_check(main.placement_level_button.visible and not main.placement_level_button.disabled, "flatten action is not exposed for affordable non-flat terrain")
 	var funds_before: int = int(main.vertical_slice.treasury_balance())
 	var quote: Dictionary = main.vertical_slice.terrain_flatten_quote(terrain_tile)
+	var workers_before: int = int(main.vertical_slice.construction.available_workers())
+	_check(int(quote.get("duration_days", 0)) > 0, "terrain quote omitted its construction duration")
+	_check(int(quote.get("total_cost", 0)) == int(quote.get("fixed_cost", 0)) + int(quote.get("labor_cost", 0)), "terrain quote total is not fixed plus labor cost")
+	_check(bool(quote.get("can_start", false)), "affordable terrain quote cannot start")
 	main._flatten_pending_terrain()
 	await process_frame
-	_check(main.vertical_slice.terrain_map.is_buildable(terrain_tile), "flatten action did not make the terrain buildable")
-	_check(main.vertical_slice.terrain_map.is_walkable(terrain_tile), "flatten action did not make the terrain walkable")
-	_check(main.vertical_slice.treasury_balance() == funds_before - int(quote.get("cost", 0)), "flattening did not deduct exactly the quoted cost")
-	_check(main.labels["funds"].text == main._format_currency(main.vertical_slice.treasury_balance()), "flattening did not refresh the visible treasury balance in the same frame")
+	var flatten_job: Dictionary = main.vertical_slice.active_construction_for_tile(terrain_tile)
+	_check(not flatten_job.is_empty(), "flatten action did not start a construction job")
+	_check(not main.vertical_slice.terrain_map.is_buildable(terrain_tile), "terrain flattened immediately instead of waiting for completion")
+	_check(not main.vertical_slice.terrain_map.is_walkable(terrain_tile), "terrain became walkable before earthworks completed")
+	_check(main.vertical_slice.construction.available_workers() == workers_before - int(quote.get("worker_count", 0)), "terrain job did not reserve its quoted workers")
+	_check(main.vertical_slice.treasury_balance() == funds_before - int(quote.get("total_cost", 0)), "terrain start did not deduct exactly the prepaid quote")
+	_check(main.labels["funds"].text == main._format_currency(main.vertical_slice.treasury_balance()), "terrain start did not refresh the visible treasury balance in the same frame")
 	main.debug_sync_npc_navigation_obstacles()
-	_check(not main.npc_map_controller._blocked_tiles.has(terrain_tile), "flattened terrain remained blocked in the live NPC controller")
+	_check(main.npc_map_controller._blocked_tiles.has(terrain_tile), "active terrain worksite stopped blocking the live NPC controller")
+	var blocked_during_flatten: Dictionary = main.vertical_slice.start_approved_building("住宅", terrain_tile, 5)
+	_check(not bool(blocked_during_flatten.get("ok", false)), "building construction started on active terrain earthworks")
+	var transport_during_flatten: Dictionary = main.vertical_slice.transport_project_quote("road", "build", [terrain_tile], 5, main.city_grid)
+	_check(not bool(transport_during_flatten.get("ok", false)), "transport construction started on active terrain earthworks")
+	var remaining_days := int(flatten_job.get("projected_remaining_days", 0))
+	if remaining_days > 1:
+		var precompletion_events: Array[Dictionary] = main.vertical_slice.advance_days(remaining_days - 1, {}, false)
+		main._consume_vertical_events(precompletion_events)
+		_check(not main.vertical_slice.terrain_map.is_flattened(terrain_tile), "terrain flattened before the final construction day")
+	var completion_events: Array[Dictionary] = main.vertical_slice.advance_days(1, {}, false)
+	main._consume_vertical_events(completion_events)
+	_check(main.vertical_slice.terrain_map.is_buildable(terrain_tile), "final construction day did not make terrain buildable")
+	_check(main.vertical_slice.terrain_map.is_walkable(terrain_tile), "final construction day did not make terrain walkable")
+	_check(main.vertical_slice.construction.available_workers() == workers_before, "completed terrain job did not release its workers")
+	_check(main.vertical_slice.treasury_balance() == funds_before - int(quote.get("total_cost", 0)), "terrain progression charged the prepaid quote more than once")
+	main.debug_sync_npc_navigation_obstacles()
+	_check(not main.npc_map_controller._blocked_tiles.has(terrain_tile), "completed terrain remained blocked in the live NPC controller")
 	var post_flat_start: Dictionary = main.vertical_slice.start_approved_building("住宅", terrain_tile, 5)
 	_check(bool(post_flat_start.get("ok", false)) or str(post_flat_start.get("error", "")) != "terrain_not_flat", "flattened tile did not advance to the normal blueprint/construction pipeline")
 

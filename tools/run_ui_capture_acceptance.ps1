@@ -128,12 +128,24 @@ $expectedCaptures = [ordered]@{
 if ($expectedCaptures.Count -ne 33) {
     throw "Internal UI capture contract must contain exactly 33 states; found $($expectedCaptures.Count)."
 }
+$expectedNativeCaptures = [ordered]@{
+    start = [ordered]@{ filename = 'native-start-screen.png'; landmark = 'start_actions' }
+    main = [ordered]@{ filename = 'native-main.png'; landmark = 'status_hud' }
+    settings = [ordered]@{ filename = 'native-settings.png'; landmark = 'settings_panel' }
+    municipal_overlay = [ordered]@{ filename = 'native-municipal-overlay.png'; landmark = 'municipal_overlay' }
+}
+if ($expectedNativeCaptures.Count -ne 4) {
+    throw "Internal native GUI capture contract must contain exactly 4 states; found $($expectedNativeCaptures.Count)."
+}
 
 $preFingerprint = Get-MayorSourceFingerprint -ProjectRoot $projectRoot
 New-Item -ItemType Directory -Path $OutputRoot -ErrorAction Stop | Out-Null
 $null = Assert-MayorNotReparsePoint -Path $OutputRoot -Label 'UI capture output root'
 
 $captureRoot = Join-Path $OutputRoot 'screenshots'
+$nativeCaptureRoot = Join-Path $OutputRoot 'native-window'
+Assert-PathChainWithoutReparsePoint -Candidate $captureRoot -Boundary $projectRoot
+Assert-PathChainWithoutReparsePoint -Candidate $nativeCaptureRoot -Boundary $projectRoot
 $appDataRoot = Join-Path $OutputRoot 'appdata'
 $localAppDataRoot = Join-Path $OutputRoot 'localappdata'
 New-Item -ItemType Directory -Path $appDataRoot, $localAppDataRoot -ErrorAction Stop | Out-Null
@@ -163,7 +175,7 @@ try {
         '--path', $projectRoot,
         '--script', 'res://tests/ui/capture_ui_readability.gd',
         '--log-file', $godotLogPath,
-        '--', "--ui-capture-output-dir=$captureRoot"
+        '--', "--ui-capture-output-dir=$captureRoot", "--ui-native-output-dir=$nativeCaptureRoot"
     )) {
         $startInfo.ArgumentList.Add([string]$argument)
     }
@@ -241,10 +253,130 @@ foreach ($leakPattern in @('Leaked instance:', 'ObjectDB instances? (?:was|were)
 if ($diagnostics.Count -ne 0) {
     $failures.Add("Product diagnostics were found: $($diagnostics -join ' | ')")
 }
-$marker = 'UI_CAPTURE_ACCEPTANCE_PASSED captures=33 physical=2880x1800'
+$marker = 'UI_CAPTURE_CANONICAL_ACCEPTANCE_PASSED native_gui=PASS native_captures=4 offscreen_evidence=PASS offscreen_captures=33 physical=2880x1800 logical=1280x800'
 $markerCount = [regex]::Matches($stdoutText, "(?m)^$([regex]::Escape($marker))\r?$").Count
 if ($markerCount -ne 1) {
     $failures.Add("Expected the success marker exactly once in stdout; found $markerCount.")
+}
+
+$nativeResultPath = Join-Path $nativeCaptureRoot 'native-result.json'
+$validatedNativeCaptures = [System.Collections.Generic.List[object]]::new()
+if (-not (Test-Path -LiteralPath $nativeResultPath -PathType Leaf)) {
+    $failures.Add("Native GUI result is missing: $nativeResultPath")
+}
+else {
+    try {
+        $null = Assert-MayorNotReparsePoint -Path $nativeCaptureRoot -Label 'Native GUI output directory'
+        $nativeResultItem = Assert-MayorNotReparsePoint -Path $nativeResultPath -Label 'Native GUI result'
+        if ($nativeResultItem.PSIsContainer) { throw 'native-result.json is a directory.' }
+        $nativeResult = Get-Content -LiteralPath $nativeResultPath -Raw | ConvertFrom-Json
+        if ([int]$nativeResult.schema_version -ne 1 -or
+            [string]$nativeResult.suite -cne 'mayor-simulator-native-window-ui-acceptance' -or
+            [string]$nativeResult.status -cne 'PASS' -or
+            [string]$nativeResult.native_gui_status -cne 'PASS' -or
+            [string]$nativeResult.capture_role -cne 'native_gui') {
+            throw 'Native GUI result schema, suite, or PASS statuses are invalid.'
+        }
+        if ([string]$nativeResult.capture_surface_kind -cne 'native_fullscreen_root' -or
+            [string]$nativeResult.scene_parent -cne 'root_window' -or
+            [bool]$nativeResult.uses_subviewport -or
+            [bool]$nativeResult.capture_surface_mirrored) {
+            throw 'Native GUI result was not captured from an unmirrored Main scene attached directly to the root window.'
+        }
+        if ([string]$nativeResult.window_mode -cnotin @('fullscreen', 'exclusive_fullscreen')) {
+            throw "Native GUI window mode is invalid: $($nativeResult.window_mode)"
+        }
+        if ([int]$nativeResult.required_capture_count -ne 4 -or [int]$nativeResult.capture_count -ne 4 -or @($nativeResult.captures).Count -ne 4) {
+            throw 'Native GUI result does not contain the complete four-state contract.'
+        }
+        if (@($nativeResult.physical_size).Count -ne 2 -or @($nativeResult.logical_size).Count -ne 2 -or
+            @($nativeResult.window_size).Count -ne 2 -or @($nativeResult.root_texture_size).Count -ne 2) {
+            throw 'Native GUI result is missing measured surface dimensions.'
+        }
+        if ([string]$nativeResult.physical_size_role -cne 'native_root_capture_and_os_window_pixels' -or
+            [string]$nativeResult.window_size_role -cne 'os_fullscreen_window') {
+            throw 'Native GUI result does not identify its native-capture and OS-window size roles.'
+        }
+        $nativeWidth = [int]$nativeResult.physical_size[0]
+        $nativeHeight = [int]$nativeResult.physical_size[1]
+        $nativeLogicalWidth = [int]$nativeResult.logical_size[0]
+        $nativeLogicalHeight = [int]$nativeResult.logical_size[1]
+        $nativeWindowWidth = [int]$nativeResult.window_size[0]
+        $nativeWindowHeight = [int]$nativeResult.window_size[1]
+        if ($nativeWidth -lt 1280 -or $nativeHeight -lt 720 -or
+            $nativeWindowWidth -lt 1280 -or $nativeWindowHeight -lt 720 -or
+            $nativeLogicalWidth -lt 1280 -or $nativeLogicalHeight -lt 720) {
+            throw "Native GUI dimensions are below acceptance minimums: backing=${nativeWidth}x${nativeHeight} window=${nativeWindowWidth}x${nativeWindowHeight} logical=${nativeLogicalWidth}x${nativeLogicalHeight}."
+        }
+        if ($nativeWindowWidth -ne $nativeWidth -or $nativeWindowHeight -ne $nativeHeight) {
+            throw 'Native GUI capture pixels and OS-window dimensions do not match exactly.'
+        }
+        $nativeBackingWidth = [int]$nativeResult.root_texture_size[0]
+        $nativeBackingHeight = [int]$nativeResult.root_texture_size[1]
+        if ($nativeBackingWidth -lt 1280 -or $nativeBackingHeight -lt 720) {
+            throw "Native GUI backing dimensions are below acceptance minimums: ${nativeBackingWidth}x${nativeBackingHeight}."
+        }
+        $backingScaleX = [double]$nativeBackingWidth / [double]$nativeLogicalWidth
+        $backingScaleY = [double]$nativeBackingHeight / [double]$nativeLogicalHeight
+        $windowScaleX = [double]$nativeWindowWidth / [double]$nativeLogicalWidth
+        $windowScaleY = [double]$nativeWindowHeight / [double]$nativeLogicalHeight
+        if ([Math]::Abs($backingScaleX - $backingScaleY) -gt 0.01 -or [Math]::Abs($windowScaleX - $windowScaleY) -gt 0.01) {
+            throw 'Native GUI backing, OS-window, and logical dimensions are not uniformly scaled.'
+        }
+        if ([string]$nativeResult.display_server -eq '' -or [int]$nativeResult.current_screen_index -lt 0 -or
+            [int]$nativeResult.current_screen_dpi -le 0 -or [double]$nativeResult.current_screen_scale -le 0.0 -or
+            @($nativeResult.current_screen_size).Count -ne 2 -or [int]$nativeResult.current_screen_size[0] -le 0 -or [int]$nativeResult.current_screen_size[1] -le 0) {
+            throw 'Native GUI current-screen DPI/scale metadata is invalid.'
+        }
+        if ([int]$nativeResult.current_screen_size[0] -ne $nativeWindowWidth -or [int]$nativeResult.current_screen_size[1] -ne $nativeWindowHeight) {
+            throw 'Native GUI OS window does not fill the current screen.'
+        }
+        if (-not ([IO.Path]::GetFullPath([string]$nativeResult.output_directory)).Equals([IO.Path]::GetFullPath($nativeCaptureRoot), [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Native GUI output_directory does not match the wrapper-owned native-window directory.'
+        }
+
+        $seenNativeStates = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        $seenNativeFilenames = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        $seenNativeHashes = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        foreach ($capture in @($nativeResult.captures)) {
+            $state = [string]$capture.state
+            $filename = [string]$capture.filename
+            if (-not $seenNativeStates.Add($state) -or -not $seenNativeFilenames.Add($filename)) { throw "Duplicate native capture state or filename: $state / $filename" }
+            if (-not $expectedNativeCaptures.Contains($state) -or [string]$expectedNativeCaptures[$state].filename -cne $filename -or
+                [string]$expectedNativeCaptures[$state].landmark -cne [string]$capture.landmark) {
+                throw "Unexpected native capture mapping or landmark: $state / $filename / $($capture.landmark)"
+            }
+            if ([IO.Path]::GetFileName($filename) -cne $filename -or $filename -notmatch '^[a-z0-9-]+\.png$') { throw "Unsafe native capture filename: $filename" }
+            $pngPath = Join-Path $nativeCaptureRoot $filename
+            if (-not (Test-Path -LiteralPath $pngPath -PathType Leaf)) { throw "Native capture PNG is missing: $pngPath" }
+            $pngItem = Assert-MayorNotReparsePoint -Path $pngPath -Label "Native capture PNG '$state'"
+            $header = Get-PngHeader -Path $pngPath
+            $hash = (Get-FileHash -LiteralPath $pngPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($header.width -ne $nativeWidth -or $header.height -ne $nativeHeight -or [int]$capture.width -ne $nativeWidth -or [int]$capture.height -ne $nativeHeight) { throw "Native capture dimensions are invalid for $state." }
+            if ([long]$capture.bytes -ne [long]$pngItem.Length -or [long]$pngItem.Length -le 24) { throw "Native capture byte count is invalid for $state." }
+            if ([string]$capture.sha256 -cne $hash -or $hash -notmatch '^[0-9a-f]{64}$') { throw "Native capture SHA-256 mismatch for $state." }
+            if (-not $seenNativeHashes.Add($hash)) { throw "Duplicate native capture content hash detected for $state." }
+            if (@($capture.landmark_rect).Count -ne 4 -or [double]$capture.landmark_rect[2] -le 0.0 -or [double]$capture.landmark_rect[3] -le 0.0 -or
+                [double]$capture.landmark_rect[0] -lt 0.0 -or [double]$capture.landmark_rect[1] -lt 0.0 -or
+                ([double]$capture.landmark_rect[0] + [double]$capture.landmark_rect[2]) -gt ($nativeLogicalWidth + 1.0) -or
+                ([double]$capture.landmark_rect[1] + [double]$capture.landmark_rect[3]) -gt ($nativeLogicalHeight + 1.0)) {
+                throw "Native UI landmark geometry is invalid for $state."
+            }
+            $validatedNativeCaptures.Add([pscustomobject][ordered]@{ state=$state; filename=$filename; width=$nativeWidth; height=$nativeHeight; bytes=[long]$pngItem.Length; sha256=$hash; landmark=[string]$capture.landmark })
+        }
+        foreach ($state in $expectedNativeCaptures.Keys) {
+            if (-not $seenNativeStates.Contains([string]$state)) { throw "Native capture state is missing: $state" }
+        }
+        $nativeItems = @(Get-ChildItem -LiteralPath $nativeCaptureRoot -Force)
+        $expectedNativeNames = @($expectedNativeCaptures.Values | ForEach-Object { [string]$_.filename }) + 'native-result.json'
+        if ($nativeItems.Count -ne $expectedNativeNames.Count) { throw "Native-window directory item count mismatch: expected $($expectedNativeNames.Count), found $($nativeItems.Count)." }
+        foreach ($item in $nativeItems) {
+            if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $item.Name -cnotin $expectedNativeNames) { throw "Unexpected native-window output item: $($item.FullName)" }
+        }
+    }
+    catch {
+        $failures.Add("Native GUI evidence validation failed: $($_.Exception.Message)")
+    }
 }
 
 $resultPath = Join-Path $captureRoot 'capture-result.json'
@@ -258,8 +390,18 @@ else {
         $resultItem = Assert-MayorNotReparsePoint -Path $resultPath -Label 'Capture result'
         if ($resultItem.PSIsContainer) { throw 'capture-result.json is a directory.' }
         $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
-        if ([int]$result.schema_version -ne 1 -or [string]$result.suite -cne 'mayor-simulator-ui-capture-acceptance' -or [string]$result.status -cne 'PASS') {
+        if ([int]$result.schema_version -ne 1 -or [string]$result.suite -cne 'mayor-simulator-ui-capture-acceptance' -or
+            [string]$result.status -cne 'PASS' -or [string]$result.offscreen_evidence_status -cne 'PASS' -or
+            [string]$result.capture_role -cne 'offscreen_evidence_only') {
             throw 'Capture result schema, suite, or status is invalid.'
+        }
+        $utcStyles = [Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal
+        $nativeStartedAt = [DateTimeOffset]::Parse([string]$nativeResult.started_at_utc, [Globalization.CultureInfo]::InvariantCulture, $utcStyles)
+        $nativeFinishedAt = [DateTimeOffset]::Parse([string]$nativeResult.finished_at_utc, [Globalization.CultureInfo]::InvariantCulture, $utcStyles)
+        $offscreenStartedAt = [DateTimeOffset]::Parse([string]$result.started_at_utc, [Globalization.CultureInfo]::InvariantCulture, $utcStyles)
+        $offscreenFinishedAt = [DateTimeOffset]::Parse([string]$result.finished_at_utc, [Globalization.CultureInfo]::InvariantCulture, $utcStyles)
+        if ($nativeStartedAt -gt $nativeFinishedAt -or $nativeFinishedAt -gt $offscreenStartedAt -or $offscreenStartedAt -gt $offscreenFinishedAt) {
+            throw 'Native and offscreen evidence timestamps are not in monotonic phase order.'
         }
         if ([int]$result.required_capture_count -ne 33 -or [int]$result.capture_count -ne 33 -or @($result.captures).Count -ne 33) {
             throw 'Capture result does not contain the complete 33-state contract.'
@@ -267,12 +409,27 @@ else {
         if (@($result.physical_size).Count -ne 2 -or [int]$result.physical_size[0] -ne 2880 -or [int]$result.physical_size[1] -ne 1800) {
             throw 'Capture result physical size is not exactly 2880x1800.'
         }
+        if (@($result.logical_size).Count -ne 2 -or [int]$result.logical_size[0] -ne 1280 -or [int]$result.logical_size[1] -ne 800) {
+            throw 'Capture result logical size is not exactly 1280x800.'
+        }
+        $captureSurfaceKind = [string]$result.capture_surface_kind
+        if ($captureSurfaceKind -cne 'offscreen_subviewport') {
+            throw "33-state evidence must come from offscreen_subviewport; actual=$captureSurfaceKind"
+        }
+        $captureSurfaceMirrored = [bool]$result.capture_surface_mirrored
+        if ($captureSurfaceKind -ceq 'offscreen_subviewport' -and $captureSurfaceMirrored) {
+            throw 'Offscreen evidence capture must remain isolated from the native-resolution GUI acceptance window.'
+        }
+        if (@($result.native_window_size).Count -ne 2 -or [int]$result.native_window_size[0] -le 0 -or [int]$result.native_window_size[1] -le 0) {
+            throw 'Capture result native_window_size is invalid.'
+        }
         if (-not ([IO.Path]::GetFullPath([string]$result.output_directory)).Equals([IO.Path]::GetFullPath($captureRoot), [StringComparison]::OrdinalIgnoreCase)) {
             throw 'Capture result output_directory does not match the wrapper-owned screenshot directory.'
         }
 
         $seenStates = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
         $seenFilenames = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        $seenHashes = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
         foreach ($capture in @($result.captures)) {
             $state = [string]$capture.state
             $filename = [string]$capture.filename
@@ -287,6 +444,7 @@ else {
             if ($header.width -ne 2880 -or $header.height -ne 1800 -or [int]$capture.width -ne 2880 -or [int]$capture.height -ne 1800) { throw "Capture dimensions are invalid for $state." }
             if ([long]$capture.bytes -ne [long]$pngItem.Length -or [long]$pngItem.Length -le 24) { throw "Capture byte count is invalid for $state." }
             if ([string]$capture.sha256 -cne $hash -or $hash -notmatch '^[0-9a-f]{64}$') { throw "Capture SHA-256 mismatch for $state." }
+            if (-not $seenHashes.Add($hash)) { throw "Duplicate capture content hash detected for $state." }
             $validatedCaptures.Add([pscustomobject][ordered]@{ state=$state; filename=$filename; width=2880; height=1800; bytes=[long]$pngItem.Length; sha256=$hash })
         }
         foreach ($state in $expectedCaptures.Keys) {
@@ -334,14 +492,16 @@ if ($failures.Count -ne 0) {
 $summaryPath = Join-Path $OutputRoot 'summary.json'
 $summaryPartialPath = $summaryPath + '.partial'
 $fileEvidence = [ordered]@{}
-foreach ($path in @($stdoutPath, $stderrPath, $godotLogPath, $resultPath)) {
+foreach ($path in @($stdoutPath, $stderrPath, $godotLogPath, $nativeResultPath, $resultPath)) {
     $record = Get-FileRecord -Path $path
     $fileEvidence[$record.path] = $record
 }
 $summary = [ordered]@{
     schema_version = 1
-    suite = 'mayor-simulator-ui-capture-acceptance'
+    suite = 'mayor-simulator-canonical-native-and-offscreen-ui-acceptance'
     status = 'PASS'
+    native_gui_status = 'PASS'
+    offscreen_evidence_status = 'PASS'
     output_root_policy = 'refuse_existing_workspace_directory'
     project_root = $projectRoot
     output_root = $OutputRoot
@@ -350,18 +510,49 @@ $summary = [ordered]@{
     duration_seconds = [Math]::Round(($finishedAt - $startedAt).TotalSeconds, 3)
     godot_executable = [ordered]@{ path=$GodotExe; bytes=[long]$godotItem.Length; sha256=(Get-FileHash -LiteralPath $GodotExe -Algorithm SHA256).Hash.ToLowerInvariant() }
     process = [ordered]@{ completed=$completed; exit_code=$exitCode; timeout_seconds=$TimeoutSeconds; output_capture_complete=$outputCaptureComplete }
-    required_capture_count = 33
-    capture_count = $validatedCaptures.Count
-    physical_size = @(2880, 1800)
+    required_capture_count = 37
+    capture_count = ($validatedNativeCaptures.Count + $validatedCaptures.Count)
+    native_gui = [ordered]@{
+        status = 'PASS'
+        required_capture_count = 4
+        capture_count = $validatedNativeCaptures.Count
+        capture_surface_kind = 'native_fullscreen_root'
+        scene_parent = 'root_window'
+        physical_size = @($nativeWidth, $nativeHeight)
+        physical_size_role = [string]$nativeResult.physical_size_role
+        logical_size = @($nativeLogicalWidth, $nativeLogicalHeight)
+        window_size = @([int]$nativeResult.window_size[0], [int]$nativeResult.window_size[1])
+        root_texture_size = @([int]$nativeResult.root_texture_size[0], [int]$nativeResult.root_texture_size[1])
+        display_server = [string]$nativeResult.display_server
+        current_screen_index = [int]$nativeResult.current_screen_index
+        current_screen_dpi = [int]$nativeResult.current_screen_dpi
+        current_screen_scale = [double]$nativeResult.current_screen_scale
+        current_screen_size = @([int]$nativeResult.current_screen_size[0], [int]$nativeResult.current_screen_size[1])
+        started_at_utc = [string]$nativeResult.started_at_utc
+        finished_at_utc = [string]$nativeResult.finished_at_utc
+        captures = @($validatedNativeCaptures)
+    }
+    offscreen_evidence = [ordered]@{
+        status = 'PASS'
+        required_capture_count = 33
+        capture_count = $validatedCaptures.Count
+        physical_size = @(2880, 1800)
+        logical_size = @(1280, 800)
+        capture_surface_kind = $captureSurfaceKind
+        capture_surface_mirrored = $captureSurfaceMirrored
+        preview_window_size = @([int]$result.native_window_size[0], [int]$result.native_window_size[1])
+        started_at_utc = [string]$result.started_at_utc
+        finished_at_utc = [string]$result.finished_at_utc
+        captures = @($validatedCaptures)
+    }
     success_marker = $marker
     success_marker_count = $markerCount
     environment_warning_count = $environmentWarningCount
     product_diagnostic_count = 0
     source = [ordered]@{ file_count=[int]$preFingerprint.file_count; total_bytes=[long]$preFingerprint.total_bytes; pre_fingerprint_sha256=[string]$preFingerprint.fingerprint_sha256; post_fingerprint_sha256=[string]$postFingerprint.fingerprint_sha256; unchanged=$true }
-    captures = @($validatedCaptures)
     files = $fileEvidence
 }
 [IO.File]::WriteAllText($summaryPartialPath, ($summary | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
 [IO.File]::Move($summaryPartialPath, $summaryPath)
-Write-Output "UI capture acceptance passed: captures=33 physical=2880x1800 output=$OutputRoot"
+Write-Output "Canonical UI acceptance passed: native_gui=PASS captures=4 capture=${nativeWidth}x${nativeHeight} backing=${nativeBackingWidth}x${nativeBackingHeight} window=${nativeWindowWidth}x${nativeWindowHeight} logical=${nativeLogicalWidth}x${nativeLogicalHeight}; offscreen_evidence=PASS captures=33 physical=2880x1800 output=$OutputRoot"
 exit 0

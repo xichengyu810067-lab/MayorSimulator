@@ -83,6 +83,11 @@ func _run() -> void:
 	vehicles.debug_set_simulation_time(2.5)
 	var crossing_debug: Dictionary = vehicles.debug_route_snapshot().get("crossing_states", {})
 	_check(bool(Dictionary(crossing_debug.get("1", {})).get("closed", false)), "level-crossing barriers must close while a train is approaching")
+	_validate_crossing_vehicle_interlock(vehicles, operational_snapshot, centers)
+
+	operational_snapshot["operational_lines"][0]["fleet_size"] = 40
+	vehicles.set_runtime_snapshot(operational_snapshot, centers)
+	_check(vehicles.active_vehicle_count() == 40, "the renderer must represent the complete player-configured fleet up to the UI maximum")
 
 	operational_snapshot["operational_lines"][0]["status"] = "suspended"
 	vehicles.set_runtime_snapshot(operational_snapshot, centers)
@@ -103,6 +108,115 @@ func _run() -> void:
 	else:
 		print("Transport network layer test passed. Checks=%d" % _checks)
 		quit(0)
+
+
+func _validate_crossing_vehicle_interlock(vehicles, base_snapshot: Dictionary, centers: Dictionary) -> void:
+	var snapshot := base_snapshot.duplicate(true)
+	snapshot["private_road_paths"] = [{"path_tile_ids": [0, 1, 2], "operational": true}]
+	var lines: Array = Array(snapshot.get("operational_lines", [])).duplicate(true)
+	lines.append({
+		"id": "line_bus_crossing",
+		"mode": "bus",
+		"status": "operational",
+		"vehicle_kind": "bus",
+		"path_tile_ids": [0, 1, 2],
+		"station_tile_ids": [0, 2],
+		"fleet_size": 1,
+		"headway_minutes": 8,
+		"fare": 25,
+		"loop_seconds": 6.0,
+	})
+	snapshot["operational_lines"] = lines
+	vehicles.set_runtime_snapshot(snapshot, centers)
+	vehicles.debug_set_simulation_time(0.0)
+	_check(vehicles.active_vehicle_count() == 4, "crossing interlock fixture must contain train, bus, car, and motorcycle")
+
+	var tracked_kinds := ["bus", "car", "motorcycle"]
+	var previous_positions: Dictionary = {}
+	var previous_route_times: Dictionary = {}
+	var closed_side_by_kind: Dictionary = {}
+	var stop_anchors: Dictionary = {}
+	var waiting_frames: Dictionary = {}
+	var resumed: Dictionary = {}
+	var crossing_center: Vector2 = centers["1"]
+	var closure_count := 0
+	var was_closed := false
+	var reopened_after_first_closure := false
+	var saw_first_closure := false
+	var step_violation := ""
+	var closed_zone_violation := ""
+	var side_violation := ""
+	var stop_anchor_violation := ""
+	for frame in 720:
+		vehicles.debug_advance_simulation(1.0 / 60.0)
+		var debug: Dictionary = vehicles.debug_route_snapshot()
+		var state: Dictionary = Dictionary(Dictionary(debug.get("crossing_states", {})).get("1", {}))
+		var closed := bool(state.get("closed", false))
+		if closed and not was_closed:
+			closure_count += 1
+			if closure_count == 1:
+				saw_first_closure = true
+		if not closed and was_closed and closure_count == 1:
+			reopened_after_first_closure = true
+
+		for vehicle_variant: Variant in debug.get("vehicles", []):
+			var vehicle: Dictionary = vehicle_variant
+			var kind := str(vehicle.get("vehicle_kind", ""))
+			if kind not in tracked_kinds:
+				continue
+			var position := Vector2(vehicle.get("position", Vector2.INF))
+			var route_time := float(vehicle.get("route_time", -1.0))
+			if (
+				previous_positions.has(kind)
+				and position.distance_to(Vector2(previous_positions[kind])) > 2.0
+				and step_violation.is_empty()
+			):
+				step_violation = "%s jumped at frame %d" % [kind, frame]
+			if closed and closure_count == 1:
+				var crossing_distance := position.distance_to(crossing_center)
+				if crossing_distance < 30.0 and closed_zone_violation.is_empty():
+					closed_zone_violation = "%s entered the closed crossing at frame %d" % [kind, frame]
+				var side := signf(position.x - crossing_center.x)
+				if not closed_side_by_kind.has(kind) and not is_zero_approx(side):
+					closed_side_by_kind[kind] = side
+				elif (
+					closed_side_by_kind.has(kind)
+					and not is_zero_approx(side)
+					and side * float(closed_side_by_kind[kind]) < 0.0
+					and side_violation.is_empty()
+				):
+					side_violation = "%s crossed to the far side while the gate was closed at frame %d" % [kind, frame]
+				var route_time_frozen := (
+					previous_route_times.has(kind)
+					and is_equal_approx(route_time, float(previous_route_times[kind]))
+				)
+				if crossing_distance <= 34.0 and route_time_frozen:
+					if not stop_anchors.has(kind):
+						stop_anchors[kind] = position
+						waiting_frames[kind] = 1
+					elif position.distance_to(Vector2(stop_anchors[kind])) <= 0.05:
+						waiting_frames[kind] = int(waiting_frames.get(kind, 0)) + 1
+					elif stop_anchor_violation.is_empty():
+						stop_anchor_violation = "%s moved after its route-time froze at frame %d" % [kind, frame]
+			elif reopened_after_first_closure and stop_anchors.has(kind):
+				if position.distance_to(Vector2(stop_anchors[kind])) > 3.0:
+					resumed[kind] = true
+			previous_positions[kind] = position
+			previous_route_times[kind] = route_time
+		was_closed = closed
+		if reopened_after_first_closure and resumed.size() == tracked_kinds.size():
+			break
+
+	_check(saw_first_closure, "crossing interlock fixture never reached a closed gate")
+	_check(reopened_after_first_closure, "crossing interlock fixture never reopened after the train cleared")
+	_check(step_violation.is_empty(), "road vehicle continuity failed: %s" % step_violation)
+	_check(closed_zone_violation.is_empty(), "closed crossing exclusion failed: %s" % closed_zone_violation)
+	_check(side_violation.is_empty(), "closed crossing side interlock failed: %s" % side_violation)
+	_check(stop_anchor_violation.is_empty(), "closed crossing stop anchor failed: %s" % stop_anchor_violation)
+	for kind: String in tracked_kinds:
+		_check(stop_anchors.has(kind), "%s never reached its closed-gate stop line" % kind)
+		_check(int(waiting_frames.get(kind, 0)) >= 10, "%s did not remain stopped while the gate was closed" % kind)
+		_check(bool(resumed.get(kind, false)), "%s did not resume continuously after the gate reopened" % kind)
 
 
 func _check(condition: bool, message: String) -> void:

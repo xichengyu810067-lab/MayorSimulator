@@ -51,13 +51,20 @@ func _initialize() -> void:
 	var active: Dictionary = coordinator.active_blueprint_status("公園")
 	_check(str(active.get("source", "")) == "player", "newly approved custom version becomes active")
 	_check(str(active.get("blueprint", {}).get("material_id", "")) == "eco_composite", "active custom blueprint retains approved parameters")
+	var selected_default: Dictionary = coordinator.select_approved_blueprint("公園", "default_park")
+	_check(bool(selected_default.get("ok", false)), "player can explicitly select the starter blueprint after approving a custom version")
+	_check(str(coordinator.active_blueprint_status("公園").get("library_id", "")) == "default_park", "explicit starter selection becomes active before save")
 
 	_check(coordinator.save_game(SAVE_PATH) == OK, "blueprint library saves")
 	var restored = coordinator_script.new(1, 1)
 	_check(restored.load_game(SAVE_PATH), "blueprint library loads")
 	_check(restored.blueprint_library.size() == coordinator.blueprint_library.size(), "save round trip retains the complete blueprint library")
-	_check(str(restored.active_blueprint_status("公園").get("library_id", "")) == str(active.get("library_id", "")), "save round trip retains active blueprint selection")
+	_check(str(restored.active_blueprint_status("公園").get("library_id", "")) == "default_park", "historical review replay does not overwrite the player's persisted active blueprint selection")
 	_check(restored.approved_blueprints("公園").size() == 2, "save round trip retains every approved park version")
+	var restored_build: Dictionary = restored.start_approved_building("公園", 15, 5)
+	_check(bool(restored_build.get("ok", false)), "restored active starter blueprint can start a new construction job")
+	_check(str(restored_build.get("blueprint_library_id", "")) == "default_park", "construction after restore uses the player's persisted active blueprint")
+	_check(str(restored_build.get("job", {}).get("metadata", {}).get("blueprint_library_id", "")) == "default_park", "restored construction job records the persisted blueprint library ID")
 
 	if _failed:
 		quit(1)

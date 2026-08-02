@@ -16,6 +16,55 @@ const PAGE_TITLES := {
 	"city_data": "城市數據",
 	"report": "月度報告",
 }
+const HEALTHCARE_SOURCE_KEYS := [
+	"正常",
+	"容量不足",
+	"無法服務",
+	"運作正常",
+	"容量低於需求",
+	"缺少醫院",
+	"缺少道路連接",
+	"維護未撥款",
+	"服務條件未滿足",
+	"%s｜%s｜服務 %d/%d｜覆蓋 %d%%",
+	"優先建造：醫院",
+	"請以道路連接醫院與城市建築。",
+	"恢復維護預算後才會提供醫療。",
+	"醫療容量不足，請維修或增建醫院。",
+	"醫療服務運作正常。",
+]
+const HEALTHCARE_LOCALIZATION_CASES := {
+	"zh_TW": {
+		"status": "無法服務",
+		"reason": "缺少道路連接",
+		"composite": "無法服務｜缺少道路連接｜服務 0/0｜覆蓋 0%",
+		"action": "醫療服務運作正常。",
+	},
+	"zh_CN": {
+		"status": "无法服务",
+		"reason": "缺少道路连接",
+		"composite": "无法服务｜缺少道路连接｜服务 0/0｜覆盖 0%",
+		"action": "医疗服务运行正常。",
+	},
+	"en": {
+		"status": "Unavailable",
+		"reason": "No road connection",
+		"composite": "Unavailable | No road connection | Serving 0/0 | Coverage 0%",
+		"action": "Healthcare service is operating normally.",
+	},
+	"ja": {
+		"status": "利用不可",
+		"reason": "道路接続がありません",
+		"composite": "利用不可｜道路接続がありません｜サービス提供 0/0｜カバー率 0%",
+		"action": "医療サービスは正常に稼働しています。",
+	},
+	"ko": {
+		"status": "서비스 불가",
+		"reason": "도로 연결 없음",
+		"composite": "서비스 불가｜도로 연결 없음｜서비스 0/0｜보장률 0%",
+		"action": "의료 서비스가 정상 운영 중입니다.",
+	},
+}
 
 var _failed := false
 var _failure_count := 0
@@ -95,6 +144,7 @@ func _run() -> void:
 		_l10n.set_locale(locale, false)
 		await _settle(4)
 		_validate_benchmark_format_templates(locale)
+		_validate_healthcare_localization(locale)
 		_check_visible_translation(main, locale, "新遊戲", "start screen")
 		_check_visible_translation(main, locale, "繼續遊戲", "start screen")
 		_check_visible_translation(main, locale, "語言", "start screen")
@@ -320,6 +370,28 @@ func _validate_benchmark_format_templates(locale: String) -> void:
 		var remaining := translated.replace("%s", "").replace("%%", "")
 		_check(translated.count("%s") == 2, "%s benchmark template preserves exactly two string placeholders: %s" % [locale, translated])
 		_check(not remaining.contains("%"), "%s benchmark template has no unsupported percent formatter: %s" % [locale, translated])
+
+
+func _validate_healthcare_localization(locale: String) -> void:
+	var catalog: Dictionary = _l10n.catalogs.get(locale, {})
+	for source in HEALTHCARE_SOURCE_KEYS:
+		_check(catalog.has(source), "%s healthcare catalog has exact key: %s" % [locale, source])
+	var expected: Dictionary = HEALTHCARE_LOCALIZATION_CASES[locale]
+	var status: String = _l10n.text("無法服務")
+	var reason: String = _l10n.text("缺少道路連接")
+	var composite: String = _l10n.text("%s｜%s｜服務 %d/%d｜覆蓋 %d%%") % [status, reason, 0, 0, 0]
+	var action: String = _l10n.text("醫療服務運作正常。")
+	_check(status == str(expected["status"]), "%s healthcare status is exact: %s" % [locale, status])
+	_check(reason == str(expected["reason"]), "%s healthcare reason is exact: %s" % [locale, reason])
+	_check(composite == str(expected["composite"]), "%s healthcare composite is exact: %s" % [locale, composite])
+	_check(action == str(expected["action"]), "%s healthcare action is exact: %s" % [locale, action])
+	if locale in ["en", "ko"]:
+		_check(not _contains_han(composite + action), "%s healthcare copy has no untranslated Han text: %s" % [locale, composite])
+	if locale == "zh_CN":
+		_check(
+			not _contains_any(composite + action, TRADITIONAL_ONLY_CHARACTERS),
+			"zh_CN healthcare copy has no Traditional-only text: %s" % composite
+		)
 
 
 func _contains_any(value: String, characters: String) -> bool:

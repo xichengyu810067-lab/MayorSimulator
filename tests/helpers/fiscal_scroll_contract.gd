@@ -5,11 +5,38 @@ extends RefCounted
 ## overflow, a truthful range, control reachability, and state restoration.
 
 const GEOMETRY_EPSILON := 1.5
-const REQUIRED_SLIDER_COUNT := 14
 
 
-static func validate(tree: SceneTree, overlay: Control, fiscal_tabs: TabContainer) -> Dictionary:
+static func expected_slider_names(scene: Object) -> Array[String]:
+	var names: Array[String] = []
+	if scene == null or not is_instance_valid(scene):
+		return names
+	var property_names: Array[StringName] = [&"tax_rates", &"utility_fees", &"service_fees"]
+	var prefixes: Array[String] = ["tax", "utility", "service"]
+	for index in property_names.size():
+		var property_name := property_names[index]
+		var definitions: Variant = scene.get(property_name)
+		if definitions is Dictionary:
+			var keys: Array = (definitions as Dictionary).keys()
+			keys.sort()
+			for key: Variant in keys:
+				names.append("FiscalSlider_%s_%s" % [prefixes[index], str(key)])
+	names.sort()
+	return names
+
+
+static func validate(
+	tree: SceneTree,
+	overlay: Control,
+	fiscal_tabs: TabContainer,
+	expected_slider_names: Array[String]
+) -> Dictionary:
 	var failures: Array[String] = []
+	var expected_name_set := {}
+	for slider_name in expected_slider_names:
+		if expected_name_set.has(slider_name):
+			failures.append("Authoritative fiscal dictionaries derived duplicate slider '%s'." % slider_name)
+		expected_name_set[slider_name] = true
 	var result := {
 		"ok": false,
 		"logical_viewport": [
@@ -26,6 +53,9 @@ static func validate(tree: SceneTree, overlay: Control, fiscal_tabs: TabContaine
 		"reached_range_end": false,
 		"content_moved": false,
 		"verified_slider_count": 0,
+		"verified_slider_names": [],
+		"expected_slider_count": expected_slider_names.size(),
+		"expected_slider_names": expected_slider_names,
 		"scroll_restored": false,
 		"tabs_restored": false,
 		"errors": failures,
@@ -50,6 +80,28 @@ static func validate(tree: SceneTree, overlay: Control, fiscal_tabs: TabContaine
 		failures.append("Fiscal ScrollContainer does not expose its range and content.")
 		result["errors"] = failures
 		return result
+
+	var actual_slider_names: Array[String] = []
+	var actual_name_set := {}
+	for node_variant in fiscal_tabs.find_children("FiscalSlider_*", "HSlider", true, false):
+		var slider := node_variant as HSlider
+		if slider == null:
+			continue
+		var slider_name := str(slider.name)
+		actual_slider_names.append(slider_name)
+		if actual_name_set.has(slider_name):
+			failures.append("Fiscal UI exposes duplicate slider node '%s'." % slider_name)
+		actual_name_set[slider_name] = true
+	actual_slider_names.sort()
+	if expected_slider_names.is_empty():
+		failures.append("Fiscal slider expectation could not be derived from the authoritative fiscal dictionaries.")
+	elif actual_slider_names != expected_slider_names:
+		failures.append(
+			"Fiscal UI slider names do not match the authoritative fiscal dictionaries: actual=%s expected=%s." % [
+				actual_slider_names,
+				expected_slider_names,
+			]
+		)
 
 	var original_scroll := Vector2i(fiscal_scroll.scroll_horizontal, fiscal_scroll.scroll_vertical)
 	var original_root_tab := fiscal_tabs.current_tab
@@ -109,12 +161,25 @@ static func validate(tree: SceneTree, overlay: Control, fiscal_tabs: TabContaine
 			subcategories.current_tab = subcategory_index
 			await _settle(tree, 2)
 			var leaf_slider_count := 0
+			var leaf_row_count := 0
+			for row_variant in fiscal_tabs.find_children("FiscalRow_*", "VBoxContainer", true, false):
+				var row := row_variant as VBoxContainer
+				if row == null or not row.is_visible_in_tree():
+					continue
+				leaf_row_count += 1
+				var row_sliders: Array[Node] = row.find_children("FiscalSlider_*", "HSlider", true, false)
+				if row_sliders.size() != 1:
+					failures.append(
+						"Fiscal row '%s' exposes %d sliders; expected exactly one." % [row.get_path(), row_sliders.size()]
+					)
+				elif not expected_name_set.has(str(row_sliders[0].name)):
+					failures.append("Fiscal row '%s' exposes unknown slider '%s'." % [row.get_path(), row_sliders[0].name])
 			for node_variant in fiscal_tabs.find_children("FiscalSlider_*", "HSlider", true, false):
 				var slider := node_variant as HSlider
 				if slider == null or not slider.is_visible_in_tree():
 					continue
 				leaf_slider_count += 1
-				verified_sliders[slider.get_instance_id()] = true
+				verified_sliders[str(slider.name)] = true
 				var raw_rect := slider.get_global_rect()
 				if not _rect_is_finite(raw_rect) or not raw_rect.has_area():
 					failures.append("Fiscal slider '%s' has invalid geometry: %s." % [slider.get_path(), raw_rect])
@@ -130,9 +195,27 @@ static func validate(tree: SceneTree, overlay: Control, fiscal_tabs: TabContaine
 					)
 			if leaf_slider_count < 2 or leaf_slider_count > 3:
 				failures.append("Fiscal category %d:%d exposes %d visible sliders; expected 2-3." % [category_index, subcategory_index, leaf_slider_count])
+			if leaf_row_count != leaf_slider_count:
+				failures.append(
+					"Fiscal category %d:%d exposes %d rows for %d sliders." % [
+						category_index,
+						subcategory_index,
+						leaf_row_count,
+						leaf_slider_count,
+					]
+				)
 	result["verified_slider_count"] = verified_sliders.size()
-	if verified_sliders.size() != REQUIRED_SLIDER_COUNT:
-		failures.append("Fiscal scroll traversal reached %d/%d sliders." % [verified_sliders.size(), REQUIRED_SLIDER_COUNT])
+	var verified_slider_names: Array[String] = []
+	verified_slider_names.assign(verified_sliders.keys())
+	verified_slider_names.sort()
+	result["verified_slider_names"] = verified_slider_names
+	if verified_slider_names != expected_slider_names:
+		failures.append(
+			"Fiscal scroll traversal did not reach the authoritative slider set: actual=%s expected=%s." % [
+				verified_slider_names,
+				expected_slider_names,
+			]
+		)
 
 	for snapshot in original_sub_tabs:
 		var subcategories := snapshot.get("tabs") as TabContainer
