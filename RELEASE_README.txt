@@ -1,4 +1,4 @@
-Mayor Simulator MVP - 內部測試包說明
+Mayor Simulator MVP Alpha 0.1.0-alpha.1 - 內部測試包說明
 ====================================
 
 版本定位

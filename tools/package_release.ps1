@@ -3,7 +3,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]*$')]
+    [ValidatePattern('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$')]
     [string]$Version,
 
     [Parameter(Mandatory)]
@@ -23,6 +23,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+$canonicalVersion = [IO.File]::ReadAllText((Join-Path $projectRoot 'VERSION'), [Text.Encoding]::UTF8).Trim()
+if ($Version -cne $canonicalVersion) {
+    throw "Package Version '$Version' does not match canonical VERSION '$canonicalVersion'."
+}
 
 if ([IO.Path]::IsPathRooted($OutputDirectory)) {
     $outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
