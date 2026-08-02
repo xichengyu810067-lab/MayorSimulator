@@ -16,6 +16,8 @@ const METRIC_EFFECT_KEYS := [
 	"satisfaction",
 ]
 
+const HEALTHCARE_SERVICE_MODEL_VERSION := "simplified_access_capacity_v1"
+
 
 static func compose_month_settlement(
 	tax_revenues: Dictionary,
@@ -220,15 +222,235 @@ static func service_fee_income(
 	else:
 		uses += population * 0.08 * count
 	var fee := int(service_fees.get(service_key, 0))
-	var ratio := float(fee) / maxf(1.0, float(definition.get("reasonable", 1)))
-	var demand_factor := 1.0
-	if ratio > 1.75:
-		demand_factor = 0.58
-	elif ratio > 1.25:
-		demand_factor = 0.78
-	elif ratio < 0.5:
-		demand_factor = 1.18
+	var demand_factor := _service_fee_demand_factor(fee, definition)
 	return int(round(uses * float(fee) * demand_factor))
+
+
+## Evaluates healthcare from authoritative building, road, durability, and
+## maintenance inputs. The result contains only JSON-safe scalar values so the
+## application layer can persist or compare it without introducing aliases.
+static func healthcare_service_result(input: Dictionary) -> Dictionary:
+	var demand := maxi(0, int(input.get("population", input.get("demand", 0))))
+	var capacity_per_facility := maxi(0, int(input.get("capacity_per_facility", 0)))
+	var max_metric_bonus := maxi(0, int(input.get("max_metric_bonus", 0)))
+	var durability_records: Dictionary = (
+		input.get("durability_records", {})
+		if input.get("durability_records", {}) is Dictionary
+		else {}
+	)
+	var access_tiles := _healthcare_access_tile_set(input.get("road_access_components", []))
+	var facilities := _healthcare_facility_records(input.get("building_records", {}))
+	var active_facility_count := facilities.size()
+	if active_facility_count == 0:
+		return _healthcare_result(
+			"unavailable", "facility_missing", 0, 0, 0, demand, 0, 0.0, 0
+		)
+
+	var accessible_facilities: Array[Dictionary] = []
+	for facility: Dictionary in facilities:
+		var tile_index := int(facility.get("tile_index", facility.get("tile_id", -1)))
+		if access_tiles.has(tile_index):
+			accessible_facilities.append(facility)
+	if accessible_facilities.is_empty():
+		return _healthcare_result(
+			"unavailable", "road_missing", active_facility_count, 0, 0, demand, 0, 0.0, 0
+		)
+
+	var maintenance_ready := (
+		bool(input.get("maintenance_enabled", true))
+		and int(input.get("unpaid_maintenance_months", 0)) == 0
+	)
+	if not maintenance_ready:
+		return _healthcare_result(
+			"unavailable", "maintenance_unfunded", active_facility_count,
+			accessible_facilities.size(), 0, demand, 0, 0.0, 0
+		)
+
+	var operational_facility_count := 0
+	var effective_capacity := 0
+	for facility: Dictionary in accessible_facilities:
+		var efficiency := _healthcare_facility_efficiency(facility, durability_records)
+		if efficiency <= 0.0:
+			continue
+		operational_facility_count += 1
+		effective_capacity += int(round(float(capacity_per_facility) * efficiency))
+	var served := mini(demand, effective_capacity)
+	var coverage := 1.0 if demand == 0 and operational_facility_count > 0 else 0.0
+	if demand > 0:
+		coverage = clampf(float(served) / float(demand), 0.0, 1.0)
+	var metric_bonus := int(round(float(max_metric_bonus) * coverage))
+	var reason_code := "operational" if served >= demand and operational_facility_count > 0 else "capacity_shortfall"
+	var status := "operational" if reason_code == "operational" else "degraded"
+	return _healthcare_result(
+		status,
+		reason_code,
+		active_facility_count,
+		accessible_facilities.size(),
+		operational_facility_count,
+		demand,
+		served,
+		coverage,
+		metric_bonus,
+		effective_capacity
+	)
+
+
+## Calculates medical-service income from facilities that passed the healthcare
+## gates and the residents actually served. Other service_fee_income callers
+## retain their legacy city-grid API and formulas.
+static func medical_service_revenue(
+	population: int,
+	fee: int,
+	service_definition: Dictionary,
+	result: Dictionary
+) -> int:
+	var reason_code := str(result.get("reason_code", ""))
+	if reason_code not in ["operational", "capacity_shortfall"]:
+		return 0
+	var operational_facility_count := maxi(
+		0,
+		int(result.get("operational_facility_count", result.get("count", 0)))
+	)
+	var served := mini(maxi(0, population), maxi(0, int(result.get("served", 0))))
+	if operational_facility_count <= 0 or served <= 0 or fee <= 0:
+		return 0
+	var uses := float(service_definition.get("base_uses", 0.0)) * operational_facility_count
+	uses += float(served) * 0.08
+	return int(round(
+		uses
+		* float(fee)
+		* _service_fee_demand_factor(fee, service_definition)
+	))
+
+
+static func _healthcare_facility_records(building_records_value: Variant) -> Array[Dictionary]:
+	var records: Array[Dictionary] = []
+	if building_records_value is Dictionary:
+		var building_records: Dictionary = building_records_value
+		var building_ids: Array = building_records.keys()
+		building_ids.sort_custom(func(a: Variant, b: Variant) -> bool: return str(a) < str(b))
+		for building_id_variant: Variant in building_ids:
+			var record_value: Variant = building_records[building_id_variant]
+			if not record_value is Dictionary:
+				continue
+			var record: Dictionary = (record_value as Dictionary).duplicate(true)
+			if not record.has("building_id"):
+				record["building_id"] = str(building_id_variant)
+			if _is_active_healthcare_facility(record):
+				records.append(record)
+	elif building_records_value is Array:
+		for record_value: Variant in building_records_value:
+			if record_value is Dictionary and _is_active_healthcare_facility(record_value as Dictionary):
+				records.append((record_value as Dictionary).duplicate(true))
+		records.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+			var a_id := str(a.get("building_id", ""))
+			var b_id := str(b.get("building_id", ""))
+			if a_id == b_id:
+				return int(a.get("tile_index", a.get("tile_id", -1))) < int(b.get("tile_index", b.get("tile_id", -1)))
+			return a_id < b_id
+		)
+	return records
+
+
+static func _is_active_healthcare_facility(record: Dictionary) -> bool:
+	var definition_id := str(record.get("definition_id", "")).to_lower()
+	var building_name := str(record.get("building_name", ""))
+	if definition_id != "hospital" and building_name != "醫院":
+		return false
+	return str(record.get("status", "active")) not in ["scrapped", "demolition"]
+
+
+static func _healthcare_access_tile_set(components_value: Variant) -> Dictionary:
+	var components: Array = []
+	if components_value is Array:
+		components = components_value
+	elif components_value is Dictionary:
+		var component_map: Dictionary = components_value
+		var component_ids: Array = component_map.keys()
+		component_ids.sort_custom(func(a: Variant, b: Variant) -> bool: return str(a) < str(b))
+		for component_id: Variant in component_ids:
+			components.append(component_map[component_id])
+	var tiles: Dictionary = {}
+	for component_value: Variant in components:
+		if not component_value is Dictionary:
+			continue
+		var tile_ids_value: Variant = (component_value as Dictionary).get("access_tile_ids", [])
+		if tile_ids_value is Array:
+			for tile_id_value: Variant in tile_ids_value:
+				tiles[int(tile_id_value)] = true
+		elif tile_ids_value is PackedInt32Array:
+			for tile_id: int in tile_ids_value:
+				tiles[tile_id] = true
+		elif tile_ids_value is PackedInt64Array:
+			for tile_id: int in tile_ids_value:
+				tiles[tile_id] = true
+	return tiles
+
+
+static func _healthcare_facility_efficiency(
+	facility: Dictionary,
+	durability_records: Dictionary
+) -> float:
+	var building_id := str(facility.get("building_id", facility.get("id", "")))
+	var durability_value: Variant = durability_records.get(building_id, {})
+	var durability_record: Dictionary = durability_value if durability_value is Dictionary else {}
+	if str(durability_record.get("status", "active")) == "scrapped":
+		return 0.0
+	if durability_record.has("efficiency"):
+		return clampf(float(durability_record.get("efficiency", 0.0)), 0.0, 1.0)
+	var durability := clampi(
+		int(durability_record.get("durability", facility.get("durability", 100))),
+		0,
+		100
+	)
+	if durability >= 90:
+		return 1.0
+	if durability >= 80:
+		return 0.8
+	if durability >= 60:
+		return 0.6
+	if durability >= 40:
+		return 0.4
+	return 0.0
+
+
+static func _healthcare_result(
+	status: String,
+	reason_code: String,
+	facility_count: int,
+	road_accessible_facility_count: int,
+	operational_facility_count: int,
+	demand: int,
+	served: int,
+	coverage: float,
+	metric_bonus: int,
+	capacity: int = 0
+) -> Dictionary:
+	return {
+		"model_version": HEALTHCARE_SERVICE_MODEL_VERSION,
+		"status": status,
+		"reason_code": reason_code,
+		"count": operational_facility_count,
+		"facility_count": facility_count,
+		"road_accessible_facility_count": road_accessible_facility_count,
+		"operational_facility_count": operational_facility_count,
+		"capacity": capacity,
+		"demand": demand,
+		"served": served,
+		"coverage": coverage,
+		"metric_bonus": metric_bonus,
+	}
+
+
+static func _service_fee_demand_factor(fee: int, definition: Dictionary) -> float:
+	var ratio := float(fee) / maxf(1.0, float(definition.get("reasonable", 1)))
+	if ratio > 1.75:
+		return 0.58
+	if ratio > 1.25:
+		return 0.78
+	if ratio < 0.5:
+		return 1.18
+	return 1.0
 
 
 static func maintenance_cost(city_grid: Array, buildings: Dictionary) -> int:

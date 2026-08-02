@@ -394,13 +394,18 @@ func generate_requests(game_day: int, city_context: Dictionary, max_new: int = 4
 	var required_hospitals := maxi(1, ceili(float(resident_count) / 250.0))
 	var required_schools := maxi(1, ceili(float(resident_count) / 200.0))
 	var parks := int(city_context.get("park_count", city_context.get("parks", 0)))
-	var hospitals := int(city_context.get("hospital_count", city_context.get("hospitals", 0)))
+	var hospitals := _effective_hospital_count(city_context)
+	var has_effective_hospital_capacity := _has_effective_hospital_capacity(city_context)
+	var effective_hospital_capacity := _effective_hospital_capacity(city_context)
 	var schools := int(city_context.get("school_count", city_context.get("schools", 0)))
 	var utility_fee := int(city_context.get("utility_fee", 0))
 	if parks < required_parks:
 		candidates.append(_request_template("park", {"target_min": required_parks}))
-	if hospitals < required_hospitals:
-		candidates.append(_request_template("hospital", {"target_min": required_hospitals}))
+	if hospitals < required_hospitals or (has_effective_hospital_capacity and effective_hospital_capacity < resident_count):
+		var hospital_payload := {"target_min": required_hospitals}
+		if has_effective_hospital_capacity:
+			hospital_payload["target_capacity"] = resident_count
+		candidates.append(_request_template("hospital", hospital_payload))
 	if schools < required_schools:
 		candidates.append(_request_template("school", {"target_min": required_schools}))
 	if utility_fee > 80:
@@ -463,7 +468,15 @@ func can_complete_request(request_id: String, city_context: Dictionary) -> bool:
 		"park":
 			return int(city_context.get("park_count", city_context.get("parks", 0))) >= int(request.payload.get("target_min", 1))
 		"hospital":
-			return int(city_context.get("hospital_count", city_context.get("hospitals", 0))) >= int(request.payload.get("target_min", 1))
+			if _effective_hospital_count(city_context) < int(request.payload.get("target_min", 1)):
+				return false
+			if _has_effective_hospital_capacity(city_context):
+				var target_capacity := maxi(
+					1,
+					int(request.payload.get("target_capacity", records.size()))
+				)
+				return _effective_hospital_capacity(city_context) >= target_capacity
+			return true
 		"school":
 			return int(city_context.get("school_count", city_context.get("schools", 0))) >= int(request.payload.get("target_min", 1))
 		"lower_fee":
@@ -485,6 +498,28 @@ func complete_request(request_id: String, game_day: int, city_context: Dictionar
 		"title": request.title,
 	})
 	return true
+
+
+func _effective_hospital_count(city_context: Dictionary) -> int:
+	if city_context.has("operational_hospital_count"):
+		return maxi(0, int(city_context.get("operational_hospital_count", 0)))
+	return maxi(0, int(city_context.get("hospital_count", city_context.get("hospitals", 0))))
+
+
+func _has_effective_hospital_capacity(city_context: Dictionary) -> bool:
+	return (
+		city_context.has("operational_hospital_capacity")
+		or city_context.has("effective_hospital_capacity")
+		or city_context.has("healthcare_capacity")
+	)
+
+
+func _effective_hospital_capacity(city_context: Dictionary) -> int:
+	if city_context.has("operational_hospital_capacity"):
+		return maxi(0, int(city_context.get("operational_hospital_capacity", 0)))
+	if city_context.has("effective_hospital_capacity"):
+		return maxi(0, int(city_context.get("effective_hospital_capacity", 0)))
+	return maxi(0, int(city_context.get("healthcare_capacity", 0)))
 
 
 func active_requests() -> Array[Dictionary]:

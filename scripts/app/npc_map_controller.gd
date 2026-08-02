@@ -65,6 +65,8 @@ var _dark_mode := false
 var _navigation
 var _tile_centers := PackedVector2Array()
 var _blocked_tiles: Dictionary = {}
+var _crossing_tile_ids := PackedInt32Array()
+var _crossing_states: Dictionary = {}
 var _iso_tile_size := Vector2(128, 128)
 var _iso_tile_step := Vector2(72, 40)
 
@@ -87,6 +89,8 @@ func unmount() -> void:
 	_navigation = null
 	_tile_centers.clear()
 	_blocked_tiles.clear()
+	_crossing_tile_ids.clear()
+	_crossing_states.clear()
 
 
 func rebuild_actor_pool(authoritative_proxies: Array[Dictionary], dark_mode: bool) -> void:
@@ -209,6 +213,12 @@ func sync_map_snapshot(map_snapshot: Dictionary) -> void:
 	_tile_centers = PackedVector2Array(map_snapshot.get("tile_centers", PackedVector2Array())).duplicate()
 	_iso_tile_size = Vector2(map_snapshot.get("iso_tile_size", _iso_tile_size))
 	_iso_tile_step = Vector2(map_snapshot.get("iso_tile_step", _iso_tile_step))
+	_crossing_tile_ids.clear()
+	for tile_variant: Variant in map_snapshot.get("crossing_tile_ids", []):
+		var crossing_tile_id := int(tile_variant)
+		if crossing_tile_id >= 0 and not _crossing_tile_ids.has(crossing_tile_id):
+			_crossing_tile_ids.append(crossing_tile_id)
+	_crossing_tile_ids.sort()
 	_blocked_tiles.clear()
 	var declared_blocked_tiles := Dictionary(map_snapshot.get("blocked_tiles", {}))
 	for tile_variant: Variant in declared_blocked_tiles.keys():
@@ -265,6 +275,48 @@ func sync_map_snapshot(map_snapshot: Dictionary) -> void:
 				true,
 				structure_half_extents
 			)
+	_sync_navigation_crossing_apertures()
+
+
+## Crossing animation and NPC navigation share the same authoritative closed
+## bit.  Flash-only changes are deliberately ignored so warning-light frames do
+## not trigger city-wide A* rebuilds or resident replans.
+func set_crossing_states(states: Dictionary) -> void:
+	var previously_open := _open_crossing_tile_ids()
+	_crossing_states = states.duplicate(true)
+	var currently_open := _open_crossing_tile_ids()
+	if currently_open == previously_open:
+		return
+	_sync_navigation_crossing_apertures()
+	if not _proxy_states.is_empty():
+		repath_all()
+
+
+func get_open_crossing_tile_ids() -> PackedInt32Array:
+	return _open_crossing_tile_ids()
+
+
+func _sync_navigation_crossing_apertures() -> void:
+	if _navigation != null and _navigation.has_method("set_transport_crossing_apertures"):
+		_navigation.set_transport_crossing_apertures(_open_crossing_tile_ids())
+
+
+func _open_crossing_tile_ids() -> PackedInt32Array:
+	var result := PackedInt32Array()
+	for tile_id: int in _crossing_tile_ids:
+		if _crossing_is_open(tile_id):
+			result.append(tile_id)
+	return result
+
+
+func _crossing_is_open(tile_id: int) -> bool:
+	if not _crossing_tile_ids.has(tile_id):
+		return false
+	var state_variant: Variant = _crossing_states.get(
+		str(tile_id), _crossing_states.get(tile_id, {})
+	)
+	var state: Dictionary = state_variant if state_variant is Dictionary else {}
+	return not bool(state.get("closed", false))
 
 
 func _snapshot_vector2(
@@ -646,7 +698,11 @@ func _npc_tile_at_feet(feet_position: Vector2) -> int:
 
 
 func _npc_tile_has_obstacle(tile_index: int) -> bool:
-	return tile_index >= 0 and _blocked_tiles.has(tile_index)
+	return (
+		tile_index >= 0
+		and _blocked_tiles.has(tile_index)
+		and not _crossing_is_open(tile_index)
+	)
 
 
 func _occupied_npc_route_slots(except_npc_index: int = -1) -> Dictionary:
