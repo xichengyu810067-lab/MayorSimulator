@@ -138,8 +138,8 @@ staging 補檔，也不會修改、刪除或覆寫 staging。
 
 ```powershell
 & .\tools\package_release.ps1 `
-    -Version '2026.07.31' `
-    -OutputDirectory '.\.tmp\release-output\2026.07.31' `
+    -Version '0.1.0-alpha.1' `
+    -OutputDirectory '.\.tmp\release-output\0.1.0-alpha.1' `
     -DryRun
 ```
 
@@ -147,8 +147,8 @@ staging 補檔，也不會修改、刪除或覆寫 staging。
 
 ```powershell
 & .\tools\package_release.ps1 `
-    -Version '2026.07.31' `
-    -OutputDirectory '.\.tmp\release-output\2026.07.31'
+    -Version '0.1.0-alpha.1' `
+    -OutputDirectory '.\.tmp\release-output\0.1.0-alpha.1'
 ```
 
 預設會讀取 `builds/windows` 與 `builds/linux`。若要封裝其他已驗證 staging，可另外傳入
@@ -176,11 +176,11 @@ exit code。它會在同一次執行中完成目前 manifest 的全部斷言、�
 
 ```powershell
 & .\tools\write_release_evidence.ps1 `
-    -Version '2026.07.31' `
+    -Version '0.1.0-alpha.1' `
     -GodotExe 'C:\path\to\Godot_v4.7-stable_win64_console.exe' `
     -TemplatesArchive 'C:\path\to\Godot_v4.7-stable_export_templates.tpz' `
     -ExportAppDataRoot 'C:\tmp\mayor-release-appdata-20260731-run1' `
-    -OutputRoot '.\.tmp\release-acceptance\2026.07.31-run1'
+    -OutputRoot '.\.tmp\release-acceptance\0.1.0-alpha.1-run1'
 ```
 
 來源 gate 會逐位元涵蓋 `assets`、`data`、`scenes`、`scripts`、`systems`、`tests`、`tools`、`ui`、

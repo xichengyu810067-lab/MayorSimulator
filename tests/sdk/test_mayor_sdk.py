@@ -6,6 +6,7 @@ import json
 import sys
 import tempfile
 import unittest
+import re
 from contextlib import redirect_stdout
 from datetime import UTC, datetime
 from pathlib import Path
@@ -94,10 +95,22 @@ class MayorSdkTests(unittest.TestCase):
     def test_version_inventory_keeps_layers_explicit_and_consistent(self):
         manifest = mayor_sdk.load_manifest()
         inventory = mayor_sdk._version_inventory(manifest)
+        semantic_version = (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        self.assertEqual(semantic_version, inventory["release"]["semantic_version"])
+        self.assertRegex(
+            semantic_version,
+            r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
+            r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+            r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$",
+        )
+        core = re.split(r"[-+]", semantic_version, maxsplit=1)[0]
+        expected_windows_version = f"{core}.0"
         self.assertEqual(
             inventory["release"]["file_version"],
             inventory["release"]["product_version"],
         )
+        self.assertEqual(expected_windows_version, inventory["release"]["product_version"])
+        self.assertEqual("v<SEMVER>", inventory["release"]["ci_tag_format"])
         self.assertTrue(inventory["sdk"]["compatible"])
         self.assertEqual(1, len(set(inventory["content"].values())))
         self.assertNotIn(None, inventory["schemas"].values())
@@ -105,6 +118,23 @@ class MayorSdkTests(unittest.TestCase):
             item for item in mayor_sdk._check_version_contracts(manifest) if item.status == "fail"
         ]
         self.assertEqual([], failures)
+
+    def test_release_automation_uses_canonical_semver(self):
+        workflow = (PROJECT_ROOT / ".github" / "workflows" / "godot-ci.yml").read_text(
+            encoding="utf-8"
+        )
+        package_script = (PROJECT_ROOT / "tools" / "package_release.ps1").read_text(
+            encoding="utf-8-sig"
+        )
+        evidence_script = (
+            PROJECT_ROOT / "tools" / "write_release_evidence.ps1"
+        ).read_text(encoding="utf-8-sig")
+        self.assertIn("project_version=\"$(tr -d '\\r\\n' < VERSION)\"", workflow)
+        self.assertIn('"${GITHUB_REF_NAME}" != "v${project_version}"', workflow)
+        self.assertNotIn("YYYY.MM.DD", workflow)
+        self.assertIn("does not match canonical VERSION", package_script)
+        self.assertIn("does not match canonical VERSION", evidence_script)
+        self.assertIn("$versionCore = ($Version -split '[-+]', 2)[0]", evidence_script)
 
     def test_git_inventory_distinguishes_unborn_repository_from_commit(self):
         with tempfile.TemporaryDirectory() as temp:

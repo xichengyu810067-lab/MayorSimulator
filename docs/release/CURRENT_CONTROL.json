@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "record_kind": "mayor_simulator_live_control_pointer",
-  "captured_at": "2026-08-03T01:11:10.4285395+08:00",
+  "captured_at": "2026-08-03T02:16:50.5689863+08:00",
   "task": {
     "thread_id": "019fa248-259e-7040-a887-cc73da543621",
     "title": "Mayor Simulator｜專案中控中心",
-    "status_at_capture": "complete",
-    "completed_at": "2026-08-03T00:34:13.0000000+08:00",
-    "completion_authority": "Codex update_goal result"
+    "status_at_capture": "active",
+    "completed_at": null,
+    "completion_authority": "Current /goal remains active until tag CI and private pre-release verification complete"
   },
   "versioning": {
     "product_stage": "MVP Alpha",
@@ -18,14 +18,16 @@
       "pre-release",
       "release"
     ],
-    "github_release_allowed": false,
-    "github_release_block_reason": "Public-release governance gates remain blocked; publish this checkpoint through a Draft PR only."
+    "target_tag": "v0.1.0-alpha.1",
+    "github_private_prerelease_allowed": true,
+    "github_public_release_allowed": false,
+    "github_public_release_block_reason": "Public-release governance gates remain blocked; only an access-controlled MVP Alpha pre-release is authorized."
   },
   "authority": {
     "project_root": "C:\\Users\\XCJ\\遊戲\\MayorSimulator_Authoritative_2026-08-02",
-    "branch": "recovery/validated-handoff-20260802",
-    "base_commit": "ecec3e4f9cb592ee43f198f51bf9d1c2696d0ac3",
-    "sdk_gitlink_commit": "619a50a6af4573f4f51d90d0c270e34890c25b39",
+    "branch": "agent/semver-alpha-release",
+    "base_commit": "8769f78118f1afbf2cf0cb7e060e1bd698477be6",
+    "sdk_gitlink_commit": "956f0414b6cd42dc8b7a648e3ce942d7e061430a",
     "dirty_worktree_is_authoritative_wip": true
   },
   "historical_snapshots": [
@@ -112,8 +114,7 @@
         "No selected root LICENSE or COPYING file",
         "88 runtime assets remain blocked for distribution-rights approval",
         "City-map background source rights remain unresolved",
-        "Train-station provenance remains blocked",
-        "Windows and Linux release staging each lack RELEASE_README.txt (4 of 5 required files present)"
+        "Train-station provenance remains blocked"
       ]
     }
   },

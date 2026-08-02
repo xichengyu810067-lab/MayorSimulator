@@ -3,7 +3,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidatePattern('^[0-9]{4}\.[0-9]{2}\.[0-9]{2}$')]
+    [ValidatePattern('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$')]
     [string]$Version,
 
     [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$GodotExe,
@@ -975,7 +975,12 @@ if ($templatesArchiveHash -cne $OFFICIAL_GODOT_47_TEMPLATES_SHA256) {
 
 Assert-SourceUidCompanions
 $sourceStart = Get-MayorSourceFingerprint -ProjectRoot $projectRoot
-$versionParts = $Version.Split('.')
+$canonicalVersion = [IO.File]::ReadAllText((Join-Path $projectRoot 'VERSION'), [Text.Encoding]::UTF8).Trim()
+if ($Version -cne $canonicalVersion) {
+    throw "Release Version '$Version' does not match canonical VERSION '$canonicalVersion'."
+}
+$versionCore = ($Version -split '[-+]', 2)[0]
+$versionParts = $versionCore.Split('.')
 $expectedWindowsVersion = '{0}.{1}.{2}.0' -f ([int]$versionParts[0]), ([int]$versionParts[1]), ([int]$versionParts[2])
 $presetText = [IO.File]::ReadAllText((Join-Path $projectRoot 'export_presets.cfg'), [Text.Encoding]::UTF8)
 if ($presetText.IndexOf("application/file_version=`"$expectedWindowsVersion`"", [StringComparison]::Ordinal) -lt 0 -or
