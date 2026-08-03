@@ -10,6 +10,7 @@ import re
 from contextlib import redirect_stdout
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest import mock
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -257,6 +258,21 @@ class MayorSdkTests(unittest.TestCase):
         self.assertIn("MAYOR_PROJECT_ROOT", wrapper)
         self.assertIn(".venv\\Scripts\\python.exe", wrapper)
         self.assertIn(".cache\\codex-runtimes", wrapper)
+
+    def test_doctor_warns_when_discovered_powershell_is_not_executable(self):
+        inaccessible = r"C:\\Users\\example\\AppData\\Local\\Microsoft\\WindowsApps\\pwsh.exe"
+        with (
+            mock.patch.object(mayor_sdk.shutil, "which", return_value=inaccessible),
+            mock.patch.object(
+                mayor_sdk.subprocess,
+                "run",
+                side_effect=OSError(1920, "The file cannot be accessed by the system"),
+            ),
+        ):
+            check = mayor_sdk._powershell_check()
+        self.assertEqual("warn", check.status)
+        self.assertIn("not executable", check.detail)
+        self.assertIn("release commands are unavailable", check.detail)
 
 
 if __name__ == "__main__":
