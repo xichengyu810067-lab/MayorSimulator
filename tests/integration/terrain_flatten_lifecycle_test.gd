@@ -28,9 +28,10 @@ func _run() -> void:
 
 func _test_async_flatten_lifecycle() -> void:
 	var coordinator = CoordinatorScript.new(8_020_701, 500_000)
-	var tile_id := int(coordinator.terrain_map.tile_id_for_coordinate(Vector2i(7, 7)))
+	var tile_id := _first_backdrop_terrain_tile(coordinator, "trees")
 	var initial_terrain: Dictionary = coordinator.terrain_state_for_tile(tile_id)
-	_check(str(initial_terrain.get("base_kind", "")) == "trees", "fixture is not authored woodland")
+	_check(tile_id >= 0 and str(initial_terrain.get("base_kind", "")) == "trees", "fixture is not backdrop-derived woodland")
+	_check(not Array(initial_terrain.get("backdrop_feature_ids", [])).is_empty(), "woodland fixture has no backdrop feature provenance")
 	_check(not bool(initial_terrain.get("buildable", true)), "fixture starts buildable")
 
 	var quote: Dictionary = coordinator.terrain_flatten_quote(tile_id)
@@ -117,7 +118,8 @@ func _test_async_flatten_lifecycle() -> void:
 
 func _test_pre_schema_five_migration() -> void:
 	var legacy = CoordinatorScript.new(8_020_702, 500_000)
-	var occupied_tile := int(legacy.terrain_map.tile_id_for_coordinate(Vector2i(7, 7)))
+	var occupied_tile := _first_backdrop_terrain_tile(legacy, "trees")
+	_check(occupied_tile >= 0, "legacy fixture has no background-derived blocked tile")
 	var seeded: Dictionary = legacy.register_existing_building(occupied_tile, "住宅")
 	_check(not seeded.is_empty(), "legacy fixture building was not registered")
 	legacy._stash_subsystems()
@@ -178,6 +180,17 @@ func _event_count(events: Array[Dictionary], event_type: String) -> int:
 		if str(event.get("type", "")) == event_type:
 			count += 1
 	return count
+
+
+func _first_backdrop_terrain_tile(coordinator, preferred_kind: String) -> int:
+	for state_variant: Variant in coordinator.terrain_map.all_tile_states():
+		var state: Dictionary = state_variant
+		if (
+			str(state.get("base_kind", "")) == preferred_kind
+			and not Array(state.get("backdrop_feature_ids", [])).is_empty()
+		):
+			return int(state.get("tile_id", -1))
+	return -1
 
 
 func _cleanup_saves() -> void:

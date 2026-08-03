@@ -95,6 +95,7 @@ func _run() -> void:
 		"final structure blocker lost its building classification"
 	)
 	_validate_transport_crossing_aperture(controller, navigation, building_centers)
+	_validate_backdrop_flatten_aperture(navigation)
 
 	if not _failed:
 		print("Terrain navigation blocker test passed. Checks=%d TerrainKinds=5 BuildingRetained=1" % _checks)
@@ -173,6 +174,19 @@ func _validate_all_terrain_blockers(navigation, centers: PackedVector2Array) -> 
 			not navigation.is_position_walkable(centers[tile_id]),
 			"%s center remains walkable" % TERRAIN_KINDS[tile_id]
 		)
+
+
+func _validate_backdrop_flatten_aperture(navigation) -> void:
+	var lake_point := Vector2(640, 260)
+	_check(
+		navigation.static_classification_at(lake_point).has("river_lake"),
+		"known lake point is absent from the backdrop model"
+	)
+	_check(not navigation.is_position_walkable(lake_point), "NPC can walk on the backdrop lake")
+	navigation.set_flattened_terrain_apertures({97: lake_point}, Vector2(74, 46))
+	_check(navigation.is_position_walkable(lake_point), "completed earthworks did not open the flattened backdrop plot")
+	var apertures: Array[Dictionary] = navigation.get_debug_flattened_terrain_apertures()
+	_check(apertures.size() == 1 and int(apertures[0].get("tile_index", -1)) == 97, "flattened backdrop aperture is not traceable")
 
 
 func _records_by_id(records: Array[Dictionary]) -> Dictionary:

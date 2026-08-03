@@ -2,6 +2,7 @@ extends SceneTree
 
 const CoordinatorScript = preload("res://scripts/app/vertical_slice_coordinator.gd")
 const CityTerrainMapScript = preload("res://scripts/world/city_terrain_map.gd")
+const GameSessionScript = preload("res://scripts/core/game_session.gd")
 
 const CURRENT_SAVE_PATH := "user://goal_2026_08_01/transport_coordinator_round_trip.json"
 const LEGACY_SAVE_PATH := "user://goal_2026_08_01/transport_coordinator_schema5.json"
@@ -22,7 +23,7 @@ func _run() -> void:
 	if failed:
 		quit(1)
 	else:
-		print("Transport coordinator integration test passed. Checks=%d Schema=6" % checks)
+		print("Transport coordinator integration test passed. Checks=%d Schema=%d" % [checks, GameSessionScript.MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA])
 		quit(0)
 
 
@@ -88,10 +89,14 @@ func _validate_project_route_and_current_round_trip() -> void:
 	var enabled: Dictionary = coordinator.set_transport_route_enabled(route_id, true, city_grid)
 	_check(bool(enabled.get("ok", false)) and str(enabled.get("route", {}).get("status", "")) == "operational", "valid route must resume operation")
 
-	_check(coordinator.save_game(CURRENT_SAVE_PATH) == OK, "schema 7 transport save must succeed")
-	_check(int(coordinator.session.state.metadata.get("vertical_slice", {}).get("schema_version", 0)) == 7, "current save must use vertical-slice schema 7")
+	_check(coordinator.save_game(CURRENT_SAVE_PATH) == OK, "current-schema transport save must succeed")
+	_check(
+		int(coordinator.session.state.metadata.get("vertical_slice", {}).get("schema_version", 0))
+		== GameSessionScript.MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA,
+		"current save must use the maximum supported vertical-slice schema"
+	)
 	var restored = CoordinatorScript.new(1, 1)
-	_check(restored.load_game(CURRENT_SAVE_PATH), "schema 7 transport save must load")
+	_check(restored.load_game(CURRENT_SAVE_PATH), "current-schema transport save must load")
 	_check(restored.transport.segments.size() == 1 and restored.transport.facilities.size() == 1, "transport infrastructure must survive save/load")
 	_check(restored.transport.routes.has(route_id), "route must survive save/load")
 	_check(str(restored.transport.routes.get(route_id, {}).get("status", "")) == "operational", "valid enabled route must remain operational after load")

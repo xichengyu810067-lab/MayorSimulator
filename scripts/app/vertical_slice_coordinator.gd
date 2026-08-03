@@ -1659,7 +1659,7 @@ func _sync_governance_to_core(reason_tag: String) -> void:
 func _stash_subsystems() -> void:
 	var blueprint_snapshot: Dictionary = blueprint_library_service.snapshot()
 	session.state.metadata["vertical_slice"] = {
-		"schema_version": 7,
+		"schema_version": 8,
 		"construction": construction.to_dict(),
 		"durability": durability.to_dict(),
 		"governance": governance.to_dict(),
@@ -1716,10 +1716,11 @@ func _restore_subsystems() -> void:
 		var suffix := str(building_id).trim_prefix("building_")
 		if suffix.is_valid_int():
 			next_building_sequence = maxi(next_building_sequence, int(suffix) + 1)
-	# Saves created before terrain schema 5 had no authored terrain snapshot.
-	# Only those legacy cities normalize occupied/worksite tiles. Current
-	# terrain-flatten jobs must remain unflattened until their completion day.
-	if source_schema < 5:
+	# Schema 8 replaces decorative terrain tiles with geometry derived from the
+	# original city backdrop. Preserve existing buildings/worksites whose plots
+	# are newly classified as natural terrain. Active earthworks from schema 5+
+	# remain blocked until their normal completion day.
+	if source_schema < 8:
 		for building_variant: Variant in session.state.buildings.values():
 			var building_record: Dictionary = building_variant
 			var occupied_tile := int(building_record.get("tile_index", -1))
@@ -1727,6 +1728,12 @@ func _restore_subsystems() -> void:
 				terrain_map.flatten_tile(occupied_tile)
 		for job_variant: Variant in construction.active_jobs():
 			var job: Dictionary = job_variant
+			var job_metadata: Dictionary = job.get("metadata", {})
+			if (
+				source_schema >= 5
+				and str(job_metadata.get("entity_kind", "")) == ConstructionSystemScript.TERRAIN_FLATTEN_ENTITY_KIND
+			):
+				continue
 			for job_tile: int in _construction_job_tile_indices(job):
 				if terrain_map.is_valid_tile_id(job_tile) and not terrain_map.is_buildable(job_tile):
 					terrain_map.flatten_tile(job_tile)

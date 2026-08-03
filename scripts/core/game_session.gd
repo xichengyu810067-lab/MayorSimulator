@@ -16,7 +16,7 @@ signal state_changed(view_model: Dictionary)
 
 const CONTENT_VERSION := "vertical_slice_1"
 const DEFAULT_SAVE_PATH := "user://mayor_simulator/autosave.json"
-const MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA := 7
+const MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA := 8
 const MAX_SUPPORTED_POPULATION_SCHEMA := 2
 const MAX_SUPPORTED_NPC_RECORD_SCHEMA := 2
 const TERMINAL_FAILURE_REASONS := [
@@ -370,8 +370,9 @@ func _validate_vertical_slice_metadata(restored_state, runtime: Dictionary) -> b
 				return false
 	# Schema 6 makes construction, blueprint selection, and the player-authored
 	# transport network authoritative. Schema 7 adds the complete terrain snapshot
-	# and asynchronous terrain-job cross-links. Earlier schemas retain their
-	# established migration paths in VerticalSliceCoordinator.
+	# and asynchronous terrain-job cross-links. Schema 8 derives natural terrain
+	# from the original city backdrop. Earlier schemas retain their established
+	# migration paths in VerticalSliceCoordinator.
 	if schema_version >= 6:
 		if runtime.is_empty() or not _validate_current_vertical_sequences(vertical, restored_state, runtime):
 			return false

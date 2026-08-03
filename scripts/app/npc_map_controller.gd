@@ -225,6 +225,9 @@ func sync_map_snapshot(map_snapshot: Dictionary) -> void:
 		if bool(declared_blocked_tiles[tile_variant]):
 			_blocked_tiles[int(tile_variant)] = true
 	var terrain_blockers := Dictionary(map_snapshot.get("terrain_blockers", {})).duplicate(true)
+	var flattened_terrain_centers := Dictionary(
+		map_snapshot.get("flattened_terrain_centers", {})
+	).duplicate(true)
 	for tile_variant: Variant in terrain_blockers.keys():
 		_blocked_tiles[int(tile_variant)] = true
 	if _navigation == null:
@@ -245,6 +248,10 @@ func sync_map_snapshot(map_snapshot: Dictionary) -> void:
 		["terrain_blocker_half_extents"],
 		structure_half_extents
 	)
+	if _navigation.has_method("set_flattened_terrain_apertures"):
+		_navigation.set_flattened_terrain_apertures(
+			flattened_terrain_centers, terrain_half_extents
+		)
 	if _navigation.has_method("sync_map_tile_blockers"):
 		_navigation.sync_map_tile_blockers(
 			terrain_blockers,

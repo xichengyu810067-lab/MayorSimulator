@@ -78,6 +78,7 @@ var terrain_kind := 0
 var terrain_type := "flat_ground"
 var terrain_buildable := true
 var terrain_flattenable := false
+var terrain_flattened := false
 var visual_shape := ""
 var visual_detail := ""
 var visual_asset_path := ""
@@ -134,6 +135,7 @@ func set_tile(data: Dictionary) -> void:
 		terrain_type = "flat_ground"
 	terrain_buildable = bool(data.get("terrain_buildable", true))
 	terrain_flattenable = bool(data.get("terrain_flattenable", false))
+	terrain_flattened = bool(data.get("terrain_flattened", false))
 	var visual: Dictionary = data.get("visual", {})
 	visual_shape = str(visual.get("shape", building_name))
 	visual_detail = str(visual.get("detail", ""))
@@ -210,6 +212,9 @@ func get_visual_animation_contract() -> Dictionary:
 		"autonomous_transport_vehicle_animation": false,
 		"network_vehicle_layer_owner": "transport_network_controller",
 		"terrain_type_supported": true,
+		"natural_terrain_visual_source": "city-map-background.png",
+		"decorative_natural_terrain_tiles": false,
+		"flattened_ground_patch_only": true,
 		"construction_animation_supported": true,
 		"construction_replaces_portrait_until_complete": true,
 	}
@@ -228,6 +233,7 @@ func get_visual_animation_debug_snapshot() -> Dictionary:
 		"tile_index": tile_index,
 		"building_name": building_name,
 		"terrain_type": terrain_type,
+		"terrain_flattened": terrain_flattened,
 		"construction_active": not construction_job.is_empty(),
 		"transport_profile_id": profile_id,
 		"transport_profile": transport_activity_profile.duplicate(true),
@@ -280,11 +286,10 @@ func _has_active_visual_animation() -> bool:
 	return (
 		not construction_job.is_empty()
 		or not ambient_animation_profile.is_empty()
-		or terrain_type in ["trees", "river_lake"]
 	)
 
 func _draw() -> void:
-	_draw_authored_terrain_surface()
+	_draw_flattened_ground_patch()
 	var should_draw_grid = is_hovered() or has_focus() or selected
 	if should_draw_grid:
 		_draw_terrain_overlay()
@@ -320,47 +325,37 @@ func _terrain_label() -> String:
 	}.get(terrain_type, "地形"))
 
 
-func _draw_authored_terrain_surface() -> void:
-	if terrain_type in ["", "flat_ground", "flat_grass"]:
+func _draw_flattened_ground_patch() -> void:
+	# Natural trees, water, and cliffs remain part of the original backdrop.
+	# Only completed earthworks cover the selected plot with reclaimed ground;
+	# no decorative terrain icon or replacement tile is drawn beforehand.
+	if not terrain_flattened:
 		return
 	var center := size * 0.5
-	var diamond := PackedVector2Array([
-		Vector2(center.x, 4),
-		Vector2(size.x - 4, center.y),
-		Vector2(center.x, size.y - 4),
-		Vector2(4, center.y),
+	# Feather several irregular silhouettes into the painted map so completed
+	# earthworks read as reclaimed land, not as another terrain tile pasted over
+	# the backdrop.
+	var reclaimed_ground := PackedVector2Array([
+		Vector2(center.x - 5, 10),
+		Vector2(center.x + 20, 18),
+		Vector2(size.x - 13, center.y - 7),
+		Vector2(size.x - 18, center.y + 11),
+		Vector2(center.x + 18, size.y - 13),
+		Vector2(center.x - 8, size.y - 8),
+		Vector2(17, center.y + 12),
+		Vector2(12, center.y - 7),
 	])
-	var colors := {
-		"trees": Color(0.18, 0.46, 0.24, 0.90),
-		"hill_cliff": Color(0.47, 0.38, 0.28, 0.94),
-		"river_lake": Color(0.16, 0.55, 0.76, 0.92),
-		"road_path": Color(0.25, 0.28, 0.31, 0.94),
-		"rail_track": Color(0.33, 0.30, 0.28, 0.94),
-	}
-	draw_colored_polygon(diamond, colors.get(terrain_type, Color(0.32, 0.42, 0.32, 0.86)))
-	draw_polyline(PackedVector2Array([diamond[0], diamond[1], diamond[2], diamond[3], diamond[0]]), Color(0.92, 0.96, 0.92, 0.42), 1.5)
-	match terrain_type:
-		"trees":
-			var sway := sin(_animation_time * 1.5) * 1.8
-			_draw_fairytale_tree(Vector2(size.x * 0.36 + sway, size.y * 0.38), 0.58)
-			_draw_fairytale_tree(Vector2(size.x * 0.66 - sway, size.y * 0.47), 0.48)
-			_draw_bush(Vector2(size.x * 0.52, size.y * 0.64), 0.62)
-		"hill_cliff":
-			var ridge := PackedVector2Array([
-				Vector2(size.x * 0.20, size.y * 0.60),
-				Vector2(size.x * 0.45, size.y * 0.24),
-				Vector2(size.x * 0.58, size.y * 0.47),
-				Vector2(size.x * 0.70, size.y * 0.31),
-				Vector2(size.x * 0.84, size.y * 0.61),
-			])
-			draw_colored_polygon(ridge, Color(0.54, 0.44, 0.32))
-			draw_polyline(ridge, Color(0.78, 0.68, 0.50), 2.0, true)
-		"river_lake":
-			for wave_index in 3:
-				var phase := fposmod(_animation_time * 0.35 + float(wave_index) * 0.27, 1.0)
-				var y := size.y * (0.35 + float(wave_index) * 0.13)
-				var x := size.x * (0.18 + phase * 0.12)
-				draw_arc(Vector2(x + size.x * 0.30, y), size.x * 0.22, 0.18, PI - 0.18, 16, Color(0.72, 0.92, 1.0, 0.66), 1.8, true)
+	for ring: Dictionary in [
+		{"scale": 1.00, "color": Color(0.48, 0.69, 0.21, 0.30)},
+		{"scale": 0.91, "color": Color(0.50, 0.71, 0.22, 0.48)},
+		{"scale": 0.80, "color": Color(0.54, 0.73, 0.23, 0.72)},
+	]:
+		var ring_points := PackedVector2Array()
+		for point: Vector2 in reclaimed_ground:
+			ring_points.append(center + (point - center) * float(ring["scale"]))
+		draw_colored_polygon(ring_points, Color(ring["color"]))
+	for tuft_offset: Vector2 in [Vector2(-22, 7), Vector2(2, -9), Vector2(24, 8)]:
+		draw_line(center + tuft_offset, center + tuft_offset + Vector2(2, -5), Color(0.30, 0.55, 0.16, 0.75), 1.4, true)
 
 func _draw_terrain_overlay() -> void:
 	var c := size * 0.5
