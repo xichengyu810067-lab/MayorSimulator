@@ -8,6 +8,7 @@ signal crossing_states_changed(states: Dictionary)
 
 const MAX_FRAME_DELTA := 0.10
 const PRIVATE_VEHICLE_LIMIT := 2
+const TransportVehicleVisualsCatalog := preload("res://data/catalogs/transport_vehicle_visuals.gd")
 
 class VehicleActor:
 	extends Control
@@ -17,19 +18,46 @@ class VehicleActor:
 	var route_id := ""
 	var route_mode := ""
 	var actor_color := Color.WHITE
+	var authored_texture: Texture2D
+	var authored_asset_path := ""
+	var authored_source_rect := Rect2()
 
-	func _init(key: String, kind: String, line_id: String, mode: String, color: Color) -> void:
+	func _init(
+		key: String,
+		kind: String,
+		line_id: String,
+		mode: String,
+		color: Color,
+		texture: Texture2D,
+		asset_path: String,
+		visual_bounds: Vector2
+	) -> void:
 		vehicle_key = key
 		vehicle_kind = kind
 		route_id = line_id
 		route_mode = mode
 		actor_color = color
-		custom_minimum_size = Vector2(42, 42)
-		size = Vector2(42, 42)
+		authored_texture = texture
+		authored_asset_path = asset_path
+		if authored_texture != null:
+			var image := authored_texture.get_image()
+			if image != null:
+				authored_source_rect = Rect2(image.get_used_rect())
+		custom_minimum_size = visual_bounds
+		size = visual_bounds
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
 		pivot_offset = size * 0.5
 
 	func _draw() -> void:
+		if authored_texture != null and authored_source_rect.size.x > 0.0 and authored_source_rect.size.y > 0.0:
+			var fit_scale := minf(
+				size.x / authored_source_rect.size.x,
+				size.y / authored_source_rect.size.y
+			)
+			var draw_size := authored_source_rect.size * fit_scale
+			var destination := Rect2((size - draw_size) * 0.5, draw_size)
+			draw_texture_rect_region(authored_texture, destination, authored_source_rect)
+			return
 		var center := size * 0.5
 		match vehicle_kind:
 			"bus":
@@ -131,6 +159,8 @@ func debug_route_snapshot() -> Dictionary:
 			"operational_source": true,
 			"on_authoritative_path": bool(spec.get("sample_valid", false)),
 			"route_time": float(_actor_route_times.get(key, _simulation_time)),
+			"uses_authored_sprite": actor.authored_texture != null,
+			"visual_asset_path": actor.authored_asset_path,
 		})
 	return {
 		"simulation_time": _simulation_time,
@@ -222,7 +252,16 @@ func _sync_actors() -> void:
 		var kind := str(spec.get("vehicle_kind", _vehicle_kind_for_mode(str(spec.get("mode", "")))))
 		var mode := str(spec.get("mode", "road"))
 		var route_id := str(spec.get("route_id", ""))
-		var actor := VehicleActor.new(key, kind, route_id, mode, _vehicle_color(route_id, kind))
+		var actor := VehicleActor.new(
+			key,
+			kind,
+			route_id,
+			mode,
+			_vehicle_color(route_id, kind),
+			TransportVehicleVisualsCatalog.texture(kind),
+			TransportVehicleVisualsCatalog.asset_path(kind),
+			TransportVehicleVisualsCatalog.display_bounds(kind)
+		)
 		add_child(actor)
 		_actors[key] = actor
 		_actor_route_times[key] = _simulation_time
@@ -288,7 +327,14 @@ func _update_actors(elapsed: float) -> void:
 		else:
 			_actor_route_times[key] = float(sample.get("route_time", _simulation_time))
 		actor.position = next_position - actor.size * 0.5
-		actor.rotation = next_angle
+		if actor.authored_texture != null:
+			# Isometric authored art must remain upright.  Mirror it for the
+			# return journey instead of rotating the whole vehicle upside down.
+			actor.rotation = 0.0
+			actor.scale.x = -1.0 if cos(next_angle) < 0.0 else 1.0
+		else:
+			actor.rotation = next_angle
+			actor.scale.x = 1.0
 		actor.z_index = int(round(next_position.y)) + 2
 		actor.visible = _interaction_enabled or true
 		_actor_positions_initialized[key] = true

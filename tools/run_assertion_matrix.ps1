@@ -10,6 +10,30 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# Some hosted Windows shells expose both `Path` and `PATH` in the inherited
+# environment block.  Start-Process compares environment keys
+# case-insensitively and throws before Godot starts, so normalize the duplicate
+# aliases once in this process while preserving the effective search path.
+$effectivePath = $env:Path
+$pathKeys = @(
+    [System.Environment]::GetEnvironmentVariables().Keys |
+        Where-Object { $_.ToString().ToLowerInvariant() -eq 'path' }
+)
+if ($pathKeys.Count -gt 1) {
+    foreach ($pathKey in $pathKeys) {
+        [System.Environment]::SetEnvironmentVariable(
+            [string]$pathKey,
+            $null,
+            [System.EnvironmentVariableTarget]::Process
+        )
+    }
+    [System.Environment]::SetEnvironmentVariable(
+        'Path',
+        $effectivePath,
+        [System.EnvironmentVariableTarget]::Process
+    )
+}
+
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 if ([string]::IsNullOrWhiteSpace($ManifestPath)) {
     $ManifestPath = Join-Path $projectRoot 'tests\assertion_matrix.json'
