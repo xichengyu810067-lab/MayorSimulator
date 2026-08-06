@@ -110,9 +110,9 @@ func _build_scene() -> void:
 
 func _texture_layer(path: String) -> TextureRect:
 	var layer := TextureRect.new()
-	var image := Image.load_from_file(path)
-	if not image.is_empty():
-		layer.texture = ImageTexture.create_from_image(image)
+	var texture := ResourceLoader.load(path, "Texture2D") as Texture2D
+	if texture != null:
+		layer.texture = texture
 	layer.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	layer.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
