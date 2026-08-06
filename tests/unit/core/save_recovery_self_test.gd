@@ -19,6 +19,7 @@ const UNSUPPORTED_ENVELOPE_SCHEMA_PATH := TEST_ROOT + "/unsupported_envelope_sch
 const UNSUPPORTED_STATE_SCHEMA_PATH := TEST_ROOT + "/unsupported_state_schema.json"
 const LEGACY_MINIMAL_RUNTIME_PATH := TEST_ROOT + "/legacy_minimal_runtime.json"
 const CURRENT_SCHEMA_NON_TRANSPORT_PATH := TEST_ROOT + "/current_schema_non_transport.json"
+const SCHEMA_AUTHORITY_REGISTRY_PATH := "res://data/save_schema_authority_registry.json"
 const TEST_SEED := 8_024_611
 const TEST_FUNDS := 73_000
 
@@ -37,6 +38,7 @@ func _initialize() -> void:
 	_test_current_schema_cross_layer_corruption_uses_backup()
 	_test_vertical_metadata_schema_boundary()
 	_test_vertical_terrain_pairing_boundary()
+	_test_schema_authority_registry_contract()
 	_test_schema_one_minimal_runtime_remains_compatible()
 	_cleanup_all()
 	if _failed:
@@ -235,6 +237,10 @@ func _test_vertical_terrain_pairing_boundary() -> void:
 		not SaveSchemaAuthorityScript.validate_vertical_terrain_pair(8, 2),
 		"schema eight with terrain layout two is rejected before C3 activation"
 	)
+	_check(
+		not SaveSchemaAuthorityScript.validate_vertical_terrain_pair(8, 3),
+		"planned schema eight and terrain layout three remain rejected during C1"
+	)
 	var mismatched_layout := terrain_snapshot.duplicate(true)
 	mismatched_layout["layout_version"] = 3
 	source.state.metadata["vertical_slice"]["terrain"] = mismatched_layout
@@ -243,6 +249,32 @@ func _test_vertical_terrain_pairing_boundary() -> void:
 		not mismatched_layout_probe.restore_envelope(source.make_envelope()),
 		"future terrain layout is rejected even when its snapshot shape is otherwise present"
 	)
+
+
+func _test_schema_authority_registry_contract() -> void:
+	var registry_json := FileAccess.get_file_as_string(SCHEMA_AUTHORITY_REGISTRY_PATH)
+	_check(not registry_json.is_empty(), "schema authority registry fixture is present")
+	_check(
+		SaveSchemaAuthorityScript.validate_registry_json(registry_json),
+		"registry current and planned pairs agree with authority constants"
+	)
+	_check(
+		not SaveSchemaAuthorityScript.validate_registry_json(""),
+		"missing registry text fails safely"
+	)
+	_check(
+		not SaveSchemaAuthorityScript.validate_registry_json("{ malformed"),
+		"malformed registry JSON fails safely"
+	)
+	var registry_value: Variant = JSON.parse_string(registry_json)
+	_check(registry_value is Dictionary, "registry fixture parses for missing-field coverage")
+	if registry_value is Dictionary:
+		var missing_current_writer: Dictionary = (registry_value as Dictionary).duplicate(true)
+		missing_current_writer.erase("current_writer")
+		_check(
+			not SaveSchemaAuthorityScript.validate_registry_json(JSON.stringify(missing_current_writer)),
+			"registry missing current writer fails safely"
+		)
 
 
 func _test_current_schema_non_transport_corruption_uses_backup() -> void:
