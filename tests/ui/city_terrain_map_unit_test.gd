@@ -69,7 +69,7 @@ func _run() -> void:
 
 	var flattened: Dictionary = terrain.flatten_tile(0)
 	_check(bool(flattened.get("ok", false)) and bool(flattened.get("changed", false)), "tree tile did not flatten")
-	_check(terrain.base_kind(0) == "trees", "flattening destroyed the authored base terrain")
+	_check(terrain.base_kind(0) == "trees", "flattening destroyed the backdrop-authoritative base terrain")
 	_check(terrain.effective_kind(0) == "flat_grass", "flattening did not resolve to flat grass")
 	_check(terrain.is_buildable(0) and terrain.is_walkable(0), "flattened tile did not become buildable/walkable")
 	_check(not terrain.is_flattenable(0), "already flattened tile remains flattenable")
@@ -81,7 +81,20 @@ func _run() -> void:
 
 	terrain.flatten_tile(0)
 	var serialized: Dictionary = terrain.to_dict()
+	_check(int(serialized.get("layout_version", -1)) == 3, "fresh terrain snapshot does not write layout 3")
 	_check(bool(CityTerrainMapScript.validate_snapshot(serialized).get("valid", false)), "canonical full terrain snapshot was rejected")
+	var legacy_layout_two := serialized.duplicate(true)
+	legacy_layout_two["layout_version"] = 2
+	var legacy_tiles_json := JSON.stringify(legacy_layout_two["tiles"])
+	_check(not bool(CityTerrainMapScript.validate_snapshot(legacy_layout_two).get("valid", true)), "strict current validation accepted legacy layout 2 directly")
+	var migrated_layout_three := CityTerrainMapScript.migrate_snapshot_to_current(legacy_layout_two)
+	_check(int(migrated_layout_three.get("layout_version", -1)) == 3, "layout 2 did not migrate to layout 3")
+	_check(JSON.stringify(migrated_layout_three.get("tiles", [])) == legacy_tiles_json, "layout migration changed one or more of the 100 tile records")
+	_check(Array(migrated_layout_three.get("tiles", [])).size() == 100, "layout migration did not retain 100 tile records")
+	_check(
+		CityTerrainMapScript.migrate_snapshot_to_current(migrated_layout_three) == migrated_layout_three,
+		"layout migration is not re-entrant on an already-current snapshot"
+	)
 	var duplicate_tile_snapshot: Dictionary = serialized.duplicate(true)
 	duplicate_tile_snapshot["tiles"][99]["tile_id"] = 98
 	_check(not bool(CityTerrainMapScript.validate_snapshot(duplicate_tile_snapshot).get("valid", true)), "duplicate terrain tile id was accepted")

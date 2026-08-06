@@ -11,7 +11,8 @@ const CityNavigationGridScript = preload("res://scripts/world/city_navigation_gr
 ## old saves retain every building/construction tile id without migration.
 
 const SCHEMA_VERSION := 1
-const LAYOUT_VERSION := 2
+const LEGACY_LAYOUT_VERSION := 2
+const LAYOUT_VERSION := 3
 const GRID_COLUMNS := 10
 const GRID_ROWS := 10
 const CELL_COUNT := GRID_COLUMNS * GRID_ROWS
@@ -126,9 +127,9 @@ func terrain_kinds() -> PackedStringArray:
 
 
 func apply_default_city_layout() -> void:
-	# The original backdrop image is the terrain authority. This preserves the
-	# layout-2 record shape: new games still write the same base_kind/flattened
-	# fields, while existing layout-2 saves load their recorded terrain unchanged.
+	# The original backdrop image remains the terrain authority. Layout 3 keeps
+	# the established base_kind/flattened record shape so the atomic 2 -> 3
+	# migration can preserve all 100 records without reclassifying terrain.
 	_reset_terrain_state()
 	for coordinate: Vector2i in coordinates_in_display_order():
 		var model: Dictionary = CityNavigationGridScript.backdrop_terrain_for_coordinate(coordinate)
@@ -304,6 +305,24 @@ func to_dict() -> Dictionary:
 
 
 static func validate_snapshot(snapshot: Dictionary) -> Dictionary:
+	return _validate_snapshot_for_layout(snapshot, LAYOUT_VERSION)
+
+
+static func migrate_snapshot_to_current(snapshot: Dictionary) -> Dictionary:
+	# Re-entry is a no-op on an already-current snapshot. The legacy edge changes
+	# only the layout marker; all 100 terrain records, including completed
+	# flatten apertures, remain byte-for-byte equivalent as Variant data.
+	if bool(validate_snapshot(snapshot).get("valid", false)):
+		return snapshot.duplicate(true)
+	var legacy_validation := _validate_snapshot_for_layout(snapshot, LEGACY_LAYOUT_VERSION)
+	if not bool(legacy_validation.get("valid", false)):
+		return {}
+	var migrated := snapshot.duplicate(true)
+	migrated["layout_version"] = LAYOUT_VERSION
+	return migrated if bool(validate_snapshot(migrated).get("valid", false)) else {}
+
+
+static func _validate_snapshot_for_layout(snapshot: Dictionary, expected_layout_version: int) -> Dictionary:
 	var required_top_level := [
 		"schema_version", "layout_version", "grid_columns", "grid_rows", "tiles",
 	]
@@ -314,7 +333,7 @@ static func validate_snapshot(snapshot: Dictionary) -> Dictionary:
 			return _snapshot_error("missing_%s" % field_name)
 	if not _is_integer_value(snapshot["schema_version"]) or int(snapshot["schema_version"]) != SCHEMA_VERSION:
 		return _snapshot_error("unsupported_schema")
-	if not _is_integer_value(snapshot["layout_version"]) or int(snapshot["layout_version"]) != LAYOUT_VERSION:
+	if not _is_integer_value(snapshot["layout_version"]) or int(snapshot["layout_version"]) != expected_layout_version:
 		return _snapshot_error("unsupported_layout")
 	if not _is_integer_value(snapshot["grid_columns"]) or int(snapshot["grid_columns"]) != GRID_COLUMNS:
 		return _snapshot_error("invalid_grid_columns")

@@ -1,6 +1,7 @@
 extends SceneTree
 
 const GameSessionScript = preload("res://scripts/core/game_session.gd")
+const SaveEnvelopeScript = preload("res://scripts/core/save_envelope.gd")
 const SaveServiceScript = preload("res://scripts/core/save_service.gd")
 const CityStateScript = preload("res://scripts/core/city_state.gd")
 const VerticalSliceCoordinatorScript = preload("res://scripts/app/vertical_slice_coordinator.gd")
@@ -19,6 +20,7 @@ const UNSUPPORTED_ENVELOPE_SCHEMA_PATH := TEST_ROOT + "/unsupported_envelope_sch
 const UNSUPPORTED_STATE_SCHEMA_PATH := TEST_ROOT + "/unsupported_state_schema.json"
 const LEGACY_MINIMAL_RUNTIME_PATH := TEST_ROOT + "/legacy_minimal_runtime.json"
 const CURRENT_SCHEMA_NON_TRANSPORT_PATH := TEST_ROOT + "/current_schema_non_transport.json"
+const SCHEMA_PAIR_MIGRATION_PATH := TEST_ROOT + "/schema_pair_migration.json"
 const SCHEMA_AUTHORITY_REGISTRY_PATH := "res://data/save_schema_authority_registry.json"
 const TEST_SEED := 8_024_611
 const TEST_FUNDS := 73_000
@@ -224,31 +226,84 @@ func _test_vertical_metadata_schema_boundary() -> void:
 
 func _test_vertical_terrain_pairing_boundary() -> void:
 	var source = _canonical_current_session(19, 19)
-	var current_vertical: Dictionary = source.state.metadata["vertical_slice"]
-	var terrain_snapshot: Dictionary = current_vertical["terrain"]
+	_check(source.save_now(SCHEMA_PAIR_MIGRATION_PATH) == OK, "fresh current save writes through the atomic save boundary")
+	var decoder = SaveServiceScript.new()
+	var current_envelope = decoder.load_primary_envelope(SCHEMA_PAIR_MIGRATION_PATH)
+	_check(current_envelope != null, "fresh current save decodes from disk")
+	if current_envelope == null:
+		return
+	var current_vertical: Dictionary = current_envelope.state.get("metadata", {}).get("vertical_slice", {})
+	var terrain_snapshot: Dictionary = current_vertical.get("terrain", {})
+	_check(int(current_vertical.get("schema_version", -1)) == 8, "fresh save does not write vertical schema 8")
+	_check(int(terrain_snapshot.get("layout_version", -1)) == 3, "fresh save does not write terrain layout 3")
 	_check(
 		SaveSchemaAuthorityScript.validate_vertical_terrain_pair(
-			GameSessionScript.MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA,
+			int(current_vertical.get("schema_version", -1)),
 			int(terrain_snapshot.get("layout_version", -1))
 		),
 		"current vertical schema and terrain layout are an authorized pair"
 	)
+	_check(SaveSchemaAuthorityScript.is_legacy_migration_pair(7, 2), "registry authority does not expose 7/2 as the migration input")
+
+	var legacy_envelope = _copy_envelope_with_pair(current_envelope, 7, 2)
+	var legacy_tiles_json := JSON.stringify(
+		legacy_envelope.state.get("metadata", {}).get("vertical_slice", {}).get("terrain", {}).get("tiles", [])
+	)
+	var migrated_probe = GameSessionScript.new(20, 20)
+	_check(migrated_probe.restore_envelope(legacy_envelope), "legacy 7/2 envelope did not migrate")
+	var migrated_vertical: Dictionary = migrated_probe.state.metadata.get("vertical_slice", {})
+	_check(int(migrated_vertical.get("schema_version", -1)) == 8, "legacy migration did not set vertical schema 8")
+	_check(int(migrated_vertical.get("terrain", {}).get("layout_version", -1)) == 3, "legacy migration did not set terrain layout 3")
+	_check(
+		JSON.stringify(migrated_vertical.get("terrain", {}).get("tiles", [])) == legacy_tiles_json,
+		"legacy migration changed one or more of the 100 tile records"
+	)
+	_check(Array(migrated_vertical.get("terrain", {}).get("tiles", [])).size() == 100, "legacy migration did not preserve 100 tile records")
+	var reentry_probe = GameSessionScript.new(21, 21)
+	_check(reentry_probe.restore_envelope(migrated_probe.make_envelope()), "already-current migrated envelope failed re-entry")
+	_check(
+		JSON.stringify(reentry_probe.state.metadata.get("vertical_slice", {}).get("terrain", {}).get("tiles", [])) == legacy_tiles_json,
+		"migration re-entry changed terrain records"
+	)
+
+	for invalid_pair: Dictionary in [
+		{"schema": 8, "layout": 2, "label": "8/2 mismatch"},
+		{"schema": 7, "layout": 3, "label": "7/3 mismatch"},
+		{"schema": 9, "layout": 3, "label": "future vertical schema"},
+		{"schema": 8, "layout": 4, "label": "future terrain layout"},
+	]:
+		var invalid_envelope = _copy_envelope_with_pair(
+			current_envelope,
+			int(invalid_pair["schema"]),
+			int(invalid_pair["layout"])
+		)
+		var rejection_probe = GameSessionScript.new(22, 22)
+		var rejection_hash_before := rejection_probe.deterministic_hash()
+		_check(not rejection_probe.restore_envelope(invalid_envelope), "%s was not rejected" % invalid_pair["label"])
+		_check(rejection_probe.deterministic_hash() == rejection_hash_before, "%s partially applied state" % invalid_pair["label"])
 	_check(
 		not SaveSchemaAuthorityScript.validate_vertical_terrain_pair(8, 2),
-		"schema eight with terrain layout two is rejected before C3 activation"
+		"schema eight with terrain layout two is rejected"
 	)
 	_check(
-		not SaveSchemaAuthorityScript.validate_vertical_terrain_pair(8, 3),
-		"planned schema eight and terrain layout three remain rejected during C1"
+		not SaveSchemaAuthorityScript.validate_vertical_terrain_pair(7, 3),
+		"schema seven with terrain layout three is rejected"
 	)
-	var mismatched_layout := terrain_snapshot.duplicate(true)
-	mismatched_layout["layout_version"] = 3
-	source.state.metadata["vertical_slice"]["terrain"] = mismatched_layout
-	var mismatched_layout_probe = GameSessionScript.new(20, 20)
-	_check(
-		not mismatched_layout_probe.restore_envelope(source.make_envelope()),
-		"future terrain layout is rejected even when its snapshot shape is otherwise present"
-	)
+
+
+func _copy_envelope_with_pair(envelope, schema_version: int, layout_version: int):
+	var copied = SaveEnvelopeScript.from_dict(envelope.to_dict())
+	var state_snapshot: Dictionary = copied.state.duplicate(true)
+	var metadata: Dictionary = state_snapshot.get("metadata", {}).duplicate(true)
+	var vertical: Dictionary = metadata.get("vertical_slice", {}).duplicate(true)
+	var terrain: Dictionary = vertical.get("terrain", {}).duplicate(true)
+	vertical["schema_version"] = schema_version
+	terrain["layout_version"] = layout_version
+	vertical["terrain"] = terrain
+	metadata["vertical_slice"] = vertical
+	state_snapshot["metadata"] = metadata
+	copied.state = state_snapshot
+	return copied
 
 
 func _test_schema_authority_registry_contract() -> void:
@@ -274,6 +329,17 @@ func _test_schema_authority_registry_contract() -> void:
 		_check(
 			not SaveSchemaAuthorityScript.validate_registry_json(JSON.stringify(missing_current_writer)),
 			"registry missing current writer fails safely"
+		)
+		var extra_writer: Dictionary = (registry_value as Dictionary).duplicate(true)
+		extra_writer["supported_version_matrix"].append({
+			"vertical_slice_schema_version": 9,
+			"terrain_layout_version": 4,
+			"status": "current",
+			"writer_allowed": true,
+		})
+		_check(
+			not SaveSchemaAuthorityScript.validate_registry_json(JSON.stringify(extra_writer)),
+			"registry with an additional future writer fails safely"
 		)
 
 
@@ -1246,6 +1312,7 @@ func _cleanup_all() -> void:
 	_cleanup_path(UNSUPPORTED_STATE_SCHEMA_PATH)
 	_cleanup_path(LEGACY_MINIMAL_RUNTIME_PATH)
 	_cleanup_path(CURRENT_SCHEMA_NON_TRANSPORT_PATH)
+	_cleanup_path(SCHEMA_PAIR_MIGRATION_PATH)
 
 
 func _cleanup_path(path: String) -> void:

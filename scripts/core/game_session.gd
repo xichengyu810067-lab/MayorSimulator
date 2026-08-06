@@ -87,7 +87,9 @@ func make_envelope():
 	envelope.game_time = state.game_time
 	envelope.event_sequence = kernel.event_sequence
 	envelope.command_sequence = kernel.command_sequence
-	envelope.state = state.to_dict()
+	var state_snapshot: Dictionary = state.to_dict()
+	_stamp_current_writer_pair(state_snapshot)
+	envelope.state = state_snapshot
 	envelope.kernel = runtime
 	envelope.clock = clock.to_dict()
 	return envelope
@@ -96,15 +98,18 @@ func make_envelope():
 func restore_envelope(envelope) -> bool:
 	if envelope == null or envelope.content_version != CONTENT_VERSION:
 		return false
-	var restored_state = CityStateScript.from_dict(envelope.state)
+	var candidate_envelope = _prepare_envelope_for_restore(envelope)
+	if candidate_envelope == null:
+		return false
+	var restored_state = CityStateScript.from_dict(candidate_envelope.state)
 	if restored_state == null:
 		return false
-	if not _validate_envelope_semantics(envelope, restored_state):
+	if not _validate_envelope_semantics(candidate_envelope, restored_state):
 		return false
 	var restored_clock = SimulationClockScript.new()
-	restored_clock.restore(envelope.clock)
-	var restored_kernel = SimulationKernelScript.new(restored_state, envelope.rng_seed)
-	restored_kernel.restore_runtime_dict(_normalized_runtime(envelope))
+	restored_clock.restore(candidate_envelope.clock)
+	var restored_kernel = SimulationKernelScript.new(restored_state, candidate_envelope.rng_seed)
+	restored_kernel.restore_runtime_dict(_normalized_runtime(candidate_envelope))
 	state = restored_state
 	clock = restored_clock
 	kernel = restored_kernel
@@ -112,6 +117,81 @@ func restore_envelope(envelope) -> bool:
 		kernel.event_emitted.connect(_on_kernel_event)
 	state_changed.emit(get_view_model())
 	return true
+
+
+func _stamp_current_writer_pair(state_snapshot: Dictionary) -> void:
+	# VerticalSliceCoordinator still assembles its in-memory block with the last
+	# reader schema. The save boundary is the authoritative writer: it upgrades
+	# only that known assembly state when terrain already uses layout 3. Forged or
+	# stale layout-2 data is left untouched so semantic validation rejects it.
+	var metadata_value: Variant = state_snapshot.get("metadata", null)
+	if not metadata_value is Dictionary:
+		return
+	var vertical_value: Variant = (metadata_value as Dictionary).get("vertical_slice", null)
+	if not vertical_value is Dictionary:
+		return
+	var vertical: Dictionary = vertical_value
+	var terrain_value: Variant = vertical.get("terrain", null)
+	if not terrain_value is Dictionary:
+		return
+	if (
+		int(vertical.get("schema_version", -1)) == SaveSchemaAuthorityScript.LEGACY_MIGRATION_VERTICAL_SCHEMA_VERSION
+		and int((terrain_value as Dictionary).get("layout_version", -1)) == SaveSchemaAuthorityScript.CURRENT_TERRAIN_LAYOUT_VERSION
+	):
+		vertical["schema_version"] = SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION
+		(metadata_value as Dictionary)["vertical_slice"] = vertical
+		state_snapshot["metadata"] = metadata_value
+
+
+func _prepare_envelope_for_restore(envelope):
+	# Work only on a deep clone. A rejected or failed migration cannot partially
+	# mutate the caller's envelope or the live session.
+	var candidate = SaveEnvelopeScript.from_dict(envelope.to_dict())
+	if candidate == null:
+		return null
+	var migration := _migrate_state_snapshot_to_current_pair(candidate.state)
+	if not bool(migration.get("ok", false)):
+		return null
+	candidate.state = Dictionary(migration.get("state", {})).duplicate(true)
+	return candidate
+
+
+func _migrate_state_snapshot_to_current_pair(state_snapshot: Dictionary) -> Dictionary:
+	var migrated_state := state_snapshot.duplicate(true)
+	var metadata_value: Variant = migrated_state.get("metadata", null)
+	if not metadata_value is Dictionary:
+		return {"ok": true, "migrated": false, "state": migrated_state}
+	var metadata: Dictionary = metadata_value
+	var vertical_value: Variant = metadata.get("vertical_slice", null)
+	if not vertical_value is Dictionary:
+		return {"ok": true, "migrated": false, "state": migrated_state}
+	var vertical: Dictionary = vertical_value
+	var schema_value: Variant = vertical.get("schema_version", 0)
+	if not _is_integer_value(schema_value):
+		return {"ok": true, "migrated": false, "state": migrated_state}
+	var schema_version := int(schema_value)
+	if schema_version < SaveSchemaAuthorityScript.LEGACY_MIGRATION_VERTICAL_SCHEMA_VERSION:
+		return {"ok": true, "migrated": false, "state": migrated_state}
+	var terrain_value: Variant = vertical.get("terrain", null)
+	if not terrain_value is Dictionary:
+		return {"ok": true, "migrated": false, "state": migrated_state}
+	var terrain: Dictionary = terrain_value
+	var layout_value: Variant = terrain.get("layout_version", null)
+	if not _is_integer_value(layout_value):
+		return {"ok": true, "migrated": false, "state": migrated_state}
+	var layout_version := int(layout_value)
+	if SaveSchemaAuthorityScript.validate_vertical_terrain_pair(schema_version, layout_version):
+		return {"ok": true, "migrated": false, "state": migrated_state}
+	if not SaveSchemaAuthorityScript.is_legacy_migration_pair(schema_version, layout_version):
+		return {"ok": false, "migrated": false, "state": {}}
+	var migrated_terrain := CityTerrainMapScript.migrate_snapshot_to_current(terrain)
+	if migrated_terrain.is_empty():
+		return {"ok": false, "migrated": false, "state": {}}
+	vertical["schema_version"] = SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION
+	vertical["terrain"] = migrated_terrain
+	metadata["vertical_slice"] = vertical
+	migrated_state["metadata"] = metadata
+	return {"ok": true, "migrated": true, "state": migrated_state}
 
 
 func save_now(path: String = "") -> Error:
@@ -180,8 +260,10 @@ func get_view_model() -> Dictionary:
 
 
 func deterministic_hash() -> String:
+	var state_snapshot: Dictionary = state.to_dict()
+	_stamp_current_writer_pair(state_snapshot)
 	return JSON.stringify(_canonicalize({
-		"state": state.to_dict(),
+		"state": state_snapshot,
 		"kernel": kernel.to_runtime_dict(),
 		"clock": clock.to_dict(),
 	}), "", false).sha256_text()
@@ -371,8 +453,9 @@ func _validate_vertical_slice_metadata(restored_state, runtime: Dictionary) -> b
 				return false
 	# Schema 6 makes construction, blueprint selection, and the player-authored
 	# transport network authoritative. Schema 7 adds the complete terrain snapshot
-	# and asynchronous terrain-job cross-links. Earlier schemas retain their
-	# established migration paths in VerticalSliceCoordinator.
+	# and asynchronous terrain-job cross-links. Schema 8 atomically pairs that
+	# snapshot with backdrop-authoritative terrain layout 3. Earlier schemas retain
+	# their established migration paths in VerticalSliceCoordinator.
 	if schema_version >= 6:
 		if runtime.is_empty() or not _validate_current_vertical_sequences(vertical, restored_state, runtime):
 			return false

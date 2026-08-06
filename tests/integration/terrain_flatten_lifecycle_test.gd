@@ -3,6 +3,7 @@ extends SceneTree
 const CoordinatorScript = preload("res://scripts/app/vertical_slice_coordinator.gd")
 const CityStateScript = preload("res://scripts/core/city_state.gd")
 const ConstructionSystemScript = preload("res://scripts/systems/city/construction_system.gd")
+const SaveSchemaAuthorityScript = preload("res://scripts/core/save_schema_authority.gd")
 
 const MID_JOB_SAVE_PATH := "user://goal_2026_08_01/terrain_flatten_mid_job.json"
 const COMPLETED_SAVE_PATH := "user://goal_2026_08_01/terrain_flatten_completed.json"
@@ -76,11 +77,23 @@ func _test_async_flatten_lifecycle() -> void:
 	_check(not bool(blocked_transport.get("ok", false)), "transport started during terrain earthworks")
 
 	_check(coordinator.save_game(MID_JOB_SAVE_PATH) == OK, "mid-job save failed")
+	var mid_job_tiles_json := JSON.stringify(coordinator.terrain_snapshot().get("tiles", []))
+	_check(Array(coordinator.terrain_snapshot().get("tiles", [])).size() == 100, "mid-job save did not contain 100 terrain records")
+	_check(_saved_pair(MID_JOB_SAVE_PATH) == Vector2i(8, 3), "fresh mid-job save did not write pair 8/3")
+	_check(_rewrite_saved_pair(MID_JOB_SAVE_PATH, 7, 2), "mid-job fixture could not be converted to legacy pair 7/2")
 	var restored = CoordinatorScript.new(99, 1)
 	var mid_job_loaded: bool = restored.load_game(MID_JOB_SAVE_PATH)
 	if not mid_job_loaded:
 		_diagnose_mid_job_restore(coordinator)
 	_check(mid_job_loaded, "mid-job save did not load")
+	_check(_runtime_pair(restored) == Vector2i(8, 3), "mid-job 7/2 load did not atomically migrate to 8/3")
+	_check(JSON.stringify(restored.terrain_snapshot().get("tiles", [])) == mid_job_tiles_json, "mid-job migration changed terrain records")
+	_check(restored.save_game(MID_JOB_SAVE_PATH) == OK, "migrated mid-job state could not persist as current")
+	_check(_saved_pair(MID_JOB_SAVE_PATH) == Vector2i(8, 3), "migrated mid-job save did not persist pair 8/3")
+	var reentered = CoordinatorScript.new(98, 1)
+	_check(reentered.load_game(MID_JOB_SAVE_PATH), "current mid-job save failed migration re-entry")
+	_check(_runtime_pair(reentered) == Vector2i(8, 3), "migration re-entry changed the current pair")
+	restored = reentered
 	var restored_job: Dictionary = restored.construction.jobs.get(job_id, {})
 	_check(str(restored_job.get("status", "")) == "active", "mid-job load did not preserve active status")
 	_check(is_equal_approx(float(restored_job.get("remaining_work", -1.0)), float(job.get("remaining_work", -2.0))), "mid-job load changed remaining work")
@@ -108,8 +121,13 @@ func _test_async_flatten_lifecycle() -> void:
 	_check(_ledger_count(restored, "construction.terrain_flatten_total_cost") == 1, "terrain lifecycle has more than one prepaid ledger entry")
 
 	_check(restored.save_game(COMPLETED_SAVE_PATH) == OK, "completed terrain save failed")
+	var completed_tiles_json := JSON.stringify(restored.terrain_snapshot().get("tiles", []))
+	_check(_saved_pair(COMPLETED_SAVE_PATH) == Vector2i(8, 3), "fresh completed save did not write pair 8/3")
+	_check(_rewrite_saved_pair(COMPLETED_SAVE_PATH, 7, 2), "completed fixture could not be converted to legacy pair 7/2")
 	var completed_reload = CoordinatorScript.new(100, 1)
 	_check(completed_reload.load_game(COMPLETED_SAVE_PATH), "completed terrain save did not load")
+	_check(_runtime_pair(completed_reload) == Vector2i(8, 3), "completed 7/2 load did not atomically migrate to 8/3")
+	_check(JSON.stringify(completed_reload.terrain_snapshot().get("tiles", [])) == completed_tiles_json, "completed migration changed terrain records")
 	_check(completed_reload.terrain_map.is_flattened(tile_id), "completed terrain did not survive reload")
 	_check(str(completed_reload.construction.jobs.get(job_id, {}).get("status", "")) == "completed", "completed terrain job history did not survive reload")
 	_check(completed_reload.treasury_balance() == funds_before - total_cost, "completed reload deducted the quote again")
@@ -191,6 +209,61 @@ func _first_backdrop_terrain_tile(coordinator, preferred_kind: String) -> int:
 		):
 			return int(state.get("tile_id", -1))
 	return -1
+
+
+func _runtime_pair(coordinator) -> Vector2i:
+	var vertical: Dictionary = coordinator.session.state.metadata.get("vertical_slice", {})
+	var terrain: Dictionary = vertical.get("terrain", {})
+	return Vector2i(
+		int(vertical.get("schema_version", -1)),
+		int(terrain.get("layout_version", -1))
+	)
+
+
+func _saved_pair(save_path: String) -> Vector2i:
+	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(save_path))
+	if not parsed is Dictionary:
+		return Vector2i(-1, -1)
+	var state_value: Variant = (parsed as Dictionary).get("state", null)
+	if not state_value is Dictionary:
+		return Vector2i(-1, -1)
+	var metadata: Dictionary = (state_value as Dictionary).get("metadata", {})
+	var vertical: Dictionary = metadata.get("vertical_slice", {})
+	var terrain: Dictionary = vertical.get("terrain", {})
+	return Vector2i(
+		int(vertical.get("schema_version", -1)),
+		int(terrain.get("layout_version", -1))
+	)
+
+
+func _rewrite_saved_pair(save_path: String, schema_version: int, layout_version: int) -> bool:
+	if not SaveSchemaAuthorityScript.is_legacy_migration_pair(schema_version, layout_version):
+		return false
+	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(save_path))
+	if not parsed is Dictionary:
+		return false
+	var envelope: Dictionary = parsed
+	var state_value: Variant = envelope.get("state", null)
+	if not state_value is Dictionary:
+		return false
+	var state_snapshot: Dictionary = state_value
+	var metadata: Dictionary = state_snapshot.get("metadata", {})
+	var vertical: Dictionary = metadata.get("vertical_slice", {})
+	var terrain: Dictionary = vertical.get("terrain", {})
+	vertical["schema_version"] = schema_version
+	terrain["layout_version"] = layout_version
+	vertical["terrain"] = terrain
+	metadata["vertical_slice"] = vertical
+	state_snapshot["metadata"] = metadata
+	envelope["state"] = state_snapshot
+	var file := FileAccess.open(ProjectSettings.globalize_path(save_path), FileAccess.WRITE)
+	if file == null:
+		return false
+	file.store_string(JSON.stringify(envelope, "\t", false))
+	file.flush()
+	var write_error := file.get_error()
+	file.close()
+	return write_error == OK
 
 
 func _cleanup_saves() -> void:
