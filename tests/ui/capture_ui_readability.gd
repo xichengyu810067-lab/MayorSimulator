@@ -272,7 +272,9 @@ func _capture_states() -> void:
 	# Seed representative player-facing cases so the judicial and oversight
 	# captures exercise the actual defense states instead of only empty screens.
 	var justice_system = scene.get("vertical_slice").governance.justice_system
-	justice_system.open_judicial_case("public_safety_act", 1, 64, "公共安全法案違法施行案")
+	var opened_judicial: Dictionary = justice_system.open_judicial_case("public_safety_act", 1, 64, "公共安全法案違法施行案")
+	var visual_court_case: Dictionary = opened_judicial.get("case", {})
+	justice_system.advance_judicial_procedures(int(visual_court_case.get("hearing_day", 1)))
 	justice_system.open_oversight_case(
 		"official_mayor",
 		["違法強制施行法案", "未遵守議會否決決議"],
@@ -1313,13 +1315,22 @@ func _validate_visual_data(overlay, expected_page: String) -> bool:
 			push_error("Every NPC request must expose one processing action.")
 			return false
 	if expected_page in ["judicial", "oversight"]:
-		var function_pictures: Array = []
-		for node in overlay.find_children("FunctionIllustration", "TextureRect", true, false):
-			if node.is_visible_in_tree():
-				function_pictures.append(node)
-		if function_pictures.size() != 1:
-			push_error("Page '%s' must expose one dominant function illustration; found %d." % [expected_page, function_pictures.size()])
-			return false
+		if expected_page == "judicial":
+			var courtroom_scenes: Array = []
+			for node in overlay.find_children("CourtroomStage", "Control", true, false):
+				if node.is_visible_in_tree():
+					courtroom_scenes.append(node)
+			if courtroom_scenes.size() != 1:
+				push_error("Judicial page must expose one layered courtroom scene; found %d." % courtroom_scenes.size())
+				return false
+		else:
+			var function_pictures: Array = []
+			for node in overlay.find_children("FunctionIllustration", "TextureRect", true, false):
+				if node.is_visible_in_tree():
+					function_pictures.append(node)
+			if function_pictures.size() != 1:
+				push_error("Page '%s' must expose one dominant function illustration; found %d." % [expected_page, function_pictures.size()])
+				return false
 		var defense_actions: Node = null
 		for node in overlay.find_children("DefenseActions", "HBoxContainer", true, false):
 			if node.is_visible_in_tree():
@@ -1330,8 +1341,8 @@ func _validate_visual_data(overlay, expected_page: String) -> bool:
 			return false
 		var enabled_defenses := 0
 		var selected_defenses := 0
-		for child in defense_actions.get_children():
-			if child is Button and not (child as Button).disabled:
+		for child in defense_actions.find_children("*DefenseButton", "Button", true, false):
+			if not (child as Button).disabled:
 				enabled_defenses += 1
 				if (child as Button).text.begins_with("✓"):
 					selected_defenses += 1
@@ -1424,7 +1435,9 @@ func _validate_page_scope(page_id: String, visible_labels: Array, visible_button
 		"buildings": ["居民請求", "民怨", "市政信任", "法院審判", "監察質詢", "委員名單", "強制執行", "儲存", "讀取"],
 		"governance": ["三權分治", "行政權", "立法權", "司法權", "制衡軌跡", "居民請求", "民怨", "市政信任", "委員名單", "委員席次", "司法調查", "監察調查", "設計藍圖", "維修至", "拆除選取", "儲存", "讀取"],
 		"blueprint": ["民怨", "滿意", "信任", "居民請求", "維護", "耐久", "司法", "監察", "委員", "強制執行", "儲存", "讀取"],
-		"judicial": ["委員名單", "委員席次", "任期", "沈知衡", "任書妍", " personality_tags", "資料庫"],
+		# The courtroom may name the three judges assigned to the visible bench.
+		# It must still avoid leaking the full committee roster or internal records.
+		"judicial": ["委員名單", "委員席次", "任期", " personality_tags", "資料庫"],
 		"oversight": ["委員名單", "委員席次", "任期", "沈知衡", "任書妍", " personality_tags", "資料庫"],
 		"finance": ["居民請求", "委員名單", "法院審判", "監察質詢", "設計藍圖", "維修至", "拆除選取", "強制執行", "儲存", "讀取"],
 		"public_affairs": ["民怨", "市政信任", "設計藍圖", "送審藍圖", "稅率", "公共事業費", "法院審判", "彈劾辯護", "維修至", "拆除選取", "強制執行"],

@@ -143,6 +143,9 @@ func advance_day(current_day: int, context: Dictionary = {}) -> Array[Dictionary
 	if not latch_failure().is_empty():
 		return []
 	var emitted: Array[Dictionary] = []
+	# Courtroom procedure is authoritative model state. Advancing it here keeps
+	# UI refreshes read-only while preserving the current stage in saves.
+	justice_system.advance_judicial_procedures(current_day)
 	if (
 		not pending_bill.is_empty()
 		and str(pending_bill.get("status", "")) != "lower_house_data_error"

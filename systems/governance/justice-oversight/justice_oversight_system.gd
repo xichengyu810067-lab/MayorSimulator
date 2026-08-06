@@ -1,7 +1,7 @@
 class_name JusticeOversightSystem
 extends RefCounted
 
-const SCHEMA_VERSION := 1
+const SCHEMA_VERSION := 2
 const DEFAULT_DATA_PATH := "res://data/databases/governance/justice-oversight/committee_members.json"
 const LOWER_COUNCIL_DATA_PATH := "res://data/databases/governance/lower-council/councilors.json"
 const JUDICIAL_COMMITTEE := "judicial_committee"
@@ -17,9 +17,22 @@ const OVERSIGHT_DEFENSE_RELIEF := {
 	"due_process": 10,
 	"corrective_action": 13,
 }
+const JUDICIAL_STAGE_FILED := "filed"
+const JUDICIAL_STAGE_PREPARATION := "preparation"
+const JUDICIAL_STAGE_HEARING := "hearing"
+const JUDICIAL_STAGE_DELIBERATION := "deliberation"
+const JUDICIAL_STAGE_JUDGMENT := "judgment"
+const JUDICIAL_STAGE_ORDER := [
+	JUDICIAL_STAGE_FILED,
+	JUDICIAL_STAGE_PREPARATION,
+	JUDICIAL_STAGE_HEARING,
+	JUDICIAL_STAGE_DELIBERATION,
+	JUDICIAL_STAGE_JUDGMENT,
+]
 
 var seed: int = 20_260_722
 var current_year: int = 1
+var current_day: int = 0
 var committees: Dictionary = {}
 var members: Dictionary = {}
 var office_registry: Dictionary = {}
@@ -221,6 +234,32 @@ func advance_year(new_year: int) -> Array[Dictionary]:
 	return events
 
 
+func advance_judicial_procedures(new_day: int) -> Array[Dictionary]:
+	current_day = maxi(current_day, new_day)
+	var events: Array[Dictionary] = []
+	for case_id: String in _sorted_keys(judicial_cases):
+		var court_case: Dictionary = judicial_cases[case_id]
+		if str(court_case.get("status", "")) != "investigating":
+			continue
+		_normalize_judicial_case_procedure(court_case)
+		var target_stage := _judicial_stage_for_day(court_case, current_day)
+		var previous_stage := str(court_case.get("procedural_stage", JUDICIAL_STAGE_FILED))
+		if previous_stage == target_stage:
+			judicial_cases[case_id] = court_case
+			continue
+		court_case["procedural_stage"] = target_stage
+		_append_docket_entry(court_case, target_stage, current_day)
+		judicial_cases[case_id] = court_case
+		events.append({
+			"type": "judiciary_procedure_advanced",
+			"subject_id": case_id,
+			"game_day": current_day,
+			"reason_tag": "judiciary.stage_%s" % target_stage,
+			"payload": {"previous_stage": previous_stage, "stage": target_stage},
+		})
+	return events
+
+
 func open_judicial_case(
 	bill_id: String,
 	current_day: int,
@@ -232,7 +271,14 @@ func open_judicial_case(
 	if active_member_ids(JUDICIAL_COMMITTEE).size() != 15:
 		return {"ok": false, "error": "judicial_committee_not_fully_seated"}
 	var case_id := "judicial_%06d" % next_judicial_sequence
-	var investigation_days := 2 + (_stable_int("%d|%s" % [seed, case_id]) % 14)
+	# Five procedural stages need distinct room in the fixed 30-day calendar.
+	# New cases therefore take 5-15 days; legacy saves keep their recorded dates.
+	var investigation_days := 5 + (_stable_int("%d|%s" % [seed, case_id]) % 11)
+	self.current_day = maxi(self.current_day, current_day)
+	var decision_day := current_day + investigation_days
+	var hearing_day := current_day + maxi(1, int(floor(float(investigation_days) * 0.55)))
+	var deliberation_day := maxi(hearing_day, decision_day - 1)
+	var judicial_members := active_member_ids(JUDICIAL_COMMITTEE)
 	var court_case := {
 		"id": case_id,
 		"sequence": next_judicial_sequence,
@@ -240,11 +286,17 @@ func open_judicial_case(
 		"bill_id": bill_id,
 		"opened_day": current_day,
 		"investigation_days": investigation_days,
-		"decision_day": current_day + investigation_days,
+		"preparation_day": mini(current_day + 1, decision_day),
+		"hearing_day": mini(hearing_day, decision_day),
+		"deliberation_day": mini(deliberation_day, decision_day),
+		"decision_day": decision_day,
 		"status": "investigating",
+		"procedural_stage": JUDICIAL_STAGE_FILED,
 		"base_severity": clampi(base_severity, 0, 100),
 		"defense_template_id": "",
-		"committee_member_ids": active_member_ids(JUDICIAL_COMMITTEE),
+		"committee_member_ids": judicial_members,
+		"presiding_member_ids": _presiding_panel(judicial_members, next_judicial_sequence),
+		"docket_entries": [{"stage": JUDICIAL_STAGE_FILED, "game_day": current_day}],
 		"member_votes": [],
 		"outcome": "",
 	}
@@ -263,7 +315,10 @@ func submit_defense(case_id: String, template_id: String) -> Dictionary:
 	var court_case: Dictionary = judicial_cases[case_id]
 	if str(court_case.get("status", "")) != "investigating":
 		return {"ok": false, "error": "case_not_investigating"}
+	if str(court_case.get("procedural_stage", JUDICIAL_STAGE_FILED)) in [JUDICIAL_STAGE_DELIBERATION, JUDICIAL_STAGE_JUDGMENT]:
+		return {"ok": false, "error": "defense_submission_closed"}
 	court_case["defense_template_id"] = template_id
+	_append_docket_entry(court_case, "defense_submitted", current_day, {"template_id": template_id})
 	judicial_cases[case_id] = court_case
 	return {"ok": true, "case": court_case.duplicate(true)}
 
@@ -278,6 +333,7 @@ func resolve_judicial_case(case_id: String, current_day: int, context: Dictionar
 		return {"ok": false, "error": "case_not_investigating"}
 	if current_day < int(court_case.get("decision_day", 0)):
 		return {"ok": false, "error": "decision_not_due"}
+	self.current_day = maxi(self.current_day, current_day)
 	var defense_relief := int(DEFENSE_RELIEF.get(str(court_case.get("defense_template_id", "")), 0))
 	var effectiveness_values: Dictionary = context.get("policy_effectiveness", {})
 	var effectiveness := clampf(float(effectiveness_values.get(str(court_case.get("bill_id", "")), 0.0)), -20.0, 20.0)
@@ -302,11 +358,13 @@ func resolve_judicial_case(case_id: String, current_day: int, context: Dictionar
 	if outcome == "fine":
 		fine_amount = 5_000 + int(round(final_severity)) * 250
 	court_case["status"] = "resolved"
+	court_case["procedural_stage"] = JUDICIAL_STAGE_JUDGMENT
 	court_case["resolved_day"] = current_day
 	court_case["final_severity"] = snappedf(final_severity, 0.01)
 	court_case["outcome"] = outcome
 	court_case["fine_amount"] = fine_amount
 	court_case["member_votes"] = member_votes
+	_append_docket_entry(court_case, JUDICIAL_STAGE_JUDGMENT, current_day, {"outcome": outcome})
 	judicial_cases[case_id] = court_case
 	return {
 		"ok": true,
@@ -421,6 +479,7 @@ func committee_summary() -> Dictionary:
 		"oversight_term_years": 3,
 		"oversight_open_cases": oversight_open,
 		"current_year": current_year,
+		"current_day": current_day,
 	}
 
 
@@ -456,6 +515,7 @@ func to_dict() -> Dictionary:
 		"schema_version": SCHEMA_VERSION,
 		"seed": seed,
 		"current_year": current_year,
+		"current_day": current_day,
 		"committees": committees.duplicate(true),
 		"members": member_data,
 		"administrative_officials": administrative_officials.duplicate(true),
@@ -475,6 +535,7 @@ func load_state(data: Dictionary) -> Dictionary:
 		return base
 	seed = int(data.get("seed", seed))
 	current_year = maxi(1, int(data.get("current_year", 1)))
+	current_day = maxi(0, int(data.get("current_day", 0)))
 	if data.has("members"):
 		members.clear()
 		office_registry.clear()
@@ -489,6 +550,10 @@ func load_state(data: Dictionary) -> Dictionary:
 		if _office_conflict(person_id, str(record.get("name", ""))).is_empty():
 			office_registry[person_id] = record.duplicate(true)
 	judicial_cases = (data.get("judicial_cases", {}) as Dictionary).duplicate(true)
+	for case_id: String in _sorted_keys(judicial_cases):
+		var court_case: Dictionary = judicial_cases[case_id]
+		_normalize_judicial_case_procedure(court_case)
+		judicial_cases[case_id] = court_case
 	oversight_cases = (data.get("oversight_cases", {}) as Dictionary).duplicate(true)
 	term_history.clear()
 	for value: Variant in data.get("term_history", []):
@@ -644,8 +709,66 @@ func _stable_variation(case_id: String, person_id: String, amplitude: float) -> 
 	return raw * amplitude
 
 
+func _presiding_panel(judicial_members: Array[String], sequence: int) -> Array[String]:
+	var panel: Array[String] = []
+	if judicial_members.is_empty():
+		return panel
+	var start := ((maxi(1, sequence) - 1) * 3) % judicial_members.size()
+	for offset: int in mini(3, judicial_members.size()):
+		panel.append(judicial_members[(start + offset) % judicial_members.size()])
+	return panel
+
+
+func _normalize_judicial_case_procedure(court_case: Dictionary) -> void:
+	var opened_day := maxi(0, int(court_case.get("opened_day", 0)))
+	var decision_day := maxi(opened_day + 1, int(court_case.get("decision_day", opened_day + 2)))
+	var span := maxi(1, decision_day - opened_day)
+	var hearing_day := opened_day + maxi(1, int(floor(float(span) * 0.55)))
+	court_case["preparation_day"] = clampi(int(court_case.get("preparation_day", opened_day + 1)), opened_day, decision_day)
+	court_case["hearing_day"] = clampi(int(court_case.get("hearing_day", hearing_day)), opened_day, decision_day)
+	court_case["deliberation_day"] = clampi(int(court_case.get("deliberation_day", decision_day - 1)), int(court_case["hearing_day"]), decision_day)
+	court_case["decision_day"] = decision_day
+	if not court_case.has("presiding_member_ids") or (court_case.get("presiding_member_ids", []) as Array).is_empty():
+		var judicial_members: Array[String] = []
+		for member_id: Variant in court_case.get("committee_member_ids", []):
+			judicial_members.append(str(member_id))
+		court_case["presiding_member_ids"] = _presiding_panel(judicial_members, int(court_case.get("sequence", 1)))
+	if not court_case.has("docket_entries"):
+		court_case["docket_entries"] = [{"stage": JUDICIAL_STAGE_FILED, "game_day": opened_day}]
+	if str(court_case.get("status", "")) == "resolved":
+		court_case["procedural_stage"] = JUDICIAL_STAGE_JUDGMENT
+	elif not JUDICIAL_STAGE_ORDER.has(str(court_case.get("procedural_stage", ""))):
+		court_case["procedural_stage"] = _judicial_stage_for_day(court_case, current_day)
+
+
+func _judicial_stage_for_day(court_case: Dictionary, game_day: int) -> String:
+	if str(court_case.get("status", "")) == "resolved" or game_day >= int(court_case.get("decision_day", 0)):
+		return JUDICIAL_STAGE_JUDGMENT
+	if game_day >= int(court_case.get("deliberation_day", 0)):
+		return JUDICIAL_STAGE_DELIBERATION
+	if game_day >= int(court_case.get("hearing_day", 0)):
+		return JUDICIAL_STAGE_HEARING
+	if game_day >= int(court_case.get("preparation_day", 0)):
+		return JUDICIAL_STAGE_PREPARATION
+	return JUDICIAL_STAGE_FILED
+
+
+func _append_docket_entry(court_case: Dictionary, stage: String, game_day: int, detail: Dictionary = {}) -> void:
+	var entries: Array = court_case.get("docket_entries", [])
+	if not entries.is_empty():
+		var latest: Dictionary = entries.back() if entries.back() is Dictionary else {}
+		if str(latest.get("stage", "")) == stage and detail.is_empty():
+			return
+	var entry := {"stage": stage, "game_day": maxi(0, game_day)}
+	for key: Variant in detail.keys():
+		entry[str(key)] = detail[key]
+	entries.append(entry)
+	court_case["docket_entries"] = entries
+
+
 func _reset() -> void:
 	current_year = 1
+	current_day = 0
 	committees.clear()
 	members.clear()
 	office_registry.clear()

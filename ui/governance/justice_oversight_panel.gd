@@ -1,6 +1,7 @@
 extends ScrollContainer
 
 const UiIconCatalog = preload("res://ui/theme/ui_icon_catalog.gd")
+const CourtroomStageScript = preload("res://ui/governance/courtroom_stage.gd")
 
 signal defense_submitted(mode: String, case_id: String, defense_id: String, result: Dictionary)
 
@@ -8,6 +9,16 @@ const BODY_SIZE := 18
 const TITLE_SIZE := 25
 const MODE_JUDICIAL := "judicial"
 const MODE_OVERSIGHT := "oversight"
+const DAYS_PER_MONTH := 30
+const MONTHS_PER_YEAR := 12
+const JUDICIAL_STAGES := ["filed", "preparation", "hearing", "deliberation", "judgment"]
+const JUDICIAL_STAGE_LABELS := {
+	"filed": "立案",
+	"preparation": "書狀準備",
+	"hearing": "開庭陳述",
+	"deliberation": "合議評議",
+	"judgment": "宣判",
+}
 const FAILURE_REASON_LABELS := {
 	"imprisonment_judgment": "監禁判決",
 	"grievance_above_80": "民怨超過 80",
@@ -54,6 +65,10 @@ var _case_selector: OptionButton
 var _case_page_label: Label
 var _previous_case_button: Button
 var _next_case_button: Button
+var _courtroom_stage
+var _procedure_labels: Dictionary = {}
+var _next_step_label: Label
+var _bench_label: Label
 var _open_case_ids: Array[String] = []
 var _selected_case_id: String = ""
 
@@ -78,6 +93,10 @@ func set_dark_mode(enabled: bool) -> void:
 	for button in [_previous_case_button, _next_case_button]:
 		if is_instance_valid(button):
 			_style_defense_button(button as Button, text_color)
+	# Timeline colors are assigned per procedural state, so they must be
+	# recomputed when the player changes theme while this page is open.
+	if not _procedure_labels.is_empty():
+		_refresh_procedure_timeline(_active_case() if _system != null else {})
 
 
 func refresh(system) -> void:
@@ -87,9 +106,8 @@ func refresh(system) -> void:
 	var summary: Dictionary = _system.committee_summary()
 	var open_key := "judicial_open_cases" if mode == MODE_JUDICIAL else "oversight_open_cases"
 	var open_cases := int(summary.get(open_key, 0))
-	_summary_label.text = L10n.text("第 %d 年　｜　%d 件待處理") % [
-		int(summary.get("current_year", 1)), open_cases,
-	]
+	var game_day := int(summary.get("current_day", 0))
+	_summary_label.text = L10n.text("%s　｜　%d 件待處理") % [_format_game_date(game_day), open_cases]
 	_refresh_case_navigation()
 
 
@@ -117,29 +135,29 @@ func _build_content() -> void:
 	content.add_theme_constant_override("separation", 16)
 	add_child(content)
 
-	var hero := HBoxContainer.new()
-	hero.add_theme_constant_override("separation", 24)
-	content.add_child(hero)
-	var picture := TextureRect.new()
-	picture.name = "FunctionIllustration"
-	picture.texture = UiIconCatalog.texture(str(_config()["icon"]))
-	picture.custom_minimum_size = Vector2(220, 220)
-	picture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	picture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	picture.tooltip_text = str(_config()["purpose"])
-	hero.add_child(picture)
-
 	var hero_text := VBoxContainer.new()
 	hero_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hero_text.alignment = BoxContainer.ALIGNMENT_CENTER
 	hero_text.add_theme_constant_override("separation", 10)
-	hero.add_child(hero_text)
+	content.add_child(hero_text)
 	hero_text.add_child(_title(str(_config()["page_name"])))
 	var purpose := _body(str(_config()["purpose"]))
 	purpose.add_theme_font_size_override("font_size", 21)
 	hero_text.add_child(purpose)
 	_summary_label = _body("載入案件資料中……")
 	hero_text.add_child(_summary_label)
+	if mode == MODE_JUDICIAL:
+		_courtroom_stage = CourtroomStageScript.new()
+		content.add_child(_courtroom_stage)
+	else:
+		var picture := TextureRect.new()
+		picture.name = "FunctionIllustration"
+		picture.texture = UiIconCatalog.texture(str(_config()["icon"]))
+		picture.custom_minimum_size = Vector2(220, 220)
+		picture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		picture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		picture.tooltip_text = str(_config()["purpose"])
+		content.add_child(picture)
 
 	_case_panel = PanelContainer.new()
 	_case_panel.name = "DefenseCasePanel"
@@ -159,7 +177,7 @@ func _build_content() -> void:
 	case_stack.add_child(case_navigation)
 	_previous_case_button = Button.new()
 	_previous_case_button.name = "CasePreviousButton"
-	_previous_case_button.text = "← 上一頁"
+	_previous_case_button.text = "← 上一案"
 	_previous_case_button.custom_minimum_size = Vector2(122, 44)
 	_previous_case_button.disabled = true
 	_previous_case_button.pressed.connect(_select_previous_case)
@@ -178,7 +196,7 @@ func _build_content() -> void:
 	case_navigation.add_child(_case_page_label)
 	_next_case_button = Button.new()
 	_next_case_button.name = "CaseNextButton"
-	_next_case_button.text = "下一頁 →"
+	_next_case_button.text = "下一案 →"
 	_next_case_button.custom_minimum_size = Vector2(122, 44)
 	_next_case_button.disabled = true
 	_next_case_button.pressed.connect(_select_next_case)
@@ -189,6 +207,8 @@ func _build_content() -> void:
 	_case_detail = _body(str(_config()["empty_hint"]))
 	_case_detail.set_meta("l10n_skip", true)
 	case_stack.add_child(_case_detail)
+	if mode == MODE_JUDICIAL:
+		_build_procedure_timeline(case_stack)
 	_defense_status = _body("案件成立後即可選擇辯護策略。")
 	_defense_status.set_meta("l10n_skip", true)
 	case_stack.add_child(_defense_status)
@@ -210,7 +230,16 @@ func _build_content() -> void:
 		button.disabled = true
 		button.pressed.connect(func() -> void: submit_current_defense(option_id))
 		_defense_buttons[option_id] = button
-		defense_row.add_child(button)
+		var option_stack := VBoxContainer.new()
+		option_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		option_stack.add_theme_constant_override("separation", 5)
+		option_stack.add_child(button)
+		var explanation := _body(str(option["detail"]))
+		explanation.set_meta("l10n_skip", true)
+		explanation.add_theme_font_size_override("font_size", 15)
+		explanation.custom_minimum_size = Vector2(0, 56)
+		option_stack.add_child(explanation)
+		defense_row.add_child(option_stack)
 
 	set_dark_mode(_dark_mode)
 
@@ -229,9 +258,9 @@ func _refresh_case_navigation() -> void:
 		_case_selector.disabled = true
 		_previous_case_button.disabled = true
 		_next_case_button.disabled = true
-		_case_page_label.text = L10n.text("第 %d / %d 頁") % [0, 0]
-		_previous_case_button.text = L10n.text("← 上一頁")
-		_next_case_button.text = L10n.text("下一頁 →")
+		_case_page_label.text = L10n.text("第 %d / %d 案") % [0, 0]
+		_previous_case_button.text = L10n.text("← 上一案")
+		_next_case_button.text = L10n.text("下一案 →")
 		_refresh_case()
 		return
 	var selected_index := _open_case_ids.find(_selected_case_id)
@@ -295,9 +324,9 @@ func _select_next_case() -> void:
 func _update_case_navigation_state(index: int) -> void:
 	_previous_case_button.disabled = index <= 0
 	_next_case_button.disabled = index < 0 or index >= _open_case_ids.size() - 1
-	_previous_case_button.text = L10n.text("← 上一頁")
-	_next_case_button.text = L10n.text("下一頁 →")
-	_case_page_label.text = L10n.text("第 %d / %d 頁") % [index + 1, _open_case_ids.size()]
+	_previous_case_button.text = L10n.text("← 上一案")
+	_next_case_button.text = L10n.text("下一案 →")
+	_case_page_label.text = L10n.text("第 %d / %d 案") % [index + 1, _open_case_ids.size()]
 
 
 func selected_case_id() -> String:
@@ -321,6 +350,9 @@ func _refresh_case() -> void:
 		_case_title.text = L10n.text("目前無待處理案件")
 		_case_detail.text = L10n.text(str(_config()["empty_hint"]))
 		_defense_status.text = L10n.text("案件成立後即可選擇辯護策略。")
+		if mode == MODE_JUDICIAL:
+			_courtroom_stage.show_empty()
+			_refresh_procedure_timeline({})
 		for button_variant in _defense_buttons.values():
 			(button_variant as Button).disabled = true
 			(button_variant as Button).text = L10n.text(str((button_variant as Button).get_meta("semantic_label", "辯護")))
@@ -329,9 +361,13 @@ func _refresh_case() -> void:
 	var selected_id := str(active_case.get("defense_template_id", ""))
 	if mode == MODE_JUDICIAL:
 		_case_title.text = _localized_judicial_case_name(str(active_case.get("name", "行政違法審判")))
-		_case_detail.text = L10n.text("第 %d 日裁決　｜　案件嚴重度 %d / 100") % [
-			int(active_case.get("decision_day", 0)), int(active_case.get("base_severity", 0)),
+		_case_detail.text = L10n.text("案號 %s　｜　預定 %s 宣判　｜　案件嚴重度 %d / 100") % [
+			str(active_case.get("id", "")),
+			_format_game_date(int(active_case.get("decision_day", 0))),
+			int(active_case.get("base_severity", 0)),
 		]
+		_courtroom_stage.set_case(active_case)
+		_refresh_procedure_timeline(active_case)
 	else:
 		_case_title.text = L10n.text("%s｜彈劾質詢") % L10n.text(str(active_case.get("target_name", "市長")))
 		var allegations_raw: Array = active_case.get("allegations", [])
@@ -349,13 +385,115 @@ func _refresh_case() -> void:
 		for button_variant in _defense_buttons.values():
 			(button_variant as Button).disabled = true
 		return
-	_defense_status.text = L10n.text("尚未提出辯護") if selected_id.is_empty() else (L10n.text("已提出：%s") % L10n.text(_defense_label(selected_id)))
+	var submission_closed := mode == MODE_JUDICIAL and str(active_case.get("procedural_stage", "filed")) in ["deliberation", "judgment"]
+	if submission_closed:
+		_defense_status.text = L10n.text("書狀提出期間已結束；合議庭正在評議。")
+	else:
+		_defense_status.text = L10n.text("尚未提出辯護；可在合議前補充或更換策略。") if selected_id.is_empty() else (L10n.text("已提出：%s（合議前仍可更換）") % L10n.text(_defense_label(selected_id)))
 	for option_id: String in _defense_buttons:
 		var button := _defense_buttons[option_id] as Button
-		button.disabled = false
+		button.disabled = submission_closed
 		var label := str(button.get_meta("semantic_label", option_id))
 		var localized_label := L10n.text(label)
 		button.text = "✓ %s" % localized_label if option_id == selected_id else localized_label
+
+
+func _build_procedure_timeline(parent: VBoxContainer) -> void:
+	var heading := _body("審判程序")
+	heading.add_theme_font_size_override("font_size", 17)
+	parent.add_child(heading)
+	var timeline := HBoxContainer.new()
+	timeline.name = "JudicialProcedureTimeline"
+	timeline.add_theme_constant_override("separation", 7)
+	parent.add_child(timeline)
+	for stage_id: String in JUDICIAL_STAGES:
+		var stage_label := Label.new()
+		stage_label.text = L10n.text(str(JUDICIAL_STAGE_LABELS[stage_id]))
+		stage_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		stage_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		stage_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		stage_label.custom_minimum_size = Vector2(96, 48)
+		stage_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		stage_label.add_theme_font_size_override("font_size", 15)
+		stage_label.set_meta("l10n_skip", true)
+		timeline.add_child(stage_label)
+		_procedure_labels[stage_id] = stage_label
+	_next_step_label = _body("")
+	_next_step_label.name = "JudicialNextStep"
+	_next_step_label.set_meta("l10n_skip", true)
+	parent.add_child(_next_step_label)
+	_bench_label = _body("")
+	_bench_label.name = "JudicialBenchLabel"
+	_bench_label.set_meta("l10n_skip", true)
+	_bench_label.add_theme_font_size_override("font_size", 15)
+	parent.add_child(_bench_label)
+
+
+func _refresh_procedure_timeline(court_case: Dictionary) -> void:
+	if _procedure_labels.is_empty():
+		return
+	var current_stage := str(court_case.get("procedural_stage", ""))
+	var current_index := JUDICIAL_STAGES.find(current_stage)
+	for index: int in JUDICIAL_STAGES.size():
+		var stage_id: String = JUDICIAL_STAGES[index]
+		var label := _procedure_labels[stage_id] as Label
+		var style := StyleBoxFlat.new()
+		style.set_corner_radius_all(8)
+		style.set_border_width_all(2)
+		if current_index < 0:
+			style.bg_color = Color(0.2, 0.23, 0.25, 0.35)
+			style.border_color = Color(0.42, 0.45, 0.48, 0.5)
+			label.add_theme_color_override("font_color", Color(0.88, 0.92, 0.94) if _dark_mode else Color(0.12, 0.15, 0.18))
+			label.text = L10n.text(str(JUDICIAL_STAGE_LABELS[stage_id]))
+		elif index < current_index:
+			style.bg_color = Color(0.18, 0.48, 0.38, 0.88)
+			style.border_color = Color(0.42, 0.76, 0.60)
+			label.add_theme_color_override("font_color", Color.WHITE)
+			label.text = "✓ %s" % L10n.text(str(JUDICIAL_STAGE_LABELS[stage_id]))
+		elif index == current_index:
+			style.bg_color = Color(0.35, 0.34, 0.72, 0.96)
+			style.border_color = Color(0.76, 0.71, 1.0)
+			label.add_theme_color_override("font_color", Color.WHITE)
+			label.text = "● %s" % L10n.text(str(JUDICIAL_STAGE_LABELS[stage_id]))
+		else:
+			style.bg_color = Color(0.17, 0.20, 0.23, 0.46) if _dark_mode else Color(0.88, 0.84, 0.75)
+			style.border_color = Color(0.38, 0.40, 0.43, 0.72)
+			label.add_theme_color_override("font_color", Color(0.92, 0.95, 0.97) if _dark_mode else Color(0.10, 0.13, 0.16))
+			label.text = L10n.text(str(JUDICIAL_STAGE_LABELS[stage_id]))
+		label.add_theme_stylebox_override("normal", style)
+	if court_case.is_empty():
+		_next_step_label.text = L10n.text("目前沒有進行中的法院案件。")
+		_bench_label.text = ""
+		return
+	var schedule := {
+		"filed": int(court_case.get("opened_day", 0)),
+		"preparation": int(court_case.get("preparation_day", 0)),
+		"hearing": int(court_case.get("hearing_day", 0)),
+		"deliberation": int(court_case.get("deliberation_day", 0)),
+		"judgment": int(court_case.get("decision_day", 0)),
+	}
+	var next_index := mini(current_index + 1, JUDICIAL_STAGES.size() - 1)
+	var next_stage: String = JUDICIAL_STAGES[next_index]
+	_next_step_label.text = L10n.text("目前：%s　｜　下一步：%s（%s）") % [
+		L10n.text(str(JUDICIAL_STAGE_LABELS.get(current_stage, "程序待確認"))),
+		L10n.text(str(JUDICIAL_STAGE_LABELS[next_stage])),
+		_format_game_date(int(schedule[next_stage])),
+	]
+	var names: Array[String] = []
+	for member_id: Variant in court_case.get("presiding_member_ids", []):
+		var member: Dictionary = _system.get_member(str(member_id)) if _system != null else {}
+		names.append(L10n.text(str(member.get("name", member_id))))
+	_bench_label.text = L10n.text("本案主審合議庭：%s　｜　最終裁判仍由全體 15 名司法委員記名評議") % ("、".join(names) if not names.is_empty() else L10n.text("待排定"))
+
+
+func _format_game_date(game_day: int) -> String:
+	var safe_day := maxi(0, game_day)
+	var days_per_year := DAYS_PER_MONTH * MONTHS_PER_YEAR
+	var year := int(safe_day / days_per_year) + 1
+	var year_day := safe_day % days_per_year
+	var month := int(year_day / DAYS_PER_MONTH) + 1
+	var day := year_day % DAYS_PER_MONTH + 1
+	return L10n.text("第 %d 年 %d 月 %d 日") % [year, month, day]
 
 
 func _localized_judicial_case_name(source: String) -> String:

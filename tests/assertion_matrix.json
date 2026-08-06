@@ -18,6 +18,7 @@
     { "id": "governance_terminal_state", "script": "res://tests/integration/governance_terminal_state_test.gd", "success_pattern": "Governance terminal-state test passed." },
     { "id": "justice_oversight_self", "script": "res://tests/unit/governance/justice_oversight_self_test.gd", "success_pattern": "Justice and oversight self-test passed." },
     { "id": "justice_oversight_multi_case", "script": "res://tests/ui/justice_oversight_multi_case_test.gd", "success_pattern": "Justice/oversight multi-case test passed." },
+    { "id": "courtroom_visual_acceptance", "script": "res://tests/ui/courtroom_visual_acceptance_test.gd", "success_pattern": "Courtroom visual acceptance passed." },
     { "id": "localization", "script": "res://tests/integration/localization_test.gd", "success_pattern": "Five-language localization integration test passed.", "timeout_seconds": 480 },
     { "id": "locale_switch_state_preservation", "script": "res://tests/integration/locale_switch_state_preservation_test.gd", "success_pattern": "LOCALE_SWITCH_STATE_PRESERVATION_TEST_PASSED", "timeout_seconds": 240 },
     { "id": "localized_runtime_view_model", "script": "res://tests/integration/localized_runtime_view_model_test.gd", "success_pattern": "Localized runtime view-model test passed." },

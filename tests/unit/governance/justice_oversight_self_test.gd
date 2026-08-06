@@ -36,11 +36,26 @@ func _initialize() -> void:
 	_check(bool(opened.get("ok", false)), "司法委員會可受理重大行政案件")
 	var court_case: Dictionary = opened.get("case", {})
 	_check((court_case.get("committee_member_ids", []) as Array).size() == 15, "案件交由全體 15 名司法委員審理")
+	_check((court_case.get("presiding_member_ids", []) as Array).size() == 3, "案件排定三席可視主審合議庭")
+	_check((court_case.get("docket_entries", []) as Array).size() == 1, "立案時建立第一筆程序紀錄")
+	_check(
+		int(court_case.get("opened_day", 0)) <= int(court_case.get("preparation_day", 0))
+		and int(court_case.get("preparation_day", 0)) <= int(court_case.get("hearing_day", 0))
+		and int(court_case.get("hearing_day", 0)) <= int(court_case.get("deliberation_day", 0))
+		and int(court_case.get("deliberation_day", 0)) <= int(court_case.get("decision_day", 0)),
+		"司法程序日程依立案、準備、開庭、合議、宣判排序"
+	)
 	_check(bool(system.submit_defense(str(court_case.get("id", "")), "public_interest").get("ok", false)), "案件可提交抗辯資料")
+	system.advance_judicial_procedures(int(court_case.get("hearing_day", 0)))
+	_check(str(system.judicial_cases[str(court_case.get("id", ""))].get("procedural_stage", "")) == "hearing", "到開庭日進入開庭陳述階段")
+	system.advance_judicial_procedures(int(court_case.get("deliberation_day", 0)))
+	_check(str(system.judicial_cases[str(court_case.get("id", ""))].get("procedural_stage", "")) == "deliberation", "到合議日進入評議階段")
+	_check(not bool(system.submit_defense(str(court_case.get("id", "")), "fiscal_emergency").get("ok", false)), "合議開始後不得更換辯護書狀")
 	var judgment: Dictionary = system.resolve_judicial_case(str(court_case.get("id", "")), int(court_case.get("decision_day", 0)), {})
 	_check(bool(judgment.get("ok", false)), "司法委員會可完成審判")
 	var resolved_case: Dictionary = judgment.get("payload", {}).get("case", {})
 	_check((resolved_case.get("member_votes", []) as Array).size() == 15, "審判保存 15 筆個別委員意見")
+	_check(str(resolved_case.get("procedural_stage", "")) == "judgment", "裁判完成後程序進入宣判階段")
 	_check(str(resolved_case.get("outcome", "")) in ["fine", "stop_order", "prison"], "審判產生有效裁決")
 
 	var oversight_opened: Dictionary = system.open_oversight_case(

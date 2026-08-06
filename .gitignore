@@ -46,3 +46,16 @@ export_credentials.cfg
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# Local environment and credential material; retain the safe example template.
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+credentials.json
+secrets.json
+*.pem
+*.key
+*.pfx
+*.p12
