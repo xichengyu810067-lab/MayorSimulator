@@ -1,0 +1,60 @@
+{
+  "registry_schema_version": 1,
+  "authority_owner": "B4_schema_authority_writer",
+  "current_writer": {
+    "vertical_slice_schema_version": 7,
+    "terrain_layout_version": 2
+  },
+  "version_ceiling": {
+    "vertical_slice_schema_version": 7,
+    "terrain_layout_version": 2
+  },
+  "supported_version_matrix": [
+    {
+      "vertical_slice_schema_range": "0-6",
+      "terrain_layout_version": null,
+      "status": "legacy_migration_input",
+      "writer_allowed": false
+    },
+    {
+      "vertical_slice_schema_version": 7,
+      "terrain_layout_version": 2,
+      "status": "current",
+      "writer_allowed": true
+    },
+    {
+      "vertical_slice_schema_version": 8,
+      "terrain_layout_version": 3,
+      "status": "planned_c3_activation_after_b5",
+      "writer_allowed": false
+    }
+  ],
+  "rejected_combinations": [
+    {
+      "vertical_slice_schema_version": 8,
+      "terrain_layout_version": 2,
+      "reason": "backdrop layout requires atomic C3 activation"
+    }
+  ],
+  "future_version_policy": "explicit_reject_no_overwrite",
+  "fixture_registry": [
+    {
+      "id": "save_recovery_generated_pair",
+      "test": "res://tests/unit/core/save_recovery_self_test.gd",
+      "covers": ["current_7_layout_2", "future_version_rejection", "backup_recovery"]
+    }
+  ],
+  "migration_registry": [
+    {
+      "id": "legacy_vertical_0_to_6",
+      "target": "vertical_7_layout_2",
+      "activation": "existing coordinator restore then current writer",
+      "status": "supported"
+    },
+    {
+      "id": "vertical_7_layout_2_to_8_layout_3",
+      "activation": "B5 backdrop runtime followed by B4 C3 atomic activation",
+      "status": "not_active"
+    }
+  ]
+}

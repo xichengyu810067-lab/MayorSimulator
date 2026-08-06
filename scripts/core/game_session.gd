@@ -4,6 +4,7 @@ const CityStateScript = preload("res://scripts/core/city_state.gd")
 const SimulationClockScript = preload("res://scripts/core/simulation_clock.gd")
 const SimulationKernelScript = preload("res://scripts/core/simulation_kernel.gd")
 const SaveEnvelopeScript = preload("res://scripts/core/save_envelope.gd")
+const SaveSchemaAuthorityScript = preload("res://scripts/core/save_schema_authority.gd")
 const SaveServiceScript = preload("res://scripts/core/save_service.gd")
 const ConstructionSystemScript = preload("res://scripts/systems/city/construction_system.gd")
 const BlueprintLibraryServiceScript = preload("res://scripts/app/blueprint_library_service.gd")
@@ -16,7 +17,7 @@ signal state_changed(view_model: Dictionary)
 
 const CONTENT_VERSION := "vertical_slice_1"
 const DEFAULT_SAVE_PATH := "user://mayor_simulator/autosave.json"
-const MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA := 7
+const MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA := SaveSchemaAuthorityScript.MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA
 const MAX_SUPPORTED_POPULATION_SCHEMA := 2
 const MAX_SUPPORTED_NPC_RECORD_SCHEMA := 2
 const TERMINAL_FAILURE_REASONS := [
@@ -391,6 +392,11 @@ func _validate_vertical_slice_metadata(restored_state, runtime: Dictionary) -> b
 			return false
 		var terrain_validation: Dictionary = CityTerrainMapScript.validate_snapshot(terrain_value as Dictionary)
 		if not bool(terrain_validation.get("valid", false)):
+			return false
+		if not SaveSchemaAuthorityScript.validate_vertical_terrain_pair(
+			schema_version,
+			int((terrain_value as Dictionary).get("layout_version", -1))
+		):
 			return false
 		if not _validate_terrain_construction_links(vertical, restored_state):
 			return false

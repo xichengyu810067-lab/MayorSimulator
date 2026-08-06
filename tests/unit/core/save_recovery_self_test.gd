@@ -7,6 +7,7 @@ const VerticalSliceCoordinatorScript = preload("res://scripts/app/vertical_slice
 const BlueprintLibraryServiceScript = preload("res://scripts/app/blueprint_library_service.gd")
 const ConstructionSystemScript = preload("res://scripts/systems/city/construction_system.gd")
 const TransportNetworkSystemScript = preload("res://scripts/systems/city/transport_network_system.gd")
+const SaveSchemaAuthorityScript = preload("res://scripts/core/save_schema_authority.gd")
 
 const TEST_ROOT := "user://mayor_simulator/tests/save_recovery"
 const DECODE_FAILURE_PATH := TEST_ROOT + "/decode_failure.json"
@@ -35,6 +36,7 @@ func _initialize() -> void:
 	_test_current_schema_non_transport_corruption_uses_backup()
 	_test_current_schema_cross_layer_corruption_uses_backup()
 	_test_vertical_metadata_schema_boundary()
+	_test_vertical_terrain_pairing_boundary()
 	_test_schema_one_minimal_runtime_remains_compatible()
 	_cleanup_all()
 	if _failed:
@@ -216,6 +218,31 @@ func _test_vertical_metadata_schema_boundary() -> void:
 	source.state.metadata["vertical_slice"]["schema_version"] = GameSessionScript.MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA + 1
 	var future_schema_probe = GameSessionScript.new(18, 18)
 	_check(not future_schema_probe.restore_envelope(source.make_envelope()), "future vertical metadata schema is rejected at its migration boundary")
+
+
+func _test_vertical_terrain_pairing_boundary() -> void:
+	var source = _canonical_current_session(19, 19)
+	var current_vertical: Dictionary = source.state.metadata["vertical_slice"]
+	var terrain_snapshot: Dictionary = current_vertical["terrain"]
+	_check(
+		SaveSchemaAuthorityScript.validate_vertical_terrain_pair(
+			GameSessionScript.MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA,
+			int(terrain_snapshot.get("layout_version", -1))
+		),
+		"current vertical schema and terrain layout are an authorized pair"
+	)
+	_check(
+		not SaveSchemaAuthorityScript.validate_vertical_terrain_pair(8, 2),
+		"schema eight with terrain layout two is rejected before C3 activation"
+	)
+	var mismatched_layout := terrain_snapshot.duplicate(true)
+	mismatched_layout["layout_version"] = 3
+	source.state.metadata["vertical_slice"]["terrain"] = mismatched_layout
+	var mismatched_layout_probe = GameSessionScript.new(20, 20)
+	_check(
+		not mismatched_layout_probe.restore_envelope(source.make_envelope()),
+		"future terrain layout is rejected even when its snapshot shape is otherwise present"
+	)
 
 
 func _test_current_schema_non_transport_corruption_uses_backup() -> void:
