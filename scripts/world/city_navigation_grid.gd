@@ -9,6 +9,12 @@ extends RefCounted
 ## scenery in city-map-background.png after its keep-aspect-covered crop.
 
 const STAGE_SIZE := Vector2(1120.0, 820.0)
+const BACKDROP_ASSET_PATH := "res://assets/images/world/backgrounds/city-map-background.png"
+const BACKDROP_ISO_TILE_STEP := Vector2(56.0, 32.0)
+const BACKDROP_ISO_MAP_ORIGIN := Vector2(560.0, 104.0)
+const BACKDROP_TILE_FOOT_OFFSET_Y := 34.0
+const BACKDROP_PLOT_HALF_EXTENTS := Vector2(49.0, 29.0)
+const BACKDROP_MIN_PLOT_COVERAGE := 0.035
 const GRID_CELL_SIZE := 10.0
 const GRID_SIZE := Vector2i(112, 82)
 const DEFAULT_FOOT_RADIUS := 9.0
@@ -23,6 +29,7 @@ var _astar := AStarGrid2D.new()
 var _foot_radius := DEFAULT_FOOT_RADIUS
 var _static_polygons: Array[Dictionary] = []
 var _dynamic_blockers: Dictionary = {}
+var _flattened_terrain_apertures: Dictionary = {}
 var _transport_crossing_apertures: Dictionary = {}
 var _static_solid := PackedByteArray()
 var _last_raw_path := PackedVector2Array()
@@ -54,9 +61,8 @@ func foot_radius() -> float:
 func is_position_walkable(position: Vector2) -> bool:
 	if not _inside_stage_with_clearance(position):
 		return false
-	for polygon_data: Dictionary in _static_polygons:
-		if _point_touches_polygon(position, polygon_data["points"], _foot_radius):
-			return false
+	if _point_blocked_by_static(position):
+		return false
 	for blocker_variant: Variant in _dynamic_blockers.values():
 		var blocker: Dictionary = blocker_variant
 		if _blocker_has_open_transport_aperture(blocker):
@@ -89,6 +95,58 @@ func static_classification_at(position: Vector2) -> PackedStringArray:
 			if not kinds.has(kind):
 				kinds.append(kind)
 	return kinds
+
+
+## The backdrop polygons are the single terrain source for both plot legality
+## and NPC navigation. They model scenery painted into the original image.
+static func backdrop_terrain_for_coordinate(coordinate: Vector2i) -> Dictionary:
+	return backdrop_terrain_for_plot(
+		backdrop_tile_center(coordinate), BACKDROP_PLOT_HALF_EXTENTS
+	)
+
+
+static func backdrop_tile_center(coordinate: Vector2i) -> Vector2:
+	return Vector2(
+		BACKDROP_ISO_MAP_ORIGIN.x + float(coordinate.x - coordinate.y) * BACKDROP_ISO_TILE_STEP.x,
+		BACKDROP_ISO_MAP_ORIGIN.y + float(coordinate.x + coordinate.y) * BACKDROP_ISO_TILE_STEP.y + BACKDROP_TILE_FOOT_OFFSET_Y
+	)
+
+
+static func backdrop_terrain_for_plot(center: Vector2, half_extents: Vector2) -> Dictionary:
+	var plot := _diamond_points(center, half_extents)
+	var plot_area := maxf(1.0, _polygon_area(plot))
+	var coverage_by_kind: Dictionary = {}
+	var feature_ids_by_kind: Dictionary = {}
+	for polygon_data: Dictionary in _create_static_polygons():
+		var overlap_area := 0.0
+		for intersection: PackedVector2Array in Geometry2D.intersect_polygons(
+			plot, PackedVector2Array(polygon_data["points"])
+		):
+			overlap_area += _polygon_area(intersection)
+		var coverage := overlap_area / plot_area
+		if coverage < BACKDROP_MIN_PLOT_COVERAGE:
+			continue
+		var kind := str(polygon_data.get("kind", ""))
+		coverage_by_kind[kind] = float(coverage_by_kind.get(kind, 0.0)) + coverage
+		var ids: Array = Array(feature_ids_by_kind.get(kind, [])).duplicate()
+		ids.append(str(polygon_data.get("id", "")))
+		feature_ids_by_kind[kind] = ids
+	var winning_kind := "flat_grass"
+	var winning_coverage := 0.0
+	for kind_variant: Variant in coverage_by_kind.keys():
+		var kind := str(kind_variant)
+		var coverage := float(coverage_by_kind[kind_variant])
+		if coverage > winning_coverage:
+			winning_kind = kind
+			winning_coverage = coverage
+	return {
+		"kind": winning_kind,
+		"coverage": winning_coverage,
+		"feature_ids": Array(feature_ids_by_kind.get(winning_kind, [])).duplicate(),
+		"source_asset": BACKDROP_ASSET_PATH,
+		"plot_center": center,
+		"plot_half_extents": half_extents,
+	}
 
 
 func nearest_safe_position(position: Vector2, max_search_distance: float = 160.0) -> Variant:
@@ -401,6 +459,38 @@ func clear_dynamic_blockers() -> void:
 	_refresh_grid_solidity()
 
 
+## Completed earthworks only open the selected plot. Other parts of the same
+## backdrop feature remain solid.
+func set_flattened_terrain_apertures(
+	flattened_centers: Dictionary,
+	half_extents: Vector2 = BACKDROP_PLOT_HALF_EXTENTS
+) -> void:
+	var next_apertures: Dictionary = {}
+	var safe_extents := _safe_half_extents(half_extents)
+	var edge_normal_length := sqrt(
+		1.0 / (safe_extents.x * safe_extents.x)
+		+ 1.0 / (safe_extents.y * safe_extents.y)
+	)
+	var clearance_scale := clampf(1.0 - _foot_radius * edge_normal_length, 0.05, 1.0)
+	var walkable_extents := safe_extents * clearance_scale
+	for tile_variant: Variant in flattened_centers.keys():
+		var center_variant: Variant = flattened_centers[tile_variant]
+		if not center_variant is Vector2:
+			continue
+		var tile_index := int(tile_variant)
+		next_apertures[tile_index] = {
+			"id": "flattened_terrain:%d" % tile_index,
+			"tile_index": tile_index,
+			"center": center_variant,
+			"half_extents": safe_extents,
+			"walkable_half_extents": walkable_extents,
+			"points": _diamond_points(center_variant, walkable_extents),
+		}
+	_flattened_terrain_apertures = next_apertures
+	_rebuild_static_solidity()
+	_refresh_grid_solidity()
+
+
 ## Opens completed level-crossing tiles for pedestrian navigation.  The
 ## aperture only overrides a map-owned transport blocker with the same tile id;
 ## buildings, construction, natural terrain, and arbitrary gameplay blockers
@@ -429,6 +519,18 @@ func get_debug_transport_crossing_aperture_tile_ids() -> PackedInt32Array:
 
 func get_debug_static_polygons() -> Array[Dictionary]:
 	return _duplicate_polygon_records(_static_polygons)
+
+
+func get_debug_flattened_terrain_apertures() -> Array[Dictionary]:
+	var records: Array[Dictionary] = []
+	var tile_ids: Array = _flattened_terrain_apertures.keys()
+	tile_ids.sort()
+	for tile_variant: Variant in tile_ids:
+		var record: Dictionary = _flattened_terrain_apertures[tile_variant]
+		var copy := record.duplicate(true)
+		copy["points"] = PackedVector2Array(record["points"]).duplicate()
+		records.append(copy)
+	return records
 
 
 func get_debug_dynamic_polygons() -> Array[Dictionary]:
@@ -481,6 +583,7 @@ func get_debug_snapshot(include_walkable_points: bool = false) -> Dictionary:
 		"grid_size": GRID_SIZE,
 		"foot_radius": _foot_radius,
 		"static_polygons": get_debug_static_polygons(),
+		"flattened_terrain_apertures": get_debug_flattened_terrain_apertures(),
 		"dynamic_polygons": get_debug_dynamic_polygons(),
 		"points": get_debug_points(include_walkable_points),
 		"raw_path": get_last_raw_path_trace(),
@@ -523,8 +626,18 @@ func _refresh_grid_solidity() -> void:
 
 
 func _point_blocked_by_static(position: Vector2) -> bool:
+	if _point_inside_flattened_terrain_aperture(position):
+		return false
 	for polygon_data: Dictionary in _static_polygons:
 		if _point_touches_polygon(position, polygon_data["points"], _foot_radius):
+			return true
+	return false
+
+
+func _point_inside_flattened_terrain_aperture(position: Vector2) -> bool:
+	for aperture_variant: Variant in _flattened_terrain_apertures.values():
+		var aperture: Dictionary = aperture_variant
+		if _point_touches_polygon(position, aperture["points"], 0.0):
 			return true
 	return false
 
@@ -652,13 +765,24 @@ func _duplicate_polygon_records(source: Array[Dictionary]) -> Array[Dictionary]:
 	return records
 
 
-func _diamond_points(center: Vector2, half_extents: Vector2) -> PackedVector2Array:
+static func _diamond_points(center: Vector2, half_extents: Vector2) -> PackedVector2Array:
 	return PackedVector2Array([
 		center + Vector2(0.0, -half_extents.y),
 		center + Vector2(half_extents.x, 0.0),
 		center + Vector2(0.0, half_extents.y),
 		center + Vector2(-half_extents.x, 0.0),
 	])
+
+
+static func _polygon_area(points: PackedVector2Array) -> float:
+	if points.size() < 3:
+		return 0.0
+	var doubled_area := 0.0
+	for point_index in points.size():
+		var current := points[point_index]
+		var next := points[(point_index + 1) % points.size()]
+		doubled_area += current.x * next.y - next.x * current.y
+	return absf(doubled_area) * 0.5
 
 
 func _safe_half_extents(half_extents: Vector2) -> Vector2:
@@ -697,7 +821,7 @@ func _reset_query_diagnostics() -> void:
 	}
 
 
-func _create_static_polygons() -> Array[Dictionary]:
+static func _create_static_polygons() -> Array[Dictionary]:
 	# Coordinates were authored in the fixed map_stage space, not in the source
 	# texture's 1672x941 pixel space.  Keep these records simple and non-self-
 	# intersecting so they are also suitable for debug overlay rendering.

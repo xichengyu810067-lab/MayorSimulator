@@ -41,6 +41,19 @@ func _run() -> void:
 	for kind: String in expected_kinds:
 		_check(terrain.terrain_kinds().has(kind), "terrain catalog omits %s" % kind)
 
+	var backdrop_terrain = CityTerrainMapScript.new()
+	backdrop_terrain.apply_default_city_layout()
+	var modeled_count := 0
+	for state_variant: Variant in backdrop_terrain.all_tile_states():
+		var state: Dictionary = state_variant
+		if str(state.get("base_kind", "")) == "flat_grass":
+			continue
+		modeled_count += 1
+		_check(str(state.get("terrain_source", "")) == "background_image", "natural plot is not background-derived")
+		_check(str(state.get("source_asset", "")).ends_with("city-map-background.png"), "natural plot lost source backdrop")
+		_check(not Array(state.get("backdrop_feature_ids", [])).is_empty(), "natural plot lacks backdrop feature ids")
+	_check(modeled_count > 0 and modeled_count < 100, "backdrop model did not produce a mixed buildable/non-buildable grid")
+
 	for fixture: Dictionary in [
 		{"tile": 0, "kind": "trees"},
 		{"tile": 1, "kind": "hill_cliff"},

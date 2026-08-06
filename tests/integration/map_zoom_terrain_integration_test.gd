@@ -90,9 +90,29 @@ func _run() -> void:
 	main._input(pan_release)
 	_check(not main._map_pan_drag_active, "middle-button map drag did not end on release")
 
-	var terrain_tile: int = int(main.vertical_slice.terrain_map.tile_id_for_coordinate(Vector2i(7, 7)))
+	var terrain_tile := -1
+	for state_variant: Variant in main.vertical_slice.terrain_map.all_tile_states():
+		var candidate: Dictionary = state_variant
+		var candidate_id := int(candidate.get("tile_id", -1))
+		if (
+			str(candidate.get("effective_kind", "")) in ["trees", "hill_cliff", "river_lake"]
+			and main.city_grid[candidate_id] == ""
+			and main._is_tile_inside_hud_safe_area(candidate_id)
+		):
+			terrain_tile = candidate_id
+			break
+	_check(terrain_tile >= 0, "no buildable-grid plot overlaps modeled backdrop scenery")
 	var terrain_before: Dictionary = main.vertical_slice.terrain_state_for_tile(terrain_tile)
-	_check(str(terrain_before.get("effective_kind", "")) == "trees", "terrain fixture is not authored woodland")
+	_check(
+		str(terrain_before.get("source_asset", "")).ends_with("city-map-background.png")
+		and not Array(terrain_before.get("backdrop_feature_ids", [])).is_empty(),
+		"terrain fixture is not derived from the original backdrop"
+	)
+	var terrain_visual_contract: Dictionary = main.grid_buttons[terrain_tile].get_visual_animation_contract()
+	var terrain_visual_debug: Dictionary = main.grid_buttons[terrain_tile].get_visual_animation_debug_snapshot()
+	_check(not bool(terrain_visual_contract.get("decorative_natural_terrain_tiles", true)), "natural backdrop terrain is still drawn as a decorative tile")
+	_check(str(terrain_visual_contract.get("natural_terrain_visual_source", "")) == "city-map-background.png", "tile renderer does not preserve the original background as its terrain visual")
+	_check(not bool(terrain_visual_debug.get("animation_active", true)), "background trees/water still run obsolete tile-local terrain animation")
 	var blocked_start: Dictionary = main.vertical_slice.start_approved_building("住宅", terrain_tile, 5)
 	_check(str(blocked_start.get("error", "")) == "terrain_not_flat", "core construction accepted non-flat terrain")
 	main.placement_mode_active = true

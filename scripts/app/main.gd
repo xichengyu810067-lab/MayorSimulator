@@ -2281,6 +2281,7 @@ func _npc_map_snapshot() -> Dictionary:
 	var construction_centers := {}
 	var blocked_tiles := {}
 	var terrain_blockers := {}
+	var flattened_terrain_centers := {}
 	var terrain = _terrain_map()
 	var transport_blocked_tiles := PackedInt32Array()
 	var crossing_tile_ids := PackedInt32Array()
@@ -2331,6 +2332,8 @@ func _npc_map_snapshot() -> Dictionary:
 				"kind": terrain.effective_kind(tile_index),
 			}
 			blocked_tiles[tile_index] = true
+		elif terrain != null and terrain.is_flattened(tile_index):
+			flattened_terrain_centers[tile_index] = center
 		if transport_blocked_tiles.has(tile_index):
 			terrain_blockers[tile_index] = {
 				"center": center,
@@ -2348,6 +2351,7 @@ func _npc_map_snapshot() -> Dictionary:
 		"building_centers": building_centers,
 		"construction_centers": construction_centers,
 		"terrain_blockers": terrain_blockers,
+		"flattened_terrain_centers": flattened_terrain_centers,
 		"blocked_tiles": blocked_tiles,
 		"crossing_tile_ids": crossing_tile_ids,
 		"iso_tile_size": ISO_TILE_SIZE,
@@ -6091,6 +6095,7 @@ func _update_tile_visual(index: int, building_name: String) -> void:
 			"terrain_type": str(terrain_state.get("effective_kind", "flat_grass")),
 			"terrain_buildable": terrain_buildable,
 			"terrain_flattenable": bool(terrain_state.get("flattenable", false)),
+			"terrain_flattened": bool(terrain_state.get("flattened", false)),
 			"visual": BUILDING_VISUALS.get(building_name, {}),
 			"customization": building_customizations.get(index, {}),
 			"dark_mode": is_dark_mode,

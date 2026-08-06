@@ -1,6 +1,8 @@
 class_name CityTerrainMap
 extends RefCounted
 
+const CityNavigationGridScript = preload("res://scripts/world/city_navigation_grid.gd")
+
 ## Authoritative logical terrain state for the city map.
 ##
 ## Tile ids are deliberately independent from row-major display order.  The
@@ -124,30 +126,17 @@ func terrain_kinds() -> PackedStringArray:
 
 
 func apply_default_city_layout() -> void:
-	# Keep the expanded map deterministic and sparse enough that the navigation
-	# mesh always has multiple routes.  Coordinates, rather than tile ids, make
-	# the authored layout readable while the legacy 0..63 ids remain stable.
+	# The original backdrop image is the terrain authority. This preserves the
+	# layout-2 record shape: new games still write the same base_kind/flattened
+	# fields, while existing layout-2 saves load their recorded terrain unchanged.
 	_reset_terrain_state()
-	var authored_by_kind := {
-		KIND_TREES: [
-			Vector2i(0, 0), Vector2i(1, 0), Vector2i(8, 0), Vector2i(9, 0),
-			Vector2i(0, 1), Vector2i(9, 1), Vector2i(2, 2), Vector2i(7, 7),
-			Vector2i(0, 8), Vector2i(9, 8), Vector2i(0, 9), Vector2i(9, 9),
-		],
-		KIND_HILL_CLIFF: [
-			Vector2i(4, 0), Vector2i(5, 0), Vector2i(7, 2),
-			Vector2i(4, 9), Vector2i(5, 9),
-		],
-		KIND_RIVER_LAKE: [
-			Vector2i(0, 5), Vector2i(1, 5), Vector2i(4, 4),
-			Vector2i(4, 5), Vector2i(9, 5),
-		],
-	}
-	for kind_variant: Variant in authored_by_kind.keys():
-		var kind := str(kind_variant)
-		for coordinate_variant: Variant in authored_by_kind[kind_variant]:
-			var coordinate: Vector2i = coordinate_variant
-			set_tile_kind(tile_id_for_coordinate(coordinate), kind)
+	for coordinate: Vector2i in coordinates_in_display_order():
+		var model: Dictionary = CityNavigationGridScript.backdrop_terrain_for_coordinate(coordinate)
+		var modeled_kind := str(model.get("kind", KIND_FLAT_GRASS))
+		var terrain_kind := KIND_TREES if modeled_kind == "trees_scenery" else modeled_kind
+		if not TERRAIN_RULES.has(terrain_kind):
+			terrain_kind = KIND_FLAT_GRASS
+		_base_kinds[tile_id_for_coordinate(coordinate)] = terrain_kind
 
 
 func is_valid_terrain_kind(kind: String) -> bool:
@@ -205,6 +194,10 @@ func tile_state(tile_id: int) -> Dictionary:
 		return {}
 	var original_kind := _base_kinds[tile_id]
 	var resolved_kind := effective_kind(tile_id)
+	var backdrop_model := backdrop_model_for_tile(tile_id)
+	var backdrop_kind := str(backdrop_model.get("kind", KIND_FLAT_GRASS))
+	if backdrop_kind == "trees_scenery":
+		backdrop_kind = KIND_TREES
 	return {
 		"tile_id": tile_id,
 		"coordinate": coordinate_for_tile_id(tile_id),
@@ -214,7 +207,20 @@ func tile_state(tile_id: int) -> Dictionary:
 		"buildable": bool(TERRAIN_RULES[resolved_kind]["buildable"]),
 		"walkable": bool(TERRAIN_RULES[resolved_kind]["walkable"]),
 		"flattenable": is_flattenable(tile_id),
+		"terrain_source": "background_image",
+		"source_asset": str(backdrop_model.get("source_asset", "")),
+		"backdrop_kind": backdrop_kind,
+		"backdrop_feature_ids": Array(backdrop_model.get("feature_ids", [])).duplicate(),
+		"backdrop_coverage": float(backdrop_model.get("coverage", 0.0)),
 	}
+
+
+func backdrop_model_for_tile(tile_id: int) -> Dictionary:
+	if not is_valid_tile_id(tile_id):
+		return {}
+	return CityNavigationGridScript.backdrop_terrain_for_coordinate(
+		coordinate_for_tile_id(tile_id)
+	)
 
 
 func all_tile_states() -> Array[Dictionary]:
