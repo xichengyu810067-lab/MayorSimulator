@@ -9,7 +9,7 @@ Use the project SDK as the stable entrypoint. Keep runtime behavior in Godot/GDS
 
 ## Route the task
 
-1. Run `& .\sdk\mayor-sdk.ps1 doctor` before changing tooling, tests, CI, exports, or dependencies.
+1. Run the project SDK's `doctor` before changing tooling, tests, CI, exports, or dependencies. Use the bundled wrapper below when this skill is outside the embedded SDK project root.
 2. Read only the reference needed for the request:
    - Read [references/stack.md](references/stack.md) for languages, runtimes, dependencies, and scope boundaries.
    - Read [references/api.md](references/api.md) for CLI commands, arguments, outputs, and exit codes.
@@ -18,7 +18,7 @@ Use the project SDK as the stable entrypoint. Keep runtime behavior in Godot/GDS
    - Read [references/chat-derived-workflows.md](references/chat-derived-workflows.md) when prioritizing automation or auditing chat coverage.
    - Read [references/recent-chat-contracts.md](references/recent-chat-contracts.md) before changing transportation, NPC locomotion, policy ordering, chart localization, evidence tooling, or feature-freeze scope.
    - Read [references/versioning.md](references/versioning.md) for Git, release tags, content versions, save schemas, or migrations.
-3. Discover live tests through `& .\sdk\mayor-sdk.ps1 tests`; never write a test count into new code or documentation.
+3. Discover live tests through `mayor-sdk.ps1 tests`; never write a passed-test count from inventory output into new code or documentation.
 4. Choose the smallest authoritative gate that proves the claim.
 5. Use a new output root for every QA or release run. Preserve failed logs and never rename them into success evidence.
 6. Report what was actually run, the exit code, evidence path, and any intentionally untreated issue.
@@ -47,7 +47,7 @@ Invoke through the project wrapper:
 & .\sdk\mayor-sdk.ps1 verify --godot 'C:\path\to\Godot_v4.7-stable_win64_console.exe'
 ```
 
-Alternatively run [scripts/invoke-sdk.ps1](scripts/invoke-sdk.ps1) from this skill. Use `ui-qa` for visible traversal, `save-qa` for Windows process-kill durability, and `build` only with fresh release paths and matching export templates.
+Alternatively run [scripts/invoke-sdk.ps1](scripts/invoke-sdk.ps1) from this skill. It sets `MAYOR_PROJECT_ROOT` only for its child invocation and restores the caller environment afterward. Set `MAYOR_SDK_HOME` only in the calling process to use a standalone SDK root; otherwise it falls back to this project's embedded `sdk`. Use `ui-qa` for visible traversal, `save-qa` for Windows process-kill durability, and `build` only with fresh release paths and matching export templates.
 
 ## Validate SDK changes
 

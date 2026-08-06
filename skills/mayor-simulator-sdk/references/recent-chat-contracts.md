@@ -1,6 +1,6 @@
 # Recent chat contracts
 
-Review date: 2026-08-01 Asia/Taipei.
+Review date: 2026-08-06 Asia/Taipei.
 
 This file records semantically reviewed conclusions from recent project root chats. It distinguishes completed evidence, observed gaps, and requirements still being implemented. Do not upgrade an in-progress requirement to a completed capability without reading the newer chat turn and rerunning its gate.
 
@@ -31,7 +31,9 @@ This file records semantically reviewed conclusions from recent project root cha
 
 ## Observed current gaps
 
-- A concurrent version-governance chat began initializing the game repository and an SDK submodule after the initial audit found an empty `.git`. Treat its state as changing until that chat publishes final commit, gitlink, remote, and push evidence; rerun `mayor-sdk version` before every claim.
+- The standalone SDK is local `1.2.1` at `60ab9fcae0160661377f9a550327e085e0d9a31c` and is not pushed. The game's embedded SDK gitlink remains `956f0414b6cd42dc8b7a648e3ce942d7e061430a` (`1.2.0`); do not change it until the standalone commit is available on its remote.
+- Game local `main` is `b138b6365656b4d160e38b5831e656bf287c3197` with the single writer enabled on 2026-08-03. Schema 7 to 8 migration is atomic-only; schema 7 is no longer current.
+- Focused evidence is 4/4 with 1169 checks, canonical OS-kill is 5/5 with 173 checks, and supplementary payload is 14/14. The 67 assertion entries are an inventory only: the complete 67-entry matrix and GUI validation have not run, and this state has not been pushed.
 - SDK SemVer, release version, update-log version, content version, and save/data schemas are separate sources. Use `mayor-sdk version` to expose drift; do not collapse them into one version.
 - Python may be absent from `PATH` even when the Codex bundled runtime or a local installation exists. Use the project wrapper's ordered discovery and preserve access-denied diagnostics.
 

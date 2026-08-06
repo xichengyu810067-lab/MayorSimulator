@@ -1,6 +1,15 @@
 # SDK API
 
-Run commands from the project root through `sdk/mayor-sdk.ps1`. The Python entrypoint is `sdk/mayor_sdk.py`.
+Run commands from the project root through `sdk/mayor-sdk.ps1`. The Python entrypoint is `sdk/mayor_sdk.py`. Standalone SDK 1.2.1 resolves the project root in this order: global `--project-root`, `MAYOR_PROJECT_ROOT`, then its automatic fallback. Put the global option before the subcommand.
+
+```powershell
+& 'C:\path\to\40_sdk\mayor-sdk.ps1' --project-root 'C:\path\to\MayorSimulator' doctor --json
+$env:MAYOR_SDK_HOME = 'C:\path\to\40_sdk' # Current process only.
+& '.\skills\mayor-simulator-sdk\scripts\invoke-sdk.ps1' version --json
+Remove-Item Env:MAYOR_SDK_HOME
+```
+
+`scripts/invoke-sdk.ps1` binds `MAYOR_PROJECT_ROOT` to the project containing the canonical skill for one call and restores both variables after it returns. It uses that project's embedded `sdk`, or—when a linked worktree has not populated its submodule—an initialized SDK checkout with the exact same gitlink from the repository's listed worktrees. The wrapper accepts normal SDK arguments; a caller-supplied global `--project-root` still has SDK precedence.
 
 ## Exit codes
 
