@@ -47,7 +47,7 @@ Invoke through the project wrapper:
 & .\sdk\mayor-sdk.ps1 verify --godot 'C:\path\to\Godot_v4.7-stable_win64_console.exe'
 ```
 
-Alternatively run [scripts/invoke-sdk.ps1](scripts/invoke-sdk.ps1) from this skill. It sets `MAYOR_PROJECT_ROOT` only for its child invocation and restores the caller environment afterward. Set `MAYOR_SDK_HOME` only in the calling process to use a standalone SDK root; otherwise it falls back to this project's embedded `sdk`. Use `ui-qa` for visible traversal, `save-qa` for Windows process-kill durability, and `build` only with fresh release paths and matching export templates.
+Alternatively run [scripts/invoke-sdk.ps1](scripts/invoke-sdk.ps1) from this skill. It sets `MAYOR_PROJECT_ROOT` only for its child invocation and restores the caller environment afterward. Set `MAYOR_SDK_HOME` only in the calling process to use a standalone SDK root. Without it, the wrapper accepts only this project's direct embedded `sdk` after exact gitlink, worktree, superproject, and clean-status checks; an uninitialized linked-worktree submodule fails closed. Use `ui-qa` for visible traversal, `save-qa` for Windows process-kill durability, and `build` only with fresh release paths and matching export templates.
 
 ## Validate SDK changes
 

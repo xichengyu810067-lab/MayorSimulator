@@ -9,7 +9,7 @@ $env:MAYOR_SDK_HOME = 'C:\path\to\40_sdk' # Current process only.
 Remove-Item Env:MAYOR_SDK_HOME
 ```
 
-`scripts/invoke-sdk.ps1` binds `MAYOR_PROJECT_ROOT` to the project containing the canonical skill for one call and restores both variables after it returns. It uses that project's embedded `sdk`, or—when a linked worktree has not populated its submodule—an initialized SDK checkout with the exact same gitlink from the repository's listed worktrees. The wrapper accepts normal SDK arguments; a caller-supplied global `--project-root` still has SDK precedence.
+`scripts/invoke-sdk.ps1` binds `MAYOR_PROJECT_ROOT` to the project containing the canonical skill for one call and restores both variables after it returns. An explicit process-local `MAYOR_SDK_HOME` selects that standalone SDK root; it does not prove that the game gitlink or the SDK remote has been updated. Without `MAYOR_SDK_HOME`, the wrapper accepts only the direct `projectRoot\sdk` checkout after confirming the parent gitlink, candidate worktree root and HEAD, exact superproject, clean status, and `mayor-sdk.ps1`. It fails closed for an uninitialized linked-worktree submodule; set `MAYOR_SDK_HOME` instead. The wrapper accepts normal SDK arguments; a caller-supplied global `--project-root` still has SDK precedence.
 
 ## Exit codes
 

@@ -12,37 +12,79 @@ $exitCode = 0
 
 function Resolve-EmbeddedSdkRoot {
     $directRoot = Join-Path $projectRoot 'sdk'
-    if (Test-Path -LiteralPath (Join-Path $directRoot 'mayor-sdk.ps1') -PathType Leaf) {
-        return $directRoot
+    $git = (Get-Command git -ErrorAction Stop).Source
+
+    function Invoke-ExactGit {
+        param(
+            [Parameter(Mandatory = $true)]
+            [string]$WorkingDirectory,
+            [Parameter(Mandatory = $true)]
+            [string]$Check,
+            [Parameter(Mandatory = $true)]
+            [string[]]$Arguments
+        )
+
+        $output = & $git -c "safe.directory=$WorkingDirectory" -C $WorkingDirectory @Arguments 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            $detail = ($output | Out-String).Trim()
+            throw "Embedded SDK validation failed ($Check): $detail"
+        }
+        return ($output | Out-String).Trim()
     }
 
-    # A linked worktree can retain the parent gitlink while its local submodule
-    # checkout is absent. Reuse only an initialized SDK checkout with the exact
-    # same pin from another listed worktree; never trust a broad parent path.
-    $git = Get-Command git -ErrorAction Stop
-    $gitlink = & $git.Source -c "safe.directory=$projectRoot" -C $projectRoot ls-tree HEAD sdk
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($gitlink)) {
-        throw "Mayor Simulator embedded SDK entrypoint was not found: $(Join-Path $directRoot 'mayor-sdk.ps1')"
+    $gitlinkRecord = Invoke-ExactGit -WorkingDirectory $projectRoot -Check 'parent sdk gitlink' -Arguments @('ls-tree', 'HEAD', '--', 'sdk')
+    $gitlinkMatch = [regex]::Match($gitlinkRecord, '^160000\s+commit\s+(?<oid>[0-9a-fA-F]{40})\s+sdk$')
+    if (-not $gitlinkMatch.Success) {
+        throw "Embedded SDK validation failed (parent sdk gitlink): HEAD:sdk is not a gitlink."
     }
-    $worktreeLines = & $git.Source -c "safe.directory=$projectRoot" -C $projectRoot worktree list --porcelain
+    $expectedOid = $gitlinkMatch.Groups['oid'].Value.ToLowerInvariant()
+    $entrypoint = Join-Path $directRoot 'mayor-sdk.ps1'
+    if (-not (Test-Path -LiteralPath $entrypoint -PathType Leaf)) {
+        throw "Embedded SDK validation failed (direct checkout): '$entrypoint' is missing. Set process-local MAYOR_SDK_HOME to a standalone SDK root."
+    }
+
+    $candidateDotGit = Get-Item -Force -LiteralPath (Join-Path $directRoot '.git') -ErrorAction SilentlyContinue
+    if ($null -eq $candidateDotGit -or $candidateDotGit.PSIsContainer) {
+        throw "Embedded SDK validation failed (candidate submodule): direct sdk must use a submodule gitfile, not a standalone repository."
+    }
+    $insideWorkTree = Invoke-ExactGit -WorkingDirectory $directRoot -Check 'candidate worktree' -Arguments @('rev-parse', '--is-inside-work-tree')
+    $candidateTopLevel = Invoke-ExactGit -WorkingDirectory $directRoot -Check 'candidate worktree root' -Arguments @('rev-parse', '--show-toplevel')
+    $normalizedDirectRoot = (Resolve-Path -LiteralPath $directRoot).Path.TrimEnd('\', '/')
+    $normalizedTopLevel = (Resolve-Path -LiteralPath $candidateTopLevel).Path.TrimEnd('\', '/')
+    if ($insideWorkTree -ne 'true' -or -not [string]::Equals($normalizedTopLevel, $normalizedDirectRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Embedded SDK validation failed (candidate worktree): direct sdk is not a Git worktree rooted at '$directRoot'."
+    }
+
+    $candidateHead = (Invoke-ExactGit -WorkingDirectory $directRoot -Check 'candidate HEAD' -Arguments @('rev-parse', 'HEAD')).ToLowerInvariant()
+    if ($candidateHead -ne $expectedOid) {
+        throw "Embedded SDK validation failed (candidate HEAD): expected $expectedOid but found $candidateHead."
+    }
+    $expectedGitDir = Invoke-ExactGit -WorkingDirectory $projectRoot -Check 'candidate gitdir' -Arguments @('rev-parse', '--path-format=absolute', '--git-path', 'modules/sdk')
+    $candidateGitDir = Invoke-ExactGit -WorkingDirectory $directRoot -Check 'candidate gitdir' -Arguments @('rev-parse', '--absolute-git-dir')
+    $normalizedExpectedGitDir = (Resolve-Path -LiteralPath $expectedGitDir).Path.TrimEnd('\', '/')
+    $normalizedCandidateGitDir = (Resolve-Path -LiteralPath $candidateGitDir).Path.TrimEnd('\', '/')
+    if (-not [string]::Equals($normalizedCandidateGitDir, $normalizedExpectedGitDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Embedded SDK validation failed (candidate submodule): direct sdk is not attached to '$projectRoot'."
+    }
+    $superprojectOutput = & $git -c "safe.directory=$projectRoot" -c "safe.directory=$directRoot" -C $projectRoot -C sdk rev-parse --show-superproject-working-tree 2>&1
     if ($LASTEXITCODE -ne 0) {
-        throw "Could not inspect linked worktrees for the embedded SDK."
+        $detail = ($superprojectOutput | Out-String).Trim()
+        throw "Embedded SDK validation failed (candidate superproject): $detail"
     }
-    foreach ($line in $worktreeLines) {
-        if (-not $line.StartsWith('worktree ')) {
-            continue
-        }
-        $candidateRoot = $line.Substring('worktree '.Length)
-        $candidateSdkRoot = Join-Path $candidateRoot 'sdk'
-        if (-not (Test-Path -LiteralPath (Join-Path $candidateSdkRoot 'mayor-sdk.ps1') -PathType Leaf)) {
-            continue
-        }
-        $candidateGitlink = & $git.Source -c "safe.directory=$candidateRoot" -C $candidateRoot ls-tree HEAD sdk
-        if ($LASTEXITCODE -eq 0 -and $candidateGitlink -eq $gitlink) {
-            return $candidateSdkRoot
-        }
+    $superproject = ($superprojectOutput | Out-String).Trim()
+    if ([string]::IsNullOrWhiteSpace($superproject)) {
+        throw "Embedded SDK validation failed (candidate superproject): direct sdk is not a submodule of '$projectRoot'."
     }
-    throw "Mayor Simulator embedded SDK is not initialized for gitlink '$gitlink'. Set process-local MAYOR_SDK_HOME to a standalone SDK root."
+    $normalizedProjectRoot = (Resolve-Path -LiteralPath $projectRoot).Path.TrimEnd('\', '/')
+    $normalizedSuperproject = (Resolve-Path -LiteralPath $superproject).Path.TrimEnd('\', '/')
+    if (-not [string]::Equals($normalizedSuperproject, $normalizedProjectRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Embedded SDK validation failed (candidate superproject): expected '$projectRoot' but found '$superproject'."
+    }
+    $status = Invoke-ExactGit -WorkingDirectory $directRoot -Check 'candidate cleanliness' -Arguments @('status', '--porcelain')
+    if (-not [string]::IsNullOrWhiteSpace($status)) {
+        throw "Embedded SDK validation failed (candidate cleanliness): direct sdk has local changes."
+    }
+    return $directRoot
 }
 
 try {
