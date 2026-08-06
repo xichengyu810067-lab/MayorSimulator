@@ -139,7 +139,7 @@ func _build_content() -> void:
 	close_button = Button.new()
 	close_button.name = "DismissButton"
 	close_button.text = "×"
-	close_button.custom_minimum_size = Vector2(40, 40)
+	close_button.custom_minimum_size = Vector2(44, 44)
 	close_button.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	close_button.focus_mode = Control.FOCUS_ALL
 	close_button.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -203,7 +203,7 @@ func _build_content() -> void:
 
 	primary_action_button = Button.new()
 	primary_action_button.name = "PrimaryActionButton"
-	primary_action_button.custom_minimum_size = Vector2(124, 42)
+	primary_action_button.custom_minimum_size = Vector2(124, 44)
 	primary_action_button.size_flags_horizontal = Control.SIZE_SHRINK_END
 	primary_action_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	primary_action_button.focus_mode = Control.FOCUS_ALL

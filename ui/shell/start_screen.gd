@@ -185,7 +185,7 @@ func _build_content() -> void:
 	language_row.add_child(language_label)
 	language_selector = ProgressiveOptionButtonScript.new()
 	language_selector.name = "StartLanguageSelector"
-	language_selector.custom_minimum_size = Vector2(190, 42)
+	language_selector.custom_minimum_size = Vector2(190, 44)
 	language_selector.add_theme_font_size_override("font_size", 18)
 	language_selector.set_meta("l10n_skip", true)
 	language_selector.call("set_show_all_choices", true)

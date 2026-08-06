@@ -32,6 +32,8 @@ func _run() -> void:
 	if overlay.music_volume_slider != null and overlay.sfx_volume_slider != null:
 		_check(overlay.music_volume_slider.min_value == 0.0 and overlay.music_volume_slider.max_value == 100.0, "music volume range is 0-100")
 		_check(overlay.sfx_volume_slider.min_value == 0.0 and overlay.sfx_volume_slider.max_value == 100.0, "SFX volume range is 0-100")
+		_check(overlay.music_volume_slider.custom_minimum_size.x >= 44.0 and overlay.music_volume_slider.custom_minimum_size.y >= 44.0, "music slider minimum target is at least 44x44")
+		_check(overlay.sfx_volume_slider.custom_minimum_size.x >= 44.0 and overlay.sfx_volume_slider.custom_minimum_size.y >= 44.0, "SFX slider minimum target is at least 44x44")
 		var emitted_music_values: Array[float] = []
 		overlay.music_volume_selected.connect(func(value: float) -> void: emitted_music_values.append(value))
 		overlay.set_audio_enabled(true, true, 0.42, 0.73)

@@ -317,7 +317,7 @@ func _volume_row(label_text: String, node_name: String, value: float) -> Diction
 	slider.max_value = 100.0
 	slider.step = 1.0
 	slider.value = clampf(value, 0.0, 1.0) * 100.0
-	slider.custom_minimum_size = Vector2(220, 42)
+	slider.custom_minimum_size = Vector2(220, 44)
 	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	slider.focus_mode = Control.FOCUS_ALL
 	slider.tooltip_text = "%s（0–100%%）" % label_text

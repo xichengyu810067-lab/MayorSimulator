@@ -105,7 +105,7 @@ func _build_content() -> void:
 	_close_button.name = "CloseBuildingContextButton"
 	_close_button.text = "×"
 	_close_button.tooltip_text = "關閉建築功能"
-	_close_button.custom_minimum_size = Vector2(42, 36)
+	_close_button.custom_minimum_size = Vector2(44, 44)
 	_close_button.add_theme_font_size_override("font_size", 20)
 	_close_button.pressed.connect(_close_or_back)
 	header.add_child(_close_button)

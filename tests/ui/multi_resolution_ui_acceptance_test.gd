@@ -93,6 +93,7 @@ func _validate_resolution(main: Control, expected_resolution: Vector2i) -> void:
 			[main.start_screen.new_game_button, main.start_screen.continue_game_button],
 			"start actions@%s" % expected_resolution
 		)
+		_validate_interactive_target(main.start_screen.language_selector, "start language selector@%s" % expected_resolution)
 		_validate_visible_control_tree(start_screen, viewport_rect, "StartScreen@%s" % expected_resolution)
 		start_screen.hide()
 	await _settle(2)
@@ -130,8 +131,22 @@ func _validate_resolution(main: Control, expected_resolution: Vector2i) -> void:
 		[main.settings_overlay.music_button, main.settings_overlay.sfx_button],
 		"audio actions@%s" % expected_resolution
 	)
+	_validate_interactive_target(main.settings_overlay.music_volume_slider, "music volume slider@%s" % expected_resolution)
+	_validate_interactive_target(main.settings_overlay.sfx_volume_slider, "SFX volume slider@%s" % expected_resolution)
 	main.settings_overlay.close()
 	await _settle(1)
+
+	var building_context = main.building_context_panel as Control
+	_check(building_context != null, "building context panel exists@%s" % expected_resolution)
+	if building_context != null:
+		building_context.call("open_for", {}, viewport_rect.get_center(), viewport_rect.size)
+		await _settle(1)
+		var building_close := building_context.find_child("CloseBuildingContextButton", true, false) as BaseButton
+		_validate_interactive_target(building_close, "building context close@%s" % expected_resolution)
+		if building_close != null:
+			building_close.emit_signal("pressed")
+		await _settle(1)
+		_check(not building_context.visible, "building context close button restores map input@%s" % expected_resolution)
 
 	main.exit_confirmation.open()
 	await _settle(2)
@@ -389,6 +404,21 @@ func _bring_button_into_view(button: BaseButton, page: Control, page_host_rect: 
 		effective_rect.size.x + GEOMETRY_EPSILON >= MIN_INTERACTIVE_EXTENT
 		and effective_rect.size.y + GEOMETRY_EPSILON >= MIN_INTERACTIVE_EXTENT,
 		"%s interactive '%s' exposes at least %.0fx%.0f clickable pixels after scrolling: %s" % [label, node_path, MIN_INTERACTIVE_EXTENT, MIN_INTERACTIVE_EXTENT, effective_rect]
+	)
+
+
+func _validate_interactive_target(control: Control, label: String) -> void:
+	_check(control != null and is_instance_valid(control), "%s exists" % label)
+	if control == null or not is_instance_valid(control):
+		return
+	_check(
+		control.custom_minimum_size.x >= MIN_INTERACTIVE_EXTENT and control.custom_minimum_size.y >= MIN_INTERACTIVE_EXTENT,
+		"%s declares at least %.0fx%.0f logical pixels: %s" % [label, MIN_INTERACTIVE_EXTENT, MIN_INTERACTIVE_EXTENT, control.custom_minimum_size]
+	)
+	var rect := control.get_global_rect()
+	_check(
+		rect.size.x + GEOMETRY_EPSILON >= MIN_INTERACTIVE_EXTENT and rect.size.y + GEOMETRY_EPSILON >= MIN_INTERACTIVE_EXTENT,
+		"%s receives at least %.0fx%.0f logical pixels after layout: %s" % [label, MIN_INTERACTIVE_EXTENT, MIN_INTERACTIVE_EXTENT, rect]
 	)
 
 

@@ -52,8 +52,10 @@ func _run() -> void:
 	_check(card.petition_status_label.text == "待回應" and card._status_chip.visible, "petition status hint was not rendered")
 	_check(card.portrait_rect.texture == portrait, "NPC portrait was not rendered")
 	_check(card.primary_action_button.visible and card.primary_action_button.text == "查看陳情", "optional primary action was not rendered")
-	_check(card.close_button.custom_minimum_size.x >= 40.0 and card.close_button.custom_minimum_size.y >= 40.0, "dismiss target is smaller than 40x40")
-	_check(card.primary_action_button.custom_minimum_size.y >= 40.0, "primary action target is smaller than 40px high")
+	_check(card.close_button.custom_minimum_size.x >= 44.0 and card.close_button.custom_minimum_size.y >= 44.0, "dismiss target is smaller than 44x44")
+	_check(card.primary_action_button.custom_minimum_size.x >= 44.0 and card.primary_action_button.custom_minimum_size.y >= 44.0, "primary action target is smaller than 44x44")
+	_check(card.close_button.size.x >= 44.0 and card.close_button.size.y >= 44.0, "dismiss control does not receive a 44x44 layout target")
+	_check(card.primary_action_button.size.x >= 44.0 and card.primary_action_button.size.y >= 44.0, "primary action control does not receive a 44x44 layout target")
 
 	var light_style := card.get_theme_stylebox("panel") as StyleBoxFlat
 	var light_text: Color = card.message_label.get_theme_color("font_color")
