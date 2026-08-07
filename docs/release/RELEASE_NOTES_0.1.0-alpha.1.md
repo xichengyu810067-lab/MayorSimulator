@@ -4,7 +4,7 @@
 
 ## 已驗證範圍
 
-- Godot 4.7 專案匯入與 66 項隔離 assertion matrix。
+- Godot 4.7 專案匯入與 67 項隔離 assertion matrix。
 - 五階段 OS-kill 存檔耐久性測試與 173 項語意檢查。
 - Windows 匯出成品啟動 smoke test。
 - Linux 匯出成品啟動 smoke test。

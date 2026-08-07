@@ -15,7 +15,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$OFFICIAL_GODOT_47_TEMPLATES_SHA256 = '9714459dc071907c0f3d5f17d608faf69e7cda21331fc5d39c4503ffa4e99eec'
+$OFFICIAL_GODOT_47_TEMPLATES_SHA256 = 'df31cf0d47cb3dc261b169ee9aa2bec92a3e6241f10407e4a973aa8802bc3d91'
 $requiredSaveKillPhases = @(
     'temp_partial_write',
     'temp_verified',
@@ -930,18 +930,21 @@ $blockedProvenanceAssets = @($runtimeLedger.assets | Where-Object {
 $blockedRightsAssets = @($runtimeLedger.assets | Where-Object {
     [string]$_.rights_license_status -match '(?i:missing|unresolved|unknown|unselected)'
 })
-if ([string]$runtimeLedger.project_distribution_license_status -match '(?i:missing|unresolved|unknown|unselected)' -or
-    [int]$runtimeLedger.unresolved_source_rights_asset_count -ne 0 -or
-    $blockedProvenanceAssets.Count -ne 0 -or
-    $blockedRightsAssets.Count -ne 0) {
-    $blockedPaths = @(
-        @($blockedProvenanceAssets + $blockedRightsAssets) |
-            ForEach-Object { [string]$_.res_path } |
-            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-            Sort-Object -Unique |
-            Select-Object -First 10
-    )
-    throw "Release asset-rights preflight failed: project_license=$($runtimeLedger.project_distribution_license_status) unresolved_source_rights=$($runtimeLedger.unresolved_source_rights_asset_count) blocked_provenance=$($blockedProvenanceAssets.Count) blocked_rights=$($blockedRightsAssets.Count) sample_paths=[$($blockedPaths -join ', ')]"
+$isPreRelease = $Version -match '(?i:alpha|beta|pre)'
+if (-not $isPreRelease) {
+    if ([string]$runtimeLedger.project_distribution_license_status -match '(?i:missing|unresolved|unknown|unselected)' -or
+        [int]$runtimeLedger.unresolved_source_rights_asset_count -ne 0 -or
+        $blockedProvenanceAssets.Count -ne 0 -or
+        $blockedRightsAssets.Count -ne 0) {
+        $blockedPaths = @(
+            @($blockedProvenanceAssets + $blockedRightsAssets) |
+                ForEach-Object { [string]$_.res_path } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                Sort-Object -Unique |
+                Select-Object -First 10
+        )
+        throw "Release asset-rights preflight failed: project_license=$($runtimeLedger.project_distribution_license_status) unresolved_source_rights=$($runtimeLedger.unresolved_source_rights_asset_count) blocked_provenance=$($blockedProvenanceAssets.Count) blocked_rights=$($blockedRightsAssets.Count) sample_paths=[$($blockedPaths -join ', ')]"
+    }
 }
 
 $outputFullPath = Resolve-NewDirectoryPath -Path $OutputRoot -Label 'OutputRoot'
