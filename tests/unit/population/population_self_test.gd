@@ -11,7 +11,7 @@ func _init() -> void:
 	var first = PopulationSystem.new()
 	first.initialize(300, 42_4242)
 	_assert(first.population_count() == 300, "initial population")
-	_assert(first.get_visible_proxy_data().size() == 80, "visible proxy cap")
+	_assert(first.get_visible_proxy_data().size() == 24, "default visible proxy cap")
 	_assert(first.get_visible_proxy_data(PackedStringArray(), 500).size() == 80, "hard proxy cap")
 	var structured_name_count := 0
 	for resident_id: String in first.sorted_npc_ids():
@@ -157,10 +157,31 @@ func _init() -> void:
 	_assert(legacy_healthcare.complete_request(legacy_request_id, 3, {"hospital_count": 2}), "legacy raw hospital count still completes requests without a capacity key")
 
 	var capped = PopulationSystem.new()
-	capped.initialize(900, 7)
-	_assert(capped.population_count() == 500, "population hard cap")
-	_assert(capped.add_resident() == "", "cannot exceed cap")
+	capped.initialize(501, 7)
+	_assert(PopulationSystem.MAX_POPULATION == 500, "population hard cap remains 500")
+	_assert(capped.population_count() == 500, "501 resident initialization clamps at 500")
+	_assert(capped.add_resident() == "", "cannot exceed the 500 resident cap")
 	_assert(capped.add_residents(10, 5, "test.cap").is_empty(), "bulk addition reports no residents beyond cap")
+
+	var cached_cohorts = PopulationSystem.new()
+	cached_cohorts.initialize(10, 8_080)
+	var first_cohort := cached_cohorts.get_bounded_deterministic_cohort(4, 0)
+	var second_cohort := cached_cohorts.get_bounded_deterministic_cohort(4, 1)
+	var third_cohort := cached_cohorts.get_bounded_deterministic_cohort(4, 2)
+	_assert(first_cohort == cached_cohorts.get_bounded_deterministic_cohort(4, 0), "bounded cohort is deterministic per batch")
+	var covered_ids := {}
+	for cohort: PackedStringArray in [first_cohort, second_cohort, third_cohort]:
+		var cohort_ids := {}
+		for npc_id: String in cohort:
+			cohort_ids[npc_id] = true
+			covered_ids[npc_id] = true
+		_assert(cohort_ids.size() == cohort.size(), "bounded cohort contains no duplicate IDs")
+	_assert(covered_ids.size() == 10, "bounded cohorts cover the cached deterministic ID order")
+	_assert(third_cohort == PackedStringArray(["npc_000009", "npc_000010", "npc_000001", "npc_000002"]), "bounded cohort wraps at the cached order boundary")
+	var cache_added := cached_cohorts.add_resident()
+	_assert(not cache_added.is_empty() and cached_cohorts.sorted_npc_ids().back() == cache_added, "resident addition updates cached ID order")
+	_assert(cached_cohorts.remove_residents_by_id(PackedStringArray([cache_added]), 1, "test.cache").size() == 1, "resident removal invalidates cached ID order")
+	_assert(not cached_cohorts.sorted_npc_ids().has(cache_added), "invalidated cached ID order excludes removed resident")
 
 	var lifecycle = PopulationSystem.new()
 	lifecycle.initialize(300, 42_4242)

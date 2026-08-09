@@ -24,6 +24,7 @@ const NPC_LOCAL_WANDER_OFFSETS := [
 	Vector2(44, -40),
 ]
 const NPC_PRIMARY_ROUTE_COUNT := 24
+const MAX_VISIBLE_PROXY_COUNT := 80
 const NPC_ROUTE_SAMPLE_STEP := 18.0
 const NPC_ROUTE_SPECS := [
 	{"start": Vector2(104, 302), "end": Vector2(150, 302)},
@@ -98,6 +99,7 @@ func rebuild_actor_pool(authoritative_proxies: Array[Dictionary], dark_mode: boo
 	_dark_mode = dark_mode
 	if _layer == null:
 		return
+	authoritative_proxies = cap_authoritative_proxies(authoritative_proxies)
 	var wander_points := _npc_wander_points()
 	var occupied_feet: Array[Vector2] = []
 	var reserved_destinations: Array[Vector2] = []
@@ -167,6 +169,15 @@ func rebuild_actor_pool(authoritative_proxies: Array[Dictionary], dark_mode: boo
 		actor.position = position
 		actor.z_index = int(foot_position.y)
 		_actors.append(actor)
+
+
+static func cap_authoritative_proxies(authoritative_proxies: Array[Dictionary]) -> Array[Dictionary]:
+	var capped: Array[Dictionary] = []
+	for proxy: Dictionary in authoritative_proxies:
+		if capped.size() >= MAX_VISIBLE_PROXY_COUNT:
+			break
+		capped.append(proxy)
+	return capped
 
 
 func _clear_actors() -> void:

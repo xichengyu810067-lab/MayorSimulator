@@ -15,6 +15,7 @@ const MIN_SUPPORTED_SCHEMA_VERSION := SaveSchemaAuthorityScript.POPULATION_MIN_S
 const MAX_SUPPORTED_SCHEMA_VERSION := SaveSchemaAuthorityScript.POPULATION_MAX_SUPPORTED_SCHEMA_VERSION
 const DEFAULT_INITIAL_POPULATION := 300
 const MAX_POPULATION := 500
+const DEFAULT_VISIBLE_PROXIES := 24
 const MAX_VISIBLE_PROXIES := 80
 const DEFAULT_SEED := 270_419
 const DAYS_PER_MONTH := 30
@@ -54,6 +55,8 @@ var records: Dictionary = {}
 var requests: Dictionary = {}
 var income_transactions: Array[Dictionary] = []
 var event_book = EventBookScript.new()
+var _sorted_npc_id_cache: Array[String] = []
+var _sorted_npc_id_cache_valid := false
 
 
 func initialize(initial_count: int = DEFAULT_INITIAL_POPULATION, seed_value: int = DEFAULT_SEED) -> void:
@@ -63,6 +66,7 @@ func initialize(initial_count: int = DEFAULT_INITIAL_POPULATION, seed_value: int
 	next_transaction_sequence = 1
 	current_year = 1
 	records.clear()
+	_invalidate_sorted_npc_id_cache()
 	requests.clear()
 	income_transactions.clear()
 	event_book = EventBookScript.new()
@@ -70,6 +74,7 @@ func initialize(initial_count: int = DEFAULT_INITIAL_POPULATION, seed_value: int
 	for index: int in range(safe_count):
 		var record = _create_record(index)
 		records[record.npc_id] = record
+		_append_sorted_npc_id_cache(record.npc_id)
 	_build_initial_sparse_relationships()
 	event_book.append(0, "population_initialized", "city", "population_seeded", {
 		"population": safe_count,
@@ -105,6 +110,7 @@ func add_residents(
 		if not address_id.is_empty():
 			record.address_id = address_id
 		records[record.npc_id] = record
+		_append_sorted_npc_id_cache(record.npc_id)
 		added_ids.append(record.npc_id)
 		event_book.append(game_day, "resident_added", record.npc_id, reason_tag, {
 			"address_id": record.address_id,
@@ -117,7 +123,7 @@ func remove_residents(
 	game_day: int,
 	reason_tag: String
 ) -> PackedStringArray:
-	var candidates := sorted_npc_ids()
+	var candidates := _cached_sorted_npc_ids().duplicate()
 	candidates.reverse()
 	var requested := PackedStringArray()
 	for npc_id: String in candidates:
@@ -141,11 +147,12 @@ func remove_residents_by_id(
 		for request_id: String in sorted_request_ids():
 			if str(requests[request_id].npc_id) == npc_id:
 				requests.erase(request_id)
-		for other_id: String in sorted_npc_ids():
+		for other_id: String in _cached_sorted_npc_ids():
 			if other_id != npc_id:
 				records[other_id].remove_relationship(npc_id)
 		var removed_record = records[npc_id]
 		records.erase(npc_id)
+		_invalidate_sorted_npc_id_cache()
 		removed_ids.append(npc_id)
 		event_book.append(game_day, "resident_removed", npc_id, reason_tag, {
 			"address_id": str(removed_record.address_id),
@@ -226,7 +233,7 @@ func monthly_income_total(npc_id: String, year: int, month: int) -> int:
 
 func resident_income_total() -> int:
 	var total := 0
-	for npc_id: String in sorted_npc_ids():
+	for npc_id: String in _cached_sorted_npc_ids():
 		total += maxi(0, int(records[npc_id].income))
 	return total
 
@@ -241,7 +248,7 @@ func match_open_jobs(open_jobs: Array[Dictionary], game_day: int) -> Array[Dicti
 	)
 	var unemployed := _record_ids_with_state("待業")
 	var occupied_by_job := {}
-	for npc_id: String in sorted_npc_ids():
+	for npc_id: String in _cached_sorted_npc_ids():
 		var existing_record = records[npc_id]
 		if existing_record.employment_state != "在職" or existing_record.job_id.is_empty():
 			continue
@@ -266,7 +273,7 @@ func advance_year(new_year: int, game_day: int) -> int:
 	if new_year <= current_year:
 		return 0
 	var years_elapsed := new_year - current_year
-	var ids := sorted_npc_ids()
+	var ids := _cached_sorted_npc_ids()
 	for npc_id: String in ids:
 		var record = records[npc_id]
 		record.age += years_elapsed
@@ -315,17 +322,37 @@ func calculate_policy_attitude(
 	}
 
 
-func get_visible_proxy_data(requested_ids: PackedStringArray = PackedStringArray(), limit: int = MAX_VISIBLE_PROXIES) -> Array[Dictionary]:
+func get_visible_proxy_data(requested_ids: PackedStringArray = PackedStringArray(), limit: int = DEFAULT_VISIBLE_PROXIES) -> Array[Dictionary]:
 	var safe_limit := clampi(limit, 0, MAX_VISIBLE_PROXIES)
-	var source_ids: Array[String] = []
 	if requested_ids.is_empty():
-		source_ids = sorted_npc_ids()
-	else:
-		for npc_id: String in requested_ids:
-			if records.has(npc_id) and not source_ids.has(npc_id):
-				source_ids.append(npc_id)
+		return _materialize_proxy_ids(_cached_sorted_npc_ids(), safe_limit)
+	var source_ids: Array[String] = []
+	var seen := {}
+	for npc_id: String in requested_ids:
+		if records.has(npc_id) and not seen.has(npc_id):
+			seen[npc_id] = true
+			source_ids.append(npc_id)
+	return _materialize_proxy_ids(source_ids, safe_limit)
+
+
+## Returns one deterministic, unique cohort without re-sorting the population.
+## Consecutive cohort indices tile the cached ID order and wrap only after the
+## complete population has been covered.
+func get_bounded_deterministic_cohort(cohort_size: int, cohort_index: int) -> PackedStringArray:
+	var ids := _cached_sorted_npc_ids()
+	var safe_size := clampi(cohort_size, 0, ids.size())
+	var cohort := PackedStringArray()
+	if safe_size == 0:
+		return cohort
+	var start := _positive_mod(cohort_index * safe_size, ids.size())
+	for offset: int in range(safe_size):
+		cohort.append(ids[(start + offset) % ids.size()])
+	return cohort
+
+
+func _materialize_proxy_ids(source_ids: Array[String], limit: int) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
-	for index: int in range(mini(safe_limit, source_ids.size())):
+	for index: int in range(mini(limit, source_ids.size())):
 		var proxy := materialize_proxy(source_ids[index])
 		if not proxy.is_empty():
 			result.append(proxy)
@@ -543,11 +570,27 @@ func public_affairs_requests() -> Array[Dictionary]:
 
 
 func sorted_npc_ids() -> Array[String]:
-	var ids: Array[String] = []
-	for key: Variant in records.keys():
-		ids.append(str(key))
-	ids.sort()
-	return ids
+	return _cached_sorted_npc_ids().duplicate()
+
+
+func _cached_sorted_npc_ids() -> Array[String]:
+	if not _sorted_npc_id_cache_valid:
+		_sorted_npc_id_cache.clear()
+		for key: Variant in records.keys():
+			_sorted_npc_id_cache.append(str(key))
+		_sorted_npc_id_cache.sort()
+		_sorted_npc_id_cache_valid = true
+	return _sorted_npc_id_cache
+
+
+func _invalidate_sorted_npc_id_cache() -> void:
+	_sorted_npc_id_cache.clear()
+	_sorted_npc_id_cache_valid = false
+
+
+func _append_sorted_npc_id_cache(npc_id: String) -> void:
+	if _sorted_npc_id_cache_valid:
+		_sorted_npc_id_cache.append(npc_id)
 
 
 func sorted_request_ids() -> Array[String]:
@@ -563,7 +606,7 @@ func stable_summary() -> Dictionary:
 	var unemployed := 0
 	var age_total := 0
 	var relationship_edges := 0
-	for npc_id: String in sorted_npc_ids():
+	for npc_id: String in _cached_sorted_npc_ids():
 		var record = records[npc_id]
 		age_total += record.age
 		relationship_edges += record.relationships.size()
@@ -591,7 +634,7 @@ func stable_summary() -> Dictionary:
 
 func to_dict() -> Dictionary:
 	var npc_data: Array[Dictionary] = []
-	for npc_id: String in sorted_npc_ids():
+	for npc_id: String in _cached_sorted_npc_ids():
 		npc_data.append(records[npc_id].to_dict())
 	var request_data: Array[Dictionary] = []
 	for request_id: String in sorted_request_ids():
@@ -638,6 +681,7 @@ static func from_dict(data: Dictionary):
 			var record = NpcRecordScript.from_dict(value)
 			if record != null and not record.npc_id.is_empty() and system.records.size() < MAX_POPULATION:
 				system.records[record.npc_id] = record
+	system._invalidate_sorted_npc_id_cache()
 	system.requests.clear()
 	var request_values: Array = data.get("requests", [])
 	for value: Variant in request_values:
@@ -722,7 +766,7 @@ func _create_record(index: int):
 
 
 func _build_initial_sparse_relationships() -> void:
-	var ids := sorted_npc_ids()
+	var ids := _cached_sorted_npc_ids()
 	for index: int in range(ids.size()):
 		if index > 0 and index % 2 == 0:
 			_connect(ids[index], ids[index - 1], "鄰居", 20 + _sample(index, 211, 61))
@@ -739,7 +783,7 @@ func _connect(first_id: String, second_id: String, relationship_type: String, af
 
 func _record_ids_with_state(state: String) -> Array[String]:
 	var result: Array[String] = []
-	for npc_id: String in sorted_npc_ids():
+	for npc_id: String in _cached_sorted_npc_ids():
 		if records[npc_id].employment_state == state:
 			result.append(npc_id)
 	return result
@@ -782,7 +826,7 @@ func _has_active_request_type(request_type: String) -> bool:
 
 
 func _select_request_npc(game_day: int, request_type: String) -> String:
-	var ids := sorted_npc_ids()
+	var ids := _cached_sorted_npc_ids()
 	if ids.is_empty():
 		return ""
 	var type_salt := 0
