@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -138,12 +139,33 @@ class MayorSdkTests(unittest.TestCase):
 
     def test_git_inventory_distinguishes_unborn_repository_from_commit(self):
         with tempfile.TemporaryDirectory() as temp:
-            marker = Path(temp) / ".git"
-            (marker / "refs" / "heads").mkdir(parents=True)
-            (marker / "HEAD").write_text("ref: refs/heads/main\n", encoding="ascii")
-            self.assertEqual("initialized_unborn", mayor_sdk._git_status(marker))
-            (marker / "refs" / "heads" / "main").write_text("a" * 40 + "\n", encoding="ascii")
-            self.assertEqual("repository", mayor_sdk._git_status(marker))
+            root = Path(temp)
+            initialized = subprocess.run(
+                ["git", "init", "--quiet", "--initial-branch=main", str(root)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, initialized.returncode, initialized.stderr)
+            self.assertEqual("initialized_unborn", mayor_sdk._git_status(root))
+
+            fixture = root / "fixture.txt"
+            fixture.write_text("fixture\n", encoding="utf-8")
+            added = mayor_sdk._git_probe(root, "add", fixture.name)
+            self.assertEqual(0, added.returncode, added.stderr)
+            committed = mayor_sdk._git_probe(
+                root,
+                "-c",
+                "user.name=Mayor SDK test",
+                "-c",
+                "user.email=mayor-sdk-test@example.invalid",
+                "commit",
+                "--quiet",
+                "-m",
+                "fixture",
+            )
+            self.assertEqual(0, committed.returncode, committed.stderr)
+            self.assertEqual("repository", mayor_sdk._git_status(root))
 
     def test_sdk_version_must_satisfy_project_contract(self):
         self.assertTrue(mayor_sdk._version_in_range("1.0.0", ">=1.0.0 <2.0.0"))
