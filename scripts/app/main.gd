@@ -1225,7 +1225,7 @@ func _shutdown_audio_and_quit() -> void:
 	await get_tree().process_frame
 	if _qa_release_smoke_active:
 		print("QA_RELEASE_SMOKE_COMPLETED")
-	get_tree().quit()
+	get_tree().call_deferred("quit")
 
 
 func _build_management_overlay() -> Control:
