@@ -1,6 +1,8 @@
 class_name MayorPopulationSystem
 extends RefCounted
 
+const SaveSchemaAuthorityScript = preload("res://scripts/core/save_schema_authority.gd")
+
 ## Deterministic small-population simulation for the vertical slice.
 ## All 300-500 residents remain persistent; only proxy dictionaries are pooled for display.
 
@@ -8,7 +10,9 @@ const NpcRecordScript = preload("res://scripts/systems/population/npc_record.gd"
 const PopulationRequestScript = preload("res://scripts/systems/population/population_request.gd")
 const EventBookScript = preload("res://scripts/systems/population/event_book.gd")
 
-const SCHEMA_VERSION := 2
+const SCHEMA_VERSION := SaveSchemaAuthorityScript.POPULATION_CURRENT_SCHEMA_VERSION
+const MIN_SUPPORTED_SCHEMA_VERSION := SaveSchemaAuthorityScript.POPULATION_MIN_SUPPORTED_SCHEMA_VERSION
+const MAX_SUPPORTED_SCHEMA_VERSION := SaveSchemaAuthorityScript.POPULATION_MAX_SUPPORTED_SCHEMA_VERSION
 const DEFAULT_INITIAL_POPULATION := 300
 const MAX_POPULATION := 500
 const MAX_VISIBLE_PROXIES := 80
@@ -615,8 +619,11 @@ func stable_hash() -> String:
 
 
 static func from_dict(data: Dictionary):
-	var schema_version := int(data.get("schema_version", 1))
-	if schema_version < 1 or schema_version > SCHEMA_VERSION:
+	var schema_value: Variant = data.get("schema_version", MIN_SUPPORTED_SCHEMA_VERSION)
+	if not _is_integer_value(schema_value):
+		return null
+	var schema_version := int(schema_value)
+	if schema_version < MIN_SUPPORTED_SCHEMA_VERSION or schema_version > MAX_SUPPORTED_SCHEMA_VERSION:
 		return null
 	var system = new()
 	system.simulation_seed = int(data.get("simulation_seed", DEFAULT_SEED))
@@ -629,7 +636,7 @@ static func from_dict(data: Dictionary):
 	for value: Variant in record_values:
 		if value is Dictionary:
 			var record = NpcRecordScript.from_dict(value)
-			if not record.npc_id.is_empty() and system.records.size() < MAX_POPULATION:
+			if record != null and not record.npc_id.is_empty() and system.records.size() < MAX_POPULATION:
 				system.records[record.npc_id] = record
 	system.requests.clear()
 	var request_values: Array = data.get("requests", [])
@@ -798,6 +805,10 @@ func _sample(index: int, salt: int, modulo: int) -> int:
 static func _positive_mod(value: int, modulo: int) -> int:
 	var result := value % modulo
 	return result + modulo if result < 0 else result
+
+
+static func _is_integer_value(value: Variant) -> bool:
+	return value is int or (value is float and is_finite(float(value)) and float(value) == roundf(float(value)))
 
 
 static func _canonicalize(value: Variant) -> Variant:

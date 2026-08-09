@@ -1,0 +1,738 @@
+{
+	"schema_version": 1,
+	"content_version": "vertical_slice_1",
+	"rng_seed": "8024611",
+	"rng_state": "8929193143825254073",
+	"game_time": 0,
+	"event_sequence": 0,
+	"command_sequence": 0,
+	"state": {
+		"schema_version": 1,
+		"city_id": "city_001",
+		"game_time": 0,
+		"last_event_sequence": 0,
+		"ledger": {
+			"balance": 73000,
+			"entries": [
+				{
+					"entry_id": "ledger_0000000000",
+					"event_sequence": 0,
+					"game_time": 0,
+					"amount": 73000,
+					"balance_after": 73000,
+					"reason_tag": "opening_balance",
+					"source_id": "city",
+					"metadata": {
+						"category": "opening"
+					}
+				}
+			]
+		},
+		"metrics": {
+			"population": 1,
+			"satisfaction": 50.0,
+			"grievance": 0.0,
+			"municipal_trust": 75.0,
+			"environment": 50.0,
+			"security": 50.0,
+			"education": 50.0,
+			"healthcare": 50.0,
+			"unemployment_rate": 0.0
+		},
+		"buildings": {},
+		"construction_jobs": {},
+		"npcs": {
+			"npc_000001": {
+				"schema_version": 2,
+				"npc_id": "npc_000001",
+				"display_name": "Fixture Resident",
+				"age": 37,
+				"gender": "unspecified",
+				"personality": "steady",
+				"personality_tags": [],
+				"appearance_tags": [],
+				"preferences": [
+					"parks"
+				],
+				"education": "secondary",
+				"income": 31000,
+				"salary": null,
+				"debt": null,
+				"address_id": "home_fixture",
+				"job_id": "",
+				"employment_state": "employed",
+				"policy_attitudes": {},
+				"relationships": {}
+			}
+		},
+		"scheduled_events": {},
+		"event_book": [],
+		"governance": {
+			"active_laws": [],
+			"pending_bills": [],
+			"rejected_bills": [],
+			"judicial_cases": [],
+			"oversight_cases": [],
+			"committee_summary": {},
+			"failed": false,
+			"failure_reason": ""
+		},
+		"maintenance": {
+			"unpaid_months": 0,
+			"last_paid_game_time": 0
+		},
+		"metadata": {
+			"vertical_slice": {
+				"schema_version": 8,
+				"construction": {
+					"schema_version": 1,
+					"seed": 8024611,
+					"next_review_sequence": 1,
+					"next_job_sequence": 1,
+					"workload_rules": {
+						"build": {
+							"base": 20.0,
+							"floor_points": 4.0,
+							"decoration_points": 1.0,
+							"size_multipliers": {
+								"small": 0.8,
+								"medium": 1.0,
+								"large": 1.35
+							},
+							"material_multipliers": {
+								"wood": 0.9,
+								"brick": 1.0,
+								"steel": 1.2,
+								"concrete": 1.1,
+								"eco_composite": 1.05
+							}
+						},
+						"demolish": {
+							"base": 8.0,
+							"floor_points": 2.0,
+							"decoration_points": 0.0,
+							"size_multipliers": {
+								"small": 0.8,
+								"medium": 1.0,
+								"large": 1.3
+							},
+							"material_multipliers": {
+								"wood": 0.8,
+								"brick": 1.0,
+								"steel": 1.25,
+								"concrete": 1.2,
+								"eco_composite": 1.0
+							}
+						},
+						"move": {
+							"base": 14.0,
+							"floor_points": 3.0,
+							"decoration_points": 0.5,
+							"size_multipliers": {
+								"small": 0.8,
+								"medium": 1.0,
+								"large": 1.4
+							},
+							"material_multipliers": {
+								"wood": 0.9,
+								"brick": 1.0,
+								"steel": 1.15,
+								"concrete": 1.1,
+								"eco_composite": 1.0
+							}
+						}
+					},
+					"reviews": {},
+					"jobs": {}
+				},
+				"durability": {},
+				"governance": {},
+				"population": {
+					"schema_version": 2,
+					"simulation_seed": 270419,
+					"next_npc_sequence": 2,
+					"next_request_sequence": 1,
+					"next_transaction_sequence": 1,
+					"current_year": 1,
+					"records": [
+						{
+							"schema_version": 2,
+							"npc_id": "npc_000001",
+							"display_name": "Fixture Resident",
+							"age": 37,
+							"gender": "unspecified",
+							"personality": "steady",
+							"personality_tags": [],
+							"appearance_tags": [],
+							"preferences": [
+								"parks"
+							],
+							"education": "secondary",
+							"income": 31000,
+							"salary": null,
+							"debt": null,
+							"address_id": "home_fixture",
+							"job_id": "",
+							"employment_state": "employed",
+							"policy_attitudes": {},
+							"relationships": {}
+						}
+					],
+					"requests": [],
+					"income_transactions": [],
+					"event_book": {
+						"schema_version": 1,
+						"next_sequence": 1,
+						"events": []
+					}
+				},
+				"terrain": {
+					"schema_version": 1,
+					"layout_version": 3,
+					"grid_columns": 10,
+					"grid_rows": 10,
+					"tiles": [
+						{
+							"tile_id": 0,
+							"base_kind": "river_lake",
+							"flattened": false
+						},
+						{
+							"tile_id": 1,
+							"base_kind": "river_lake",
+							"flattened": false
+						},
+						{
+							"tile_id": 2,
+							"base_kind": "river_lake",
+							"flattened": false
+						},
+						{
+							"tile_id": 3,
+							"base_kind": "river_lake",
+							"flattened": false
+						},
+						{
+							"tile_id": 4,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 5,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 6,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 7,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 8,
+							"base_kind": "river_lake",
+							"flattened": false
+						},
+						{
+							"tile_id": 9,
+							"base_kind": "river_lake",
+							"flattened": false
+						},
+						{
+							"tile_id": 10,
+							"base_kind": "river_lake",
+							"flattened": false
+						},
+						{
+							"tile_id": 11,
+							"base_kind": "river_lake",
+							"flattened": false
+						},
+						{
+							"tile_id": 12,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 13,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 14,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 15,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 16,
+							"base_kind": "river_lake",
+							"flattened": false
+						},
+						{
+							"tile_id": 17,
+							"base_kind": "river_lake",
+							"flattened": false
+						},
+						{
+							"tile_id": 18,
+							"base_kind": "river_lake",
+							"flattened": false
+						},
+						{
+							"tile_id": 19,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 20,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 21,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 22,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 23,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 24,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 25,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 26,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 27,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 28,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 29,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 30,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 31,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 32,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 33,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 34,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 35,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 36,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 37,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 38,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 39,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 40,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 41,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 42,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 43,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 44,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 45,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 46,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 47,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 48,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 49,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 50,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 51,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 52,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 53,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 54,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 55,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 56,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 57,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 58,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 59,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 60,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 61,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 62,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 63,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 64,
+							"base_kind": "hill_cliff",
+							"flattened": false
+						},
+						{
+							"tile_id": 65,
+							"base_kind": "hill_cliff",
+							"flattened": false
+						},
+						{
+							"tile_id": 66,
+							"base_kind": "river_lake",
+							"flattened": false
+						},
+						{
+							"tile_id": 67,
+							"base_kind": "river_lake",
+							"flattened": false
+						},
+						{
+							"tile_id": 68,
+							"base_kind": "river_lake",
+							"flattened": false
+						},
+						{
+							"tile_id": 69,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 70,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 71,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 72,
+							"base_kind": "trees",
+							"flattened": false
+						},
+						{
+							"tile_id": 73,
+							"base_kind": "trees",
+							"flattened": false
+						},
+						{
+							"tile_id": 74,
+							"base_kind": "hill_cliff",
+							"flattened": false
+						},
+						{
+							"tile_id": 75,
+							"base_kind": "trees",
+							"flattened": false
+						},
+						{
+							"tile_id": 76,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 77,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 78,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 79,
+							"base_kind": "trees",
+							"flattened": false
+						},
+						{
+							"tile_id": 80,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 81,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 82,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 83,
+							"base_kind": "trees",
+							"flattened": false
+						},
+						{
+							"tile_id": 84,
+							"base_kind": "hill_cliff",
+							"flattened": false
+						},
+						{
+							"tile_id": 85,
+							"base_kind": "trees",
+							"flattened": false
+						},
+						{
+							"tile_id": 86,
+							"base_kind": "hill_cliff",
+							"flattened": false
+						},
+						{
+							"tile_id": 87,
+							"base_kind": "trees",
+							"flattened": false
+						},
+						{
+							"tile_id": 88,
+							"base_kind": "trees",
+							"flattened": false
+						},
+						{
+							"tile_id": 89,
+							"base_kind": "trees",
+							"flattened": false
+						},
+						{
+							"tile_id": 90,
+							"base_kind": "trees",
+							"flattened": false
+						},
+						{
+							"tile_id": 91,
+							"base_kind": "trees",
+							"flattened": false
+						},
+						{
+							"tile_id": 92,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 93,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 94,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 95,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 96,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 97,
+							"base_kind": "flat_grass",
+							"flattened": false
+						},
+						{
+							"tile_id": 98,
+							"base_kind": "trees",
+							"flattened": false
+						},
+						{
+							"tile_id": 99,
+							"base_kind": "trees",
+							"flattened": false
+						}
+					]
+				},
+				"transport": {
+					"schema_version": 1,
+					"next_project_sequence": 1,
+					"next_segment_sequence": 1,
+					"next_facility_sequence": 1,
+					"next_station_sequence": 1,
+					"next_route_sequence": 1,
+					"projects": {},
+					"segments": {},
+					"facilities": {},
+					"stations": {},
+					"crossings": {},
+					"routes": {}
+				},
+				"maintenance_payment_enabled": true,
+				"selected_npc_id": "npc_000001",
+				"selected_request_id": "",
+				"next_blueprint_sequence": 1,
+				"blueprint_library": {},
+				"active_blueprint_by_building": {},
+				"next_building_sequence": 1,
+				"next_operation_sequence": 1,
+				"last_city_context": {},
+				"player_shell_state": {},
+				"terminal_failure_event_reason": ""
+			}
+		}
+	},
+	"kernel": {
+		"rng_seed": "8024611",
+		"rng_state": "8929193143825254073",
+		"event_sequence": 0,
+		"command_sequence": 0,
+		"pending_commands": [],
+		"processed_operation_ids": []
+	},
+	"clock": {
+		"day_length_seconds": 120.0,
+		"accumulator_seconds": 0.0,
+		"paused": false
+	}
+}

@@ -9,6 +9,9 @@ const BlueprintLibraryServiceScript = preload("res://scripts/app/blueprint_libra
 const ConstructionSystemScript = preload("res://scripts/systems/city/construction_system.gd")
 const TransportNetworkSystemScript = preload("res://scripts/systems/city/transport_network_system.gd")
 const SaveSchemaAuthorityScript = preload("res://scripts/core/save_schema_authority.gd")
+const PopulationSystemScript = preload("res://scripts/systems/population/population_system.gd")
+const NpcRecordScript = preload("res://scripts/systems/population/npc_record.gd")
+const CityTerrainMapScript = preload("res://scripts/world/city_terrain_map.gd")
 
 const TEST_ROOT := "user://mayor_simulator/tests/save_recovery"
 const DECODE_FAILURE_PATH := TEST_ROOT + "/decode_failure.json"
@@ -22,6 +25,10 @@ const LEGACY_MINIMAL_RUNTIME_PATH := TEST_ROOT + "/legacy_minimal_runtime.json"
 const CURRENT_SCHEMA_NON_TRANSPORT_PATH := TEST_ROOT + "/current_schema_non_transport.json"
 const SCHEMA_PAIR_MIGRATION_PATH := TEST_ROOT + "/schema_pair_migration.json"
 const SCHEMA_AUTHORITY_REGISTRY_PATH := "res://data/save_schema_authority_registry.json"
+const CURRENT_ROUND_TRIP_FIXTURE_PATH := "res://tests/fixtures/save_schema/current_round_trip.json"
+const SUPPORTED_LEGACY_FIXTURE_PATH := "res://tests/fixtures/save_schema/supported_legacy_migration.json"
+const FUTURE_REJECT_FIXTURE_PATH := "res://tests/fixtures/save_schema/future_reject.json"
+const CORRUPT_MINIMAL_FIXTURE_PATH := "res://tests/fixtures/save_schema/corrupt_minimal.json"
 const TEST_SEED := 8_024_611
 const TEST_FUNDS := 73_000
 
@@ -40,7 +47,9 @@ func _initialize() -> void:
 	_test_current_schema_cross_layer_corruption_uses_backup()
 	_test_vertical_metadata_schema_boundary()
 	_test_vertical_terrain_pairing_boundary()
+	_test_schema_authority_runtime_constants()
 	_test_schema_authority_registry_contract()
+	_test_tracked_schema_fixtures()
 	_test_schema_one_minimal_runtime_remains_compatible()
 	_cleanup_all()
 	if _failed:
@@ -331,16 +340,172 @@ func _test_schema_authority_registry_contract() -> void:
 			"registry missing current writer fails safely"
 		)
 		var extra_writer: Dictionary = (registry_value as Dictionary).duplicate(true)
-		extra_writer["supported_version_matrix"].append({
-			"vertical_slice_schema_version": 9,
-			"terrain_layout_version": 4,
-			"status": "current",
+		extra_writer["additional_writer"] = {
+			"id": "forged_future_writer",
 			"writer_allowed": true,
-		})
+		}
 		_check(
 			not SaveSchemaAuthorityScript.validate_registry_json(JSON.stringify(extra_writer)),
 			"registry with an additional future writer fails safely"
 		)
+		var fabricated_migration: Dictionary = (registry_value as Dictionary).duplicate(true)
+		fabricated_migration["migration_registry"].append({
+			"id": "fabricated_npc_migration",
+			"status": "active",
+		})
+		_check(
+			not SaveSchemaAuthorityScript.validate_registry_json(JSON.stringify(fabricated_migration)),
+			"registry rejects migration claims without a real implementation and fixture"
+		)
+
+
+func _test_schema_authority_runtime_constants() -> void:
+	_check(SaveEnvelopeScript.CURRENT_SCHEMA_VERSION == SaveSchemaAuthorityScript.SAVE_ENVELOPE_CURRENT_SCHEMA_VERSION, "SaveEnvelope current schema uses the shared authority")
+	_check(SaveEnvelopeScript.MIN_SUPPORTED_SCHEMA_VERSION == SaveSchemaAuthorityScript.SAVE_ENVELOPE_MIN_SUPPORTED_SCHEMA_VERSION, "SaveEnvelope minimum schema uses the shared authority")
+	_check(SaveEnvelopeScript.MAX_SUPPORTED_SCHEMA_VERSION == SaveSchemaAuthorityScript.SAVE_ENVELOPE_MAX_SUPPORTED_SCHEMA_VERSION, "SaveEnvelope ceiling uses the shared authority")
+	_check(CityStateScript.SNAPSHOT_SCHEMA_VERSION == SaveSchemaAuthorityScript.CITY_STATE_CURRENT_SCHEMA_VERSION, "CityState current schema uses the shared authority")
+	_check(CityStateScript.MIN_SUPPORTED_SNAPSHOT_SCHEMA_VERSION == SaveSchemaAuthorityScript.CITY_STATE_MIN_SUPPORTED_SCHEMA_VERSION, "CityState minimum schema uses the shared authority")
+	_check(CityStateScript.MAX_SUPPORTED_SNAPSHOT_SCHEMA_VERSION == SaveSchemaAuthorityScript.CITY_STATE_MAX_SUPPORTED_SCHEMA_VERSION, "CityState ceiling uses the shared authority")
+	_check(GameSessionScript.MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA == SaveSchemaAuthorityScript.MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA, "vertical schema ceiling uses the shared authority")
+	_check(CityTerrainMapScript.LAYOUT_VERSION == SaveSchemaAuthorityScript.CURRENT_TERRAIN_LAYOUT_VERSION, "terrain current layout agrees with the shared authority")
+	_check(CityTerrainMapScript.LAYOUT_VERSION == SaveSchemaAuthorityScript.MAX_SUPPORTED_TERRAIN_LAYOUT_VERSION, "terrain layout ceiling agrees with current runtime")
+	_check(PopulationSystemScript.SCHEMA_VERSION == SaveSchemaAuthorityScript.POPULATION_CURRENT_SCHEMA_VERSION, "population current schema uses the shared authority")
+	_check(PopulationSystemScript.MIN_SUPPORTED_SCHEMA_VERSION == SaveSchemaAuthorityScript.POPULATION_MIN_SUPPORTED_SCHEMA_VERSION, "population minimum schema uses the shared authority")
+	_check(PopulationSystemScript.MAX_SUPPORTED_SCHEMA_VERSION == SaveSchemaAuthorityScript.POPULATION_MAX_SUPPORTED_SCHEMA_VERSION, "population ceiling uses the shared authority")
+	_check(NpcRecordScript.SCHEMA_VERSION == SaveSchemaAuthorityScript.NPC_RECORD_CURRENT_SCHEMA_VERSION, "NPC current schema uses the shared authority")
+	_check(NpcRecordScript.MIN_SUPPORTED_SCHEMA_VERSION == SaveSchemaAuthorityScript.NPC_RECORD_MIN_SUPPORTED_SCHEMA_VERSION, "NPC minimum schema uses the shared authority")
+	_check(NpcRecordScript.MAX_SUPPORTED_SCHEMA_VERSION == SaveSchemaAuthorityScript.NPC_RECORD_MAX_SUPPORTED_SCHEMA_VERSION, "NPC ceiling uses the shared authority")
+	_check(GameSessionScript.MAX_SUPPORTED_POPULATION_SCHEMA == PopulationSystemScript.MAX_SUPPORTED_SCHEMA_VERSION, "GameSession population ceiling cannot drift from PopulationSystem")
+	_check(GameSessionScript.MAX_SUPPORTED_NPC_RECORD_SCHEMA == NpcRecordScript.MAX_SUPPORTED_SCHEMA_VERSION, "GameSession NPC ceiling cannot drift from MayorNpcRecord")
+
+
+func _test_tracked_schema_fixtures() -> void:
+	var current_data := _read_fixture_dictionary(CURRENT_ROUND_TRIP_FIXTURE_PATH)
+	_check(not current_data.is_empty(), "tracked current round-trip fixture is readable")
+	if current_data.is_empty():
+		return
+	var current_envelope = SaveEnvelopeScript.from_dict(current_data)
+	_check(current_envelope != null, "tracked current fixture decodes as SaveEnvelope")
+	if current_envelope == null:
+		return
+	_assert_fixture_versions(current_envelope, true, "tracked current fixture")
+	var current_probe = GameSessionScript.new(301, 301)
+	_check(current_probe.restore_envelope(current_envelope), "tracked current fixture restores")
+	if current_probe.state != null:
+		var round_trip = current_probe.make_envelope()
+		_check(
+			_canonical_fixture_json(round_trip.to_dict()) == _canonical_fixture_json(current_envelope.to_dict()),
+			"tracked current fixture round-trips without field loss"
+		)
+
+	var legacy_data := _read_fixture_dictionary(SUPPORTED_LEGACY_FIXTURE_PATH)
+	_check(not legacy_data.is_empty(), "tracked supported legacy fixture is readable")
+	var legacy_envelope = SaveEnvelopeScript.from_dict(legacy_data) if not legacy_data.is_empty() else null
+	_check(legacy_envelope != null, "tracked supported legacy fixture decodes as SaveEnvelope")
+	if legacy_envelope != null:
+		var legacy_vertical: Dictionary = legacy_envelope.state.get("metadata", {}).get("vertical_slice", {})
+		var legacy_tiles_json := _canonical_fixture_json(legacy_vertical.get("terrain", {}).get("tiles", []))
+		_check(int(legacy_vertical.get("schema_version", -1)) == SaveSchemaAuthorityScript.LEGACY_MIGRATION_VERTICAL_SCHEMA_VERSION, "legacy fixture starts at vertical schema seven")
+		_check(int(legacy_vertical.get("terrain", {}).get("layout_version", -1)) == SaveSchemaAuthorityScript.LEGACY_MIGRATION_TERRAIN_LAYOUT_VERSION, "legacy fixture starts at terrain layout two")
+		_check(int(legacy_vertical.get("population", {}).get("schema_version", -1)) == PopulationSystemScript.MIN_SUPPORTED_SCHEMA_VERSION, "legacy fixture covers population schema one direct-read compatibility")
+		_check(int(legacy_vertical.get("population", {}).get("records", [])[0].get("schema_version", -1)) == NpcRecordScript.MIN_SUPPORTED_SCHEMA_VERSION, "legacy fixture covers NPC schema one direct-read compatibility")
+		var legacy_probe = GameSessionScript.new(302, 302)
+		_check(legacy_probe.restore_envelope(legacy_envelope), "tracked supported legacy fixture restores through the real migration path")
+		if legacy_probe.state != null:
+			var migrated_vertical: Dictionary = legacy_probe.state.metadata.get("vertical_slice", {})
+			_check(int(migrated_vertical.get("schema_version", -1)) == SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION, "legacy fixture migrates to vertical schema eight")
+			_check(int(migrated_vertical.get("terrain", {}).get("layout_version", -1)) == SaveSchemaAuthorityScript.CURRENT_TERRAIN_LAYOUT_VERSION, "legacy fixture migrates to terrain layout three")
+			_check(_canonical_fixture_json(migrated_vertical.get("terrain", {}).get("tiles", [])) == legacy_tiles_json, "tracked migration preserves every terrain record")
+			var legacy_population = PopulationSystemScript.from_dict(migrated_vertical.get("population", {}))
+			_check(legacy_population != null and legacy_population.records.size() == 1, "population schema one fixture remains directly readable")
+			var legacy_record = NpcRecordScript.from_dict(migrated_vertical.get("population", {}).get("records", [])[0])
+			_check(legacy_record != null and legacy_record.salary == null and legacy_record.debt == null, "NPC schema one fixture uses compatibility defaults without a fabricated migration")
+
+	var live_session = GameSessionScript.new(303, 303)
+	live_session.advance_days_for_test(2)
+	var live_hash := live_session.deterministic_hash()
+	var future_data := _read_fixture_dictionary(FUTURE_REJECT_FIXTURE_PATH)
+	_check(not future_data.is_empty(), "tracked future fixture is readable")
+	var future_envelope = SaveEnvelopeScript.from_dict(future_data) if not future_data.is_empty() else null
+	_check(future_envelope != null, "tracked future fixture reaches semantic validation")
+	_check(not live_session.restore_envelope(future_envelope), "tracked future fixture is explicitly rejected")
+	_check(live_session.deterministic_hash() == live_hash, "future rejection does not overwrite the live session")
+
+	var unsupported_data := current_data.duplicate(true)
+	var unsupported_state: Dictionary = unsupported_data.get("state", {}).duplicate(true)
+	var unsupported_metadata: Dictionary = unsupported_state.get("metadata", {}).duplicate(true)
+	var unsupported_vertical: Dictionary = unsupported_metadata.get("vertical_slice", {}).duplicate(true)
+	var unsupported_population: Dictionary = unsupported_vertical.get("population", {}).duplicate(true)
+	var unsupported_records: Array = unsupported_population.get("records", []).duplicate(true)
+	var unsupported_record: Dictionary = Dictionary(unsupported_records[0]).duplicate(true)
+	unsupported_record["schema_version"] = NpcRecordScript.MIN_SUPPORTED_SCHEMA_VERSION - 1
+	unsupported_records[0] = unsupported_record
+	unsupported_population["records"] = unsupported_records
+	unsupported_vertical["population"] = unsupported_population
+	unsupported_metadata["vertical_slice"] = unsupported_vertical
+	unsupported_state["metadata"] = unsupported_metadata
+	unsupported_data["state"] = unsupported_state
+	var unsupported_envelope = SaveEnvelopeScript.from_dict(unsupported_data)
+	_check(unsupported_envelope != null, "unsupported NPC fixture reaches semantic validation")
+	_check(not live_session.restore_envelope(unsupported_envelope), "unsupported NPC schema is explicitly rejected")
+	_check(live_session.deterministic_hash() == live_hash, "unsupported rejection does not overwrite the live session")
+
+	var corrupt_data := _read_fixture_dictionary(CORRUPT_MINIMAL_FIXTURE_PATH)
+	_check(not corrupt_data.is_empty(), "tracked corrupt-minimal fixture is readable JSON")
+	var corrupt_envelope = SaveEnvelopeScript.from_dict(corrupt_data) if not corrupt_data.is_empty() else null
+	_check(corrupt_envelope != null, "tracked corrupt-minimal fixture reaches semantic validation")
+	_check(not live_session.restore_envelope(corrupt_envelope), "tracked corrupt-minimal fixture is rejected")
+	_check(live_session.deterministic_hash() == live_hash, "corrupt rejection does not overwrite the live session")
+
+	var future_npc_data: Dictionary = unsupported_record.duplicate(true)
+	future_npc_data["schema_version"] = NpcRecordScript.MAX_SUPPORTED_SCHEMA_VERSION + 1
+	_check(NpcRecordScript.from_dict(future_npc_data) == null, "MayorNpcRecord rejects a future schema at its own boundary")
+	var future_population_data: Dictionary = unsupported_population.duplicate(true)
+	future_population_data["schema_version"] = PopulationSystemScript.MAX_SUPPORTED_SCHEMA_VERSION + 1
+	_check(PopulationSystemScript.from_dict(future_population_data) == null, "PopulationSystem rejects a future schema at its own boundary")
+
+
+func _assert_fixture_versions(envelope, current: bool, label: String) -> void:
+	var expected_vertical := SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION if current else SaveSchemaAuthorityScript.LEGACY_MIGRATION_VERTICAL_SCHEMA_VERSION
+	var expected_terrain := SaveSchemaAuthorityScript.CURRENT_TERRAIN_LAYOUT_VERSION if current else SaveSchemaAuthorityScript.LEGACY_MIGRATION_TERRAIN_LAYOUT_VERSION
+	var vertical: Dictionary = envelope.state.get("metadata", {}).get("vertical_slice", {})
+	var records: Array = vertical.get("population", {}).get("records", [])
+	_check(envelope.schema_version == SaveSchemaAuthorityScript.SAVE_ENVELOPE_CURRENT_SCHEMA_VERSION, "%s has SaveEnvelope schema one" % label)
+	_check(int(envelope.state.get("schema_version", -1)) == SaveSchemaAuthorityScript.CITY_STATE_CURRENT_SCHEMA_VERSION, "%s has CityState schema one" % label)
+	_check(int(vertical.get("schema_version", -1)) == expected_vertical, "%s has the expected vertical schema" % label)
+	_check(int(vertical.get("terrain", {}).get("layout_version", -1)) == expected_terrain, "%s has the expected terrain layout" % label)
+	_check(int(vertical.get("population", {}).get("schema_version", -1)) in [1, 2], "%s has a supported population schema" % label)
+	_check(not records.is_empty() and int(records[0].get("schema_version", -1)) in [1, 2], "%s has a supported NPC record schema" % label)
+
+
+func _read_fixture_dictionary(path: String) -> Dictionary:
+	var parsed: Variant = JSON.parse_string(_read_text(path))
+	return (parsed as Dictionary).duplicate(true) if parsed is Dictionary else {}
+
+
+func _canonical_fixture_json(value: Variant) -> String:
+	return JSON.stringify(_canonical_fixture_value(value))
+
+
+func _canonical_fixture_value(value: Variant) -> Variant:
+	if value is Dictionary:
+		var source: Dictionary = value
+		var keys: Array = source.keys()
+		keys.sort_custom(func(a: Variant, b: Variant) -> bool: return str(a) < str(b))
+		var result := {}
+		for key: Variant in keys:
+			result[str(key)] = _canonical_fixture_value(source[key])
+		return result
+	if value is Array:
+		var result: Array = []
+		for item: Variant in value:
+			result.append(_canonical_fixture_value(item))
+		return result
+	if value is PackedStringArray:
+		return Array(value)
+	if value is int:
+		return float(value)
+	return value
 
 
 func _test_current_schema_non_transport_corruption_uses_backup() -> void:

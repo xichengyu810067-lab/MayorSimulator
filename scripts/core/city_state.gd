@@ -1,9 +1,11 @@
 extends RefCounted
 
 const LedgerScript = preload("res://scripts/core/ledger.gd")
+const SaveSchemaAuthorityScript = preload("res://scripts/core/save_schema_authority.gd")
 
-const SNAPSHOT_SCHEMA_VERSION := 1
-const MIN_SUPPORTED_SNAPSHOT_SCHEMA_VERSION := 1
+const SNAPSHOT_SCHEMA_VERSION := SaveSchemaAuthorityScript.CITY_STATE_CURRENT_SCHEMA_VERSION
+const MIN_SUPPORTED_SNAPSHOT_SCHEMA_VERSION := SaveSchemaAuthorityScript.CITY_STATE_MIN_SUPPORTED_SCHEMA_VERSION
+const MAX_SUPPORTED_SNAPSHOT_SCHEMA_VERSION := SaveSchemaAuthorityScript.CITY_STATE_MAX_SUPPORTED_SCHEMA_VERSION
 const DAYS_PER_MONTH := 30
 const MONTHS_PER_YEAR := 12
 
@@ -240,7 +242,7 @@ static func migrate_dict(data: Dictionary) -> Dictionary:
 	if not _is_integer_value(data.get("schema_version", -1)):
 		return {}
 	var source_version := int(data.get("schema_version", -1))
-	if source_version < MIN_SUPPORTED_SNAPSHOT_SCHEMA_VERSION or source_version > SNAPSHOT_SCHEMA_VERSION:
+	if source_version < MIN_SUPPORTED_SNAPSHOT_SCHEMA_VERSION or source_version > MAX_SUPPORTED_SNAPSHOT_SCHEMA_VERSION:
 		return {}
 	# Version 1 remains readable as-is. Future migrations must be added here
 	# explicitly instead of being synthesized by permissive default values.

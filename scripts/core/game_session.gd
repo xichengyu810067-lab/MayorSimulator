@@ -18,8 +18,10 @@ signal state_changed(view_model: Dictionary)
 const CONTENT_VERSION := "vertical_slice_1"
 const DEFAULT_SAVE_PATH := "user://mayor_simulator/autosave.json"
 const MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA := SaveSchemaAuthorityScript.MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA
-const MAX_SUPPORTED_POPULATION_SCHEMA := 2
-const MAX_SUPPORTED_NPC_RECORD_SCHEMA := 2
+const MIN_SUPPORTED_POPULATION_SCHEMA := SaveSchemaAuthorityScript.POPULATION_MIN_SUPPORTED_SCHEMA_VERSION
+const MAX_SUPPORTED_POPULATION_SCHEMA := SaveSchemaAuthorityScript.POPULATION_MAX_SUPPORTED_SCHEMA_VERSION
+const MIN_SUPPORTED_NPC_RECORD_SCHEMA := SaveSchemaAuthorityScript.NPC_RECORD_MIN_SUPPORTED_SCHEMA_VERSION
+const MAX_SUPPORTED_NPC_RECORD_SCHEMA := SaveSchemaAuthorityScript.NPC_RECORD_MAX_SUPPORTED_SCHEMA_VERSION
 const TERMINAL_FAILURE_REASONS := [
 	"",
 	"imprisonment_judgment",
@@ -402,7 +404,7 @@ func _validate_vertical_slice_metadata(restored_state, runtime: Dictionary) -> b
 		return false
 	var population: Dictionary = population_value
 	var population_schema: Variant = population.get("schema_version", 1)
-	if not _is_integer_value(population_schema) or int(population_schema) < 1 or int(population_schema) > MAX_SUPPORTED_POPULATION_SCHEMA:
+	if not _is_integer_value(population_schema) or int(population_schema) < MIN_SUPPORTED_POPULATION_SCHEMA or int(population_schema) > MAX_SUPPORTED_POPULATION_SCHEMA:
 		return false
 	var population_schema_version := int(population_schema)
 	var records_value: Variant = population.get("records", null)
@@ -414,7 +416,7 @@ func _validate_vertical_slice_metadata(restored_state, runtime: Dictionary) -> b
 			return false
 		var record: Dictionary = record_value
 		var record_schema: Variant = record.get("schema_version", 1)
-		if not _is_integer_value(record_schema) or int(record_schema) < 1 or int(record_schema) > MAX_SUPPORTED_NPC_RECORD_SCHEMA:
+		if not _is_integer_value(record_schema) or int(record_schema) < MIN_SUPPORTED_NPC_RECORD_SCHEMA or int(record_schema) > MAX_SUPPORTED_NPC_RECORD_SCHEMA:
 			return false
 		for nonnegative_field: String in ["income", "salary", "debt"]:
 			if not record.has(nonnegative_field) or record[nonnegative_field] == null:

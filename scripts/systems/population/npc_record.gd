@@ -4,7 +4,11 @@ extends RefCounted
 ## Persistent, JSON-safe data for one simulated resident.
 ## Relationships are sparse: only residents with an actual connection are stored.
 
-const SCHEMA_VERSION := 2
+const SaveSchemaAuthorityScript = preload("res://scripts/core/save_schema_authority.gd")
+
+const SCHEMA_VERSION := SaveSchemaAuthorityScript.NPC_RECORD_CURRENT_SCHEMA_VERSION
+const MIN_SUPPORTED_SCHEMA_VERSION := SaveSchemaAuthorityScript.NPC_RECORD_MIN_SUPPORTED_SCHEMA_VERSION
+const MAX_SUPPORTED_SCHEMA_VERSION := SaveSchemaAuthorityScript.NPC_RECORD_MAX_SUPPORTED_SCHEMA_VERSION
 
 var npc_id: String = ""
 var display_name: String = ""
@@ -70,6 +74,12 @@ func to_dict() -> Dictionary:
 
 
 static func from_dict(data: Dictionary):
+	var schema_value: Variant = data.get("schema_version", MIN_SUPPORTED_SCHEMA_VERSION)
+	if not _is_integer_value(schema_value):
+		return null
+	var schema_version := int(schema_value)
+	if schema_version < MIN_SUPPORTED_SCHEMA_VERSION or schema_version > MAX_SUPPORTED_SCHEMA_VERSION:
+		return null
 	var record = new()
 	record.npc_id = str(data.get("npc_id", ""))
 	record.display_name = str(data.get("display_name", ""))
@@ -123,3 +133,7 @@ static func _sorted_dictionary(source: Dictionary) -> Dictionary:
 	for key: Variant in keys:
 		result[str(key)] = source[key]
 	return result
+
+
+static func _is_integer_value(value: Variant) -> bool:
+	return value is int or (value is float and is_finite(float(value)) and float(value) == roundf(float(value)))

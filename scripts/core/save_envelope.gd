@@ -1,7 +1,10 @@
 extends RefCounted
 
-const CURRENT_SCHEMA_VERSION := 1
-const MIN_SUPPORTED_SCHEMA_VERSION := 1
+const SaveSchemaAuthorityScript = preload("res://scripts/core/save_schema_authority.gd")
+
+const CURRENT_SCHEMA_VERSION := SaveSchemaAuthorityScript.SAVE_ENVELOPE_CURRENT_SCHEMA_VERSION
+const MIN_SUPPORTED_SCHEMA_VERSION := SaveSchemaAuthorityScript.SAVE_ENVELOPE_MIN_SUPPORTED_SCHEMA_VERSION
+const MAX_SUPPORTED_SCHEMA_VERSION := SaveSchemaAuthorityScript.SAVE_ENVELOPE_MAX_SUPPORTED_SCHEMA_VERSION
 
 var schema_version: int = CURRENT_SCHEMA_VERSION
 var content_version: String = "vertical_slice_1"
@@ -63,7 +66,7 @@ static func migrate_dict(data: Dictionary) -> Dictionary:
 	if not _is_integer_value(data.get("schema_version", -1)):
 		return {}
 	var source_version := int(data.get("schema_version", -1))
-	if source_version < MIN_SUPPORTED_SCHEMA_VERSION or source_version > CURRENT_SCHEMA_VERSION:
+	if source_version < MIN_SUPPORTED_SCHEMA_VERSION or source_version > MAX_SUPPORTED_SCHEMA_VERSION:
 		return {}
 	# Version 1 is currently the only persisted envelope shape. Keeping migration
 	# behind this explicit boundary prevents a future schema from being accepted

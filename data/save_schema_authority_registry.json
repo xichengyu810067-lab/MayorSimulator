@@ -1,67 +1,129 @@
 {
   "registry_schema_version": 1,
-  "authority_owner": "C3_schema8_layout3_writer",
+  "authority_owner": "scripts/core/save_schema_authority.gd",
   "current_writer": {
+    "id": "game_session_save_boundary",
+    "writer_allowed": true,
+    "save_envelope_schema_version": 1,
+    "city_state_schema_version": 1,
     "vertical_slice_schema_version": 8,
-    "terrain_layout_version": 3
+    "terrain_layout_version": 3,
+    "population_schema_version": 2,
+    "npc_record_schema_version": 2
   },
   "version_ceiling": {
+    "save_envelope_schema_version": 1,
+    "city_state_schema_version": 1,
     "vertical_slice_schema_version": 8,
-    "terrain_layout_version": 3
+    "terrain_layout_version": 3,
+    "population_schema_version": 2,
+    "npc_record_schema_version": 2
   },
   "supported_version_matrix": [
     {
-      "vertical_slice_schema_range": "0-6",
+      "component": "save_envelope",
+      "current_version": 1,
+      "max_supported_version": 1,
+      "supported_read_versions": [1],
+      "compatibility": "exact"
+    },
+    {
+      "component": "city_state",
+      "current_version": 1,
+      "max_supported_version": 1,
+      "supported_read_versions": [1],
+      "compatibility": "exact"
+    },
+    {
+      "component": "vertical_slice",
+      "current_version": 8,
+      "max_supported_version": 8,
+      "supported_read_versions": [0, 1, 2, 3, 4, 5, 6, 7, 8],
+      "compatibility": "direct_read_0_to_6_migration_pair_7_current_8"
+    },
+    {
+      "component": "terrain_layout",
+      "current_version": 3,
+      "max_supported_version": 3,
+      "supported_read_versions": [2, 3],
+      "compatibility": "migration_pair_2_current_3"
+    },
+    {
+      "component": "population",
+      "current_version": 2,
+      "max_supported_version": 2,
+      "supported_read_versions": [1, 2],
+      "compatibility": "direct_read_1_to_2"
+    },
+    {
+      "component": "npc_record",
+      "current_version": 2,
+      "max_supported_version": 2,
+      "supported_read_versions": [1, 2],
+      "compatibility": "direct_read_1_to_2"
+    }
+  ],
+  "paired_support_matrix": [
+    {
+      "vertical_slice_schema_versions": [0, 1, 2, 3, 4, 5, 6],
       "terrain_layout_version": null,
-      "status": "legacy_migration_input",
+      "status": "direct_read_compatibility",
       "writer_allowed": false
     },
     {
-      "vertical_slice_schema_version": 7,
+      "vertical_slice_schema_versions": [7],
       "terrain_layout_version": 2,
-      "status": "legacy_migration_input",
+      "status": "migration_input",
       "writer_allowed": false
     },
     {
-      "vertical_slice_schema_version": 8,
+      "vertical_slice_schema_versions": [8],
       "terrain_layout_version": 3,
       "status": "current",
       "writer_allowed": true
     }
   ],
-  "rejected_combinations": [
-    {
-      "vertical_slice_schema_version": 8,
-      "terrain_layout_version": 2,
-      "reason": "backdrop layout requires atomic C3 activation"
-    },
-    {
-      "vertical_slice_schema_version": 7,
-      "terrain_layout_version": 3,
-      "reason": "terrain layout 3 requires vertical schema 8"
-    }
-  ],
-  "future_version_policy": "explicit_reject_no_overwrite",
   "fixture_registry": [
     {
-      "id": "save_recovery_generated_pair",
-      "test": "res://tests/unit/core/save_recovery_self_test.gd",
-      "covers": ["current_8_layout_3", "legacy_7_layout_2_migration", "mismatched_pair_rejection", "future_version_rejection", "backup_recovery"]
+      "id": "current_round_trip",
+      "path": "res://tests/fixtures/save_schema/current_round_trip.json",
+      "behavior": "current_round_trip_no_loss"
+    },
+    {
+      "id": "supported_legacy_migration",
+      "path": "res://tests/fixtures/save_schema/supported_legacy_migration.json",
+      "behavior": "supported_legacy_migration"
+    },
+    {
+      "id": "future_reject",
+      "path": "res://tests/fixtures/save_schema/future_reject.json",
+      "behavior": "explicit_reject_no_overwrite"
+    },
+    {
+      "id": "corrupt_minimal",
+      "path": "res://tests/fixtures/save_schema/corrupt_minimal.json",
+      "behavior": "explicit_reject_no_overwrite"
     }
   ],
   "migration_registry": [
     {
-      "id": "legacy_vertical_0_to_6",
-      "target": "vertical_8_layout_3",
-      "activation": "existing coordinator restore then current writer",
-      "status": "supported"
-    },
-    {
       "id": "vertical_7_layout_2_to_8_layout_3",
-      "source": "vertical_7_layout_2",
-      "target": "vertical_8_layout_3",
-      "activation": "C3 atomic in-memory migration before semantic restore",
+      "source": {
+        "vertical_slice_schema_version": 7,
+        "terrain_layout_version": 2
+      },
+      "target": {
+        "vertical_slice_schema_version": 8,
+        "terrain_layout_version": 3
+      },
+      "implementation": [
+        "scripts/core/game_session.gd:_migrate_state_snapshot_to_current_pair",
+        "scripts/world/city_terrain_map.gd:migrate_snapshot_to_current"
+      ],
+      "test": "res://tests/unit/core/save_recovery_self_test.gd",
+      "fixture": "res://tests/fixtures/save_schema/supported_legacy_migration.json",
       "status": "active"
     }
-  ]
+  ],
+  "future_version_policy": "explicit_reject_no_overwrite"
 }
