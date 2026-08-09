@@ -1,4 +1,4 @@
-# Known Issues — 0.1.0-alpha.1 RC
+# Known Issues — 0.1.0-alpha.1 RC（Internal Alpha: Conditional GO）
 
 | 優先級 | 狀態 | 項目與處置 |
 | --- | --- | --- |
@@ -11,4 +11,4 @@
 
 首次失敗證據：`.tmp/alpha-release-20260810/release-acceptance/logs/commands/windows_smoke.stderr.log`。
 
-通過證據：`.tmp/alpha-release-20260810/release-acceptance-retry/release-evidence.json`。
+權威通過證據（exact `dac20a6`）：`.tmp/alpha-release-20260810/dac20a6-release-acceptance/release-evidence.json`。先前 retry 為歷史 evidence，不取代此來源。

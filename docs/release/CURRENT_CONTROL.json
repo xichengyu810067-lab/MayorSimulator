@@ -26,7 +26,8 @@
   "authority": {
     "project_root": "C:\\Users\\USER\\遊戲\\MayorSimulator-Rebuild-20260805\\30_core",
     "branch": "main",
-    "base_commit": "4818b9e2bf23a97b33b98432858f7228bee14334",
+    "base_commit": "dac20a65365b62a1ba370d7be8317536f67be755",
+    "release_source_commit": "dac20a65365b62a1ba370d7be8317536f67be755",
     "sdk_gitlink_commit": "956f0414b6cd42dc8b7a648e3ce942d7e061430a",
     "dirty_worktree_is_authoritative_wip": false
   },
@@ -50,7 +51,7 @@
   "acceptance_at_capture": {
     "runtime_assertion_matrix": {
       "status": "PASS",
-      "evidence": ".tmp/alpha-release-20260810/release-acceptance-retry/qa/assertion-matrix/summary.json",
+      "evidence": ".tmp/alpha-release-20260810/dac20a6-release-acceptance/qa/assertion-matrix/summary.json",
       "baseline_evidence": ".tmp/alpha-release-20260810/assertion-matrix/summary.json",
       "selected": 67,
       "passed": 67,
@@ -60,7 +61,7 @@
     },
     "os_kill_save_qa": {
       "status": "PASS",
-      "evidence": ".tmp/alpha-release-20260810/release-acceptance-retry/qa/save-os-kill/summary.json",
+      "evidence": ".tmp/alpha-release-20260810/dac20a6-release-acceptance/qa/save-os-kill/summary.json",
       "baseline_evidence": ".tmp/alpha-release-20260810/save-qa/summary.json",
       "phases_passed": 5,
       "semantic_checks": 173,
@@ -102,9 +103,9 @@
       "status": "PASS",
       "evidence": "檢驗結果.md",
       "ui_evidence": ".tmp/alpha-release-20260810/ui-qa/summary.json",
-      "assertion_evidence": ".tmp/alpha-release-20260810/release-acceptance-retry/qa/assertion-matrix/summary.json",
-      "save_evidence": ".tmp/alpha-release-20260810/release-acceptance-retry/qa/save-os-kill/summary.json",
-      "process_evidence": ".tmp/alpha-release-20260810/release-acceptance-retry/release-evidence.json",
+      "assertion_evidence": ".tmp/alpha-release-20260810/dac20a6-release-acceptance/qa/assertion-matrix/summary.json",
+      "save_evidence": ".tmp/alpha-release-20260810/dac20a6-release-acceptance/qa/save-os-kill/summary.json",
+      "process_evidence": ".tmp/alpha-release-20260810/dac20a6-release-acceptance/release-evidence.json",
       "godot_processes_remaining": 0
     },
     "public_release": {
@@ -123,10 +124,10 @@
     "current_requirement": "Wrong-resolution, empty, mirrored, or offscreen-only native windows are failures and must be repaired before completion."
   },
   "required_evidence_relative_paths": [
-    ".tmp/alpha-release-20260810/release-acceptance-retry/qa/assertion-matrix/summary.json",
-    ".tmp/alpha-release-20260810/release-acceptance-retry/qa/save-os-kill/summary.json",
+    ".tmp/alpha-release-20260810/dac20a6-release-acceptance/qa/assertion-matrix/summary.json",
+    ".tmp/alpha-release-20260810/dac20a6-release-acceptance/qa/save-os-kill/summary.json",
     ".tmp/alpha-release-20260810/ui-qa/summary.json",
-    ".tmp/alpha-release-20260810/release-acceptance-retry/release-evidence.json",
+    ".tmp/alpha-release-20260810/dac20a6-release-acceptance/release-evidence.json",
     "檢驗結果.md"
   ]
 }

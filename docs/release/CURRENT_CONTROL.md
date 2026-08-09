@@ -9,7 +9,7 @@
 - 後續通道：Alpha → Beta → Pre-release → Release
 - 權威工作區：`C:\Users\USER\遊戲\MayorSimulator-Rebuild-20260805\30_core`
 - Release candidate branch：`main`
-- Base commit：`4818b9e2bf23a97b33b98432858f7228bee14334`
+- Release source commit：`dac20a65365b62a1ba370d7be8317536f67be755`（乾淨工作樹的 exact RC source）
 - SDK gitlink：`956f0414b6cd42dc8b7a648e3ce942d7e061430a`（SDK 1.2.0 SemVer release contract）
 - 產品版本唯一權威來源：根目錄 `VERSION`；目前為 `0.1.0-alpha.1`。
 - Tag 契約：`v<SEMVER>`；本次目標為 `v0.1.0-alpha.1`。
@@ -23,10 +23,10 @@
 - OS-kill save QA 5/5，173 個 semantic checks、5 次強制終止，全部程序停止。
 - canonical UI 驗收通過：native root 4/4、offscreen evidence 33/33、產品 diagnostics 0、來源指紋執行前後一致。
 - Native 是真正 Windows root viewport：視窗／capture `2880×1800`、logical `1280×800`、root backing `6480×4050`、DPI 192。
-- release acceptance 已完成 Godot 匯入、Windows/Linux export、Windows smoke、封裝及 source fingerprint 一致；權威 evidence 為 `.tmp/alpha-release-20260810/release-acceptance-retry/release-evidence.json`。
+- release acceptance 已完成 Godot 匯入、Windows/Linux export、Windows smoke、封裝及 source fingerprint 一致；權威 evidence 為 `.tmp/alpha-release-20260810/dac20a6-release-acceptance/release-evidence.json`，其 source 為上述 exact commit。
 
 公開 release 仍被 LICENSE/COPYING、88 項分發權利、city-map background source rights 與 train-station provenance 阻擋；這些是公開散布治理阻擋，不是已知 runtime 缺陷。根目錄 canonical `RELEASE_README.txt` 已存在，Windows／Linux CI staging 會將它連同第三方聲明納入封裝。
 
 本次沒有建立 GitHub Pre-release、tag、push 或公開上傳。若日後另獲授權，遠端 CI、Linux 實機 smoke 與私有 Pre-release 資產仍須各自取得新鮮證據；本機 RC 不替代這些閘門。
 
-2026-08-03 的 66/66、舊 task 與其完成聲明為歷史快照，不得覆蓋本次 current evidence。
+2026-08-03 的 66/66、先前兩輪 release acceptance 與舊 task 完成聲明均為歷史快照，不得覆蓋本次 current evidence。

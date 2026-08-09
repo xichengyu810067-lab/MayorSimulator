@@ -3,7 +3,7 @@
 ## 安裝與完整性
 
 1. 僅從授權內部管道取得 Windows ZIP。
-2. 比對 ZIP SHA-256：`ac39d9d82fdc297f8083e7dbfb90e6ecccf4b113e7e1e1bfc0d1ec2abb1cb139`。
+2. 比對 ZIP SHA-256：`1f47e0b523363557d960d4500679c12799300b93c8659a11041d1f5b16851413`。
 3. 解壓縮完整 ZIP，保留 `MayorSimulator.exe`、`MayorSimulator.pck` 與三份隨附文件於同一資料夾。
 4. 執行 `MayorSimulator.exe`；此為未簽章內部測試檔，請勿對外轉傳。
 
@@ -18,7 +18,7 @@
 
 ## 回報格式
 
-回報請附上：Windows 版本、螢幕解析度與 DPI、語言、重現步驟、預期／實際結果、截圖或 log。不要附上私人存檔內容。
+回報請附上：Windows 版本、螢幕解析度與 DPI、語言、重現步驟、預期／實際結果、截圖或 log。請特別標記五語人工 GUI 截圖缺口與任何結束時 leak；不要附上私人存檔內容。
 
 ## 存檔安全
 
