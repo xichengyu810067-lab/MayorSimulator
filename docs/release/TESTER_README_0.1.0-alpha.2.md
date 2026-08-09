@@ -1,4 +1,4 @@
-# Internal Tester README — 0.1.0-alpha.2
+# 《城諾之音》 / CivicTale: Voice of Promise — Internal Tester README 0.1.0-alpha.2
 
 ## Scope
 

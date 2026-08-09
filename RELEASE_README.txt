@@ -1,4 +1,4 @@
-Mayor Simulator MVP Alpha 0.1.0-alpha.2 - INTERNAL-ONLY 測試包說明
+《城諾之音》 / CivicTale: Voice of Promise Alpha 0.1.0-alpha.2 - INTERNAL-ONLY 測試包說明
 
 此 Windows x64 包僅限經授權的內部測試；不得轉傳、公開上傳、販售或宣稱為公開版本。
 公開散布為 NO-GO：專案權利授權、city-map background 的散布權利、train-station 的來源與散布權利均未閉環。

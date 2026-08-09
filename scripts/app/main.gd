@@ -990,7 +990,7 @@ func _build_compact_status_hud() -> PanelContainer:
 	row.add_theme_constant_override("separation", 5)
 	panel.add_child(row)
 
-	var title := _label("Mayor Simulator", 20, Color("fff4d7") if is_dark_mode else Color("35291f"))
+	var title := _label("CivicTale: Voice of Promise", 20, Color("fff4d7") if is_dark_mode else Color("35291f"))
 	title.custom_minimum_size = Vector2(164, 0)
 	title.tooltip_text = L10n.text("療癒城市治理模擬")
 	row.add_child(title)
@@ -1114,7 +1114,7 @@ func _build_action_dock() -> PanelContainer:
 	settings_button.name = "SettingsButton"
 	settings_button.pressed.connect(Callable(self, "_open_settings"))
 	grid.add_child(settings_button)
-	exit_button = _hud_picture_button("exit", "離開", "離開 Mayor Simulator", "danger")
+	exit_button = _hud_picture_button("exit", "離開", "離開 CivicTale: Voice of Promise", "danger")
 	exit_button.name = "ExitButton"
 	exit_button.pressed.connect(Callable(self, "_request_application_quit"))
 	grid.add_child(exit_button)

@@ -1,4 +1,4 @@
-# Known Issues — 0.1.0-alpha.2 (INTERNAL-ONLY)
+# 《城諾之音》 / CivicTale: Voice of Promise — Known Issues 0.1.0-alpha.2 (INTERNAL-ONLY)
 
 Internal Alpha is **CONDITIONAL GO** only after this exact RC’s Windows
 acceptance passes. Public release is **NO-GO** while the three P0 items in

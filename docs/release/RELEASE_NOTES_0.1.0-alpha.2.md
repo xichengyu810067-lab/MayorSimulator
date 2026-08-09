@@ -1,4 +1,4 @@
-# Mayor Simulator MVP Alpha 0.1.0-alpha.2 — INTERNAL-ONLY RC
+# 《城諾之音》 / CivicTale: Voice of Promise — 0.1.0-alpha.2 INTERNAL-ONLY RC
 
 ## Delivery boundary
 

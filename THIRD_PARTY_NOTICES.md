@@ -7,7 +7,7 @@ decision remains with the project owner.
 
 ## Godot Engine 4.7
 
-Mayor Simulator MVP is built with and distributed using Godot Engine 4.7.
+《城諾之音》 / CivicTale: Voice of Promise is built with and distributed using Godot Engine 4.7.
 Godot Engine is licensed under the MIT/Expat license. The official license and
 the exhaustive notices for components incorporated into the engine are:
 

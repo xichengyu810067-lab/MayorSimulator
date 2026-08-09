@@ -1,4 +1,4 @@
-# Mayor Simulator Current Release Control
+# 《城諾之音》 / CivicTale: Voice of Promise Current Release Control
 
 - Control task: `019fc87e-d138-7010-a95c-29ca1fb678bf`.
 - Product authority: `30_core` branch `main`.
