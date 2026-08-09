@@ -74,11 +74,7 @@ func to_dict() -> Dictionary:
 
 
 static func from_dict(data: Dictionary):
-	var schema_value: Variant = data.get("schema_version", MIN_SUPPORTED_SCHEMA_VERSION)
-	if not _is_integer_value(schema_value):
-		return null
-	var schema_version := int(schema_value)
-	if schema_version < MIN_SUPPORTED_SCHEMA_VERSION or schema_version > MAX_SUPPORTED_SCHEMA_VERSION:
+	if not validate_dict(data):
 		return null
 	var record = new()
 	record.npc_id = str(data.get("npc_id", ""))
@@ -113,6 +109,68 @@ static func from_dict(data: Dictionary):
 	return record
 
 
+static func validate_dict(data: Dictionary) -> bool:
+	var schema_value: Variant = data.get("schema_version", null)
+	if not _is_integer_value(schema_value):
+		return false
+	var schema_version := int(schema_value)
+	if schema_version < MIN_SUPPORTED_SCHEMA_VERSION or schema_version > MAX_SUPPORTED_SCHEMA_VERSION:
+		return false
+	var expected_keys := [
+		"schema_version", "npc_id", "display_name", "age", "gender",
+		"personality", "preferences", "education", "income", "address_id",
+		"job_id", "employment_state", "policy_attitudes", "relationships",
+	]
+	if schema_version >= 2:
+		expected_keys.append_array(["personality_tags", "appearance_tags", "salary", "debt"])
+	if not _has_exact_keys(data, expected_keys):
+		return false
+	for string_field: String in [
+		"npc_id", "display_name", "gender", "personality", "education",
+		"address_id", "job_id", "employment_state",
+	]:
+		if not data[string_field] is String:
+			return false
+	if str(data["npc_id"]).is_empty() or str(data["display_name"]).is_empty():
+		return false
+	if not _is_integer_value(data["age"]) or int(data["age"]) < 0:
+		return false
+	if not _is_integer_value(data["income"]) or int(data["income"]) < 0:
+		return false
+	if not _is_string_array(data["preferences"]):
+		return false
+	if schema_version >= 2:
+		if not _is_string_array(data["personality_tags"]) or not _is_string_array(data["appearance_tags"]):
+			return false
+		for nullable_money_field: String in ["salary", "debt"]:
+			var money_value: Variant = data[nullable_money_field]
+			if money_value != null and (not _is_integer_value(money_value) or int(money_value) < 0):
+				return false
+	var attitudes_value: Variant = data["policy_attitudes"]
+	if not attitudes_value is Dictionary:
+		return false
+	for policy_id: Variant in (attitudes_value as Dictionary).keys():
+		var attitude: Variant = (attitudes_value as Dictionary)[policy_id]
+		if str(policy_id).is_empty() or not _is_integer_value(attitude) or int(attitude) < -100 or int(attitude) > 100:
+			return false
+	var relationships_value: Variant = data["relationships"]
+	if not relationships_value is Dictionary:
+		return false
+	for other_id_value: Variant in (relationships_value as Dictionary).keys():
+		var other_id := str(other_id_value)
+		var relationship_value: Variant = (relationships_value as Dictionary)[other_id_value]
+		if other_id.is_empty() or other_id == str(data["npc_id"]) or not relationship_value is Dictionary:
+			return false
+		var relationship: Dictionary = relationship_value
+		if not _has_exact_keys(relationship, ["type", "affinity"]):
+			return false
+		if not relationship["type"] is String or str(relationship["type"]).is_empty():
+			return false
+		if not _is_integer_value(relationship["affinity"]) or int(relationship["affinity"]) < -100 or int(relationship["affinity"]) > 100:
+			return false
+	return true
+
+
 func _sorted_relationships() -> Dictionary:
 	var result := {}
 	var keys: Array = relationships.keys()
@@ -137,3 +195,21 @@ static func _sorted_dictionary(source: Dictionary) -> Dictionary:
 
 static func _is_integer_value(value: Variant) -> bool:
 	return value is int or (value is float and is_finite(float(value)) and float(value) == roundf(float(value)))
+
+
+static func _is_string_array(value: Variant) -> bool:
+	if not value is Array:
+		return false
+	for item: Variant in value:
+		if not item is String:
+			return false
+	return true
+
+
+static func _has_exact_keys(value: Dictionary, expected_keys: Array) -> bool:
+	if value.size() != expected_keys.size():
+		return false
+	for key: Variant in expected_keys:
+		if not value.has(key):
+			return false
+	return true

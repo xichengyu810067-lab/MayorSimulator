@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "content_version": "vertical_slice_1",
+  "rng_seed": "303",
+  "rng_state": "303",
+  "game_time": 0,
+  "event_sequence": 0,
+  "command_sequence": 0,
+  "state": {
+    "schema_version": 1,
+    "city_id": "unsupported_vertical_city",
+    "game_time": 0,
+    "last_event_sequence": 0,
+    "ledger": {
+      "balance": 1000,
+      "entries": [
+        {
+          "entry_id": "ledger_0000000000",
+          "event_sequence": 0,
+          "game_time": 0,
+          "amount": 1000,
+          "balance_after": 1000,
+          "reason_tag": "opening_balance",
+          "source_id": "city",
+          "metadata": {"category": "opening"}
+        }
+      ]
+    },
+    "metrics": {
+      "population": 1,
+      "satisfaction": 50.0,
+      "grievance": 0.0,
+      "municipal_trust": 75.0
+    },
+    "buildings": {},
+    "construction_jobs": {},
+    "npcs": {
+      "npc_000001": {
+        "schema_version": 2,
+        "npc_id": "npc_000001",
+        "display_name": "Unsupported Resident",
+        "age": 40,
+        "gender": "unspecified",
+        "personality": "steady",
+        "personality_tags": [],
+        "appearance_tags": [],
+        "preferences": ["parks"],
+        "education": "secondary",
+        "income": 30000,
+        "salary": null,
+        "debt": null,
+        "address_id": "home_unsupported",
+        "job_id": "",
+        "employment_state": "employed",
+        "policy_attitudes": {},
+        "relationships": {}
+      }
+    },
+    "scheduled_events": {},
+    "event_book": [],
+    "governance": {},
+    "maintenance": {},
+    "metadata": {
+      "vertical_slice": {
+        "schema_version": 3,
+        "population": {
+          "schema_version": 2,
+          "simulation_seed": 303,
+          "next_npc_sequence": 2,
+          "next_request_sequence": 1,
+          "next_transaction_sequence": 1,
+          "current_year": 1,
+          "records": [
+            {
+              "schema_version": 2,
+              "npc_id": "npc_000001",
+              "display_name": "Unsupported Resident",
+              "age": 40,
+              "gender": "unspecified",
+              "personality": "steady",
+              "personality_tags": [],
+              "appearance_tags": [],
+              "preferences": ["parks"],
+              "education": "secondary",
+              "income": 30000,
+              "salary": null,
+              "debt": null,
+              "address_id": "home_unsupported",
+              "job_id": "",
+              "employment_state": "employed",
+              "policy_attitudes": {},
+              "relationships": {}
+            }
+          ],
+          "requests": [],
+          "income_transactions": [],
+          "event_book": {
+            "schema_version": 1,
+            "next_sequence": 1,
+            "events": []
+          }
+        }
+      }
+    }
+  },
+  "kernel": {},
+  "clock": {}
+}

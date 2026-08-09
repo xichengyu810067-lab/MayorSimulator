@@ -182,7 +182,6 @@ func to_dict() -> Dictionary:
 		"metrics": metrics.duplicate(true),
 		"buildings": buildings.duplicate(true),
 		"construction_jobs": construction_jobs.duplicate(true),
-		"npcs": npcs.duplicate(true),
 		"scheduled_events": scheduled_events.duplicate(true),
 		"event_book": event_book.duplicate(true),
 		"governance": governance.duplicate(true),
@@ -195,7 +194,7 @@ static func from_dict(data: Dictionary):
 	var migrated := migrate_dict(data)
 	if migrated.is_empty():
 		return null
-	for dictionary_field: String in ["ledger", "metrics", "buildings", "construction_jobs", "npcs", "scheduled_events", "governance", "maintenance", "metadata"]:
+	for dictionary_field: String in ["ledger", "metrics", "buildings", "construction_jobs", "scheduled_events", "governance", "maintenance", "metadata"]:
 		if not migrated.get(dictionary_field, {}) is Dictionary:
 			return null
 	if not migrated.get("event_book", []) is Array:
@@ -214,10 +213,11 @@ static func from_dict(data: Dictionary):
 		state.metrics[metric_name] = state._deep_copy(loaded_metrics[metric_name])
 	state.buildings = (migrated.get("buildings", {}) as Dictionary).duplicate(true)
 	state.construction_jobs = (migrated.get("construction_jobs", {}) as Dictionary).duplicate(true)
-	state.npcs = (migrated.get("npcs", {}) as Dictionary).duplicate(true)
+	var hydration := _runtime_npcs_from_metadata(migrated)
+	if not bool(hydration.get("ok", false)):
+		return null
+	state.npcs = Dictionary(hydration.get("records", {})).duplicate(true)
 	if not loaded_metrics.has("population"):
-		# Schema-1 snapshots created before the population mirror was introduced
-		# remain loadable; their already-persisted NPC collection is authoritative.
 		state.metrics["population"] = state.npcs.size()
 	state.scheduled_events = (migrated.get("scheduled_events", {}) as Dictionary).duplicate(true)
 	state.event_book.clear()
@@ -244,9 +244,90 @@ static func migrate_dict(data: Dictionary) -> Dictionary:
 	var source_version := int(data.get("schema_version", -1))
 	if source_version < MIN_SUPPORTED_SNAPSHOT_SCHEMA_VERSION or source_version > MAX_SUPPORTED_SNAPSHOT_SCHEMA_VERSION:
 		return {}
-	# Version 1 remains readable as-is. Future migrations must be added here
-	# explicitly instead of being synthesized by permissive default values.
-	return data.duplicate(true)
+	var migrated := data.duplicate(true)
+	if source_version == 1:
+		if not _migrate_v1_npc_mirror(migrated):
+			return {}
+		migrated["schema_version"] = SNAPSHOT_SCHEMA_VERSION
+	elif migrated.has("npcs"):
+		# CityState v2 has one writer shape. Reintroducing the removed mirror is
+		# corruption, not a permissive compatibility extension.
+		return {}
+	return migrated
+
+
+## Rebuilds the runtime-only NPC lookup atomically from the persisted population
+## authority. This is a pure hydration boundary: it emits no domain event and
+## advances neither command_sequence nor event_sequence.
+func hydrate_runtime_npcs_from_population(population_snapshot: Dictionary) -> bool:
+	var hydration := _runtime_npcs_from_population_snapshot(population_snapshot)
+	if not bool(hydration.get("ok", false)):
+		return false
+	npcs = Dictionary(hydration.get("records", {})).duplicate(true)
+	return true
+
+
+static func _migrate_v1_npc_mirror(state_snapshot: Dictionary) -> bool:
+	var mirror_value: Variant = state_snapshot.get("npcs", {})
+	if not mirror_value is Dictionary:
+		return false
+	var mirror: Dictionary = mirror_value
+	var hydration := _runtime_npcs_from_metadata(state_snapshot)
+	if not bool(hydration.get("ok", false)):
+		return false
+	var has_canonical_population := bool(hydration.get("present", false))
+	var canonical: Dictionary = hydration.get("records", {})
+	if not has_canonical_population:
+		# A non-empty core-only collection has no authoritative population history.
+		# Reject it instead of fabricating a replacement population snapshot.
+		if not mirror.is_empty():
+			return false
+		state_snapshot.erase("npcs")
+		return true
+	if mirror.size() != canonical.size():
+		return false
+	for key: Variant in mirror.keys():
+		var npc_id := str(key)
+		var mirror_record: Variant = mirror[key]
+		if npc_id.is_empty() or not mirror_record is Dictionary or not canonical.has(npc_id):
+			return false
+		if _canonicalize(mirror_record) != _canonicalize(canonical[npc_id]):
+			return false
+	state_snapshot.erase("npcs")
+	return true
+
+
+static func _runtime_npcs_from_metadata(state_snapshot: Dictionary) -> Dictionary:
+	var metadata_value: Variant = state_snapshot.get("metadata", {})
+	if not metadata_value is Dictionary:
+		return {"ok": false, "present": false, "records": {}}
+	var vertical_value: Variant = (metadata_value as Dictionary).get("vertical_slice", null)
+	if vertical_value == null:
+		return {"ok": true, "present": false, "records": {}}
+	if not vertical_value is Dictionary:
+		return {"ok": false, "present": false, "records": {}}
+	var population_value: Variant = (vertical_value as Dictionary).get("population", null)
+	if population_value == null:
+		return {"ok": true, "present": false, "records": {}}
+	if not population_value is Dictionary:
+		return {"ok": false, "present": true, "records": {}}
+	return _runtime_npcs_from_population_snapshot(population_value as Dictionary)
+
+
+static func _runtime_npcs_from_population_snapshot(population_snapshot: Dictionary) -> Dictionary:
+	var records_value: Variant = population_snapshot.get("records", null)
+	if not records_value is Array:
+		return {"ok": false, "present": true, "records": {}}
+	var result: Dictionary = {}
+	for record_value: Variant in records_value:
+		if not record_value is Dictionary:
+			return {"ok": false, "present": true, "records": {}}
+		var record: Dictionary = record_value
+		var npc_id := str(record.get("npc_id", ""))
+		if npc_id.is_empty() or result.has(npc_id):
+			return {"ok": false, "present": true, "records": {}}
+		result[npc_id] = record.duplicate(true)
+	return {"ok": true, "present": true, "records": result}
 
 
 func validate_semantics() -> bool:
@@ -316,7 +397,7 @@ static func _is_numeric_value(value: Variant) -> bool:
 	return (value is int) or (value is float and is_finite(float(value)))
 
 
-func _canonicalize(value: Variant) -> Variant:
+static func _canonicalize(value: Variant) -> Variant:
 	if value is Dictionary:
 		var output: Dictionary = {}
 		var keys: Array = (value as Dictionary).keys()

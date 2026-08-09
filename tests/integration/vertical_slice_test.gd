@@ -87,8 +87,11 @@ func _test_population_contract() -> void:
 	var npc_ids: Array[String] = coordinator.population.sorted_npc_ids()
 	_check(coordinator.population.population_count() == 300, "coordinator starts with 300 persistent NPCs")
 	_check(npc_ids.size() == 300, "population index exposes 300 NPC IDs")
-	_check(coordinator.session.state.npcs.size() == 300, "core CityState stores all 300 NPC records")
+	_check(coordinator.session.state.npcs.size() == 300, "runtime CityState hydrates all 300 NPC records")
 	_check(int(coordinator.session.state.metrics.get("population", -1)) == 300, "core population metric starts at 300")
+	_check(coordinator.session.kernel.command_sequence == 3, "300-resident new game uses only the three metric commands")
+	_check(coordinator.session.kernel.event_sequence == 3, "bulk NPC hydration emits no per-resident domain events")
+	_check(coordinator.next_operation_sequence == 4, "bulk NPC hydration consumes no operation IDs")
 	var seen := {}
 	for npc_id: String in npc_ids:
 		_check(not npc_id.is_empty(), "NPC IDs are non-empty")
@@ -430,6 +433,9 @@ func _test_save_round_trip() -> void:
 	var date_before: Dictionary = source.current_date()
 	var population_hash_before: String = source.population.stable_hash()
 	_check(source.save_game(TEST_SAVE_PATH) == OK, "versioned snapshot saves atomically")
+	var persisted_state: Dictionary = source.session.make_envelope().state
+	_check(not persisted_state.has("npcs"), "save JSON omits the runtime CityState NPC mirror")
+	_check(Array(persisted_state.get("metadata", {}).get("vertical_slice", {}).get("population", {}).get("records", [])).size() == 328, "save JSON keeps all records under canonical population only")
 	var hash_before: String = source.deterministic_hash()
 	var operation_sequence_before: int = source.next_operation_sequence
 	var event_sequence_before: int = source.session.kernel.event_sequence
@@ -543,6 +549,11 @@ func _check_population_mirror(coordinator, expected_count: int, label: String) -
 	_check(int(coordinator.session.state.metrics.get("population", -1)) == expected_count, "%s core population metric" % label)
 	_check(coordinator.session.state.npcs.size() == expected_count, "%s core NPC record count" % label)
 	_check(core_ids == population_ids, "%s core and canonical NPC IDs match" % label)
+	for npc_id: String in population_ids:
+		_check(
+			coordinator.session.state.npcs.get(npc_id, {}) == coordinator.population.get_record(npc_id).to_dict(),
+			"%s runtime and canonical NPC record match: %s" % [label, npc_id]
+		)
 
 
 func _check(condition: bool, label: String) -> void:

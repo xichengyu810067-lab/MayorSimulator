@@ -7,6 +7,7 @@ const SaveEnvelopeScript = preload("res://scripts/core/save_envelope.gd")
 const SaveSchemaAuthorityScript = preload("res://scripts/core/save_schema_authority.gd")
 const SaveServiceScript = preload("res://scripts/core/save_service.gd")
 const ConstructionSystemScript = preload("res://scripts/systems/city/construction_system.gd")
+const PopulationSystemScript = preload("res://scripts/systems/population/population_system.gd")
 const BlueprintLibraryServiceScript = preload("res://scripts/app/blueprint_library_service.gd")
 const TransportNetworkSystemScript = preload("res://scripts/systems/city/transport_network_system.gd")
 const CityTerrainMapScript = preload("res://scripts/world/city_terrain_map.gd")
@@ -17,6 +18,7 @@ signal state_changed(view_model: Dictionary)
 
 const CONTENT_VERSION := "vertical_slice_1"
 const DEFAULT_SAVE_PATH := "user://mayor_simulator/autosave.json"
+const MIN_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA := SaveSchemaAuthorityScript.MIN_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA
 const MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA := SaveSchemaAuthorityScript.MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA
 const MIN_SUPPORTED_POPULATION_SCHEMA := SaveSchemaAuthorityScript.POPULATION_MIN_SUPPORTED_SCHEMA_VERSION
 const MAX_SUPPORTED_POPULATION_SCHEMA := SaveSchemaAuthorityScript.POPULATION_MAX_SUPPORTED_SCHEMA_VERSION
@@ -47,6 +49,15 @@ func new_game(seed: int = SimulationKernelScript.DEFAULT_SEED, initial_funds: in
 	kernel = SimulationKernelScript.new(state, seed)
 	kernel.event_emitted.connect(_on_kernel_event)
 	state_changed.emit(get_view_model())
+
+
+## Installs the canonical population into CityState's runtime-only lookup in one
+## atomic, sequence-neutral step. Persisted snapshots still contain the records
+## only under metadata.vertical_slice.population.records.
+func hydrate_runtime_population(population_snapshot: Dictionary) -> bool:
+	if state == null:
+		return false
+	return state.hydrate_runtime_npcs_from_population(population_snapshot)
 
 
 func process_frame(delta_seconds: float) -> Array:
@@ -154,8 +165,44 @@ func _prepare_envelope_for_restore(envelope):
 	var migration := _migrate_state_snapshot_to_current_pair(candidate.state)
 	if not bool(migration.get("ok", false)):
 		return null
-	candidate.state = Dictionary(migration.get("state", {})).duplicate(true)
+	var city_state_migration := CityStateScript.migrate_dict(migration.get("state", {}))
+	if city_state_migration.is_empty():
+		return null
+	var population_normalization := _normalize_population_snapshot_for_restore(city_state_migration)
+	if not bool(population_normalization.get("ok", false)):
+		return null
+	candidate.state = Dictionary(population_normalization.get("state", {})).duplicate(true)
 	return candidate
+
+
+func _normalize_population_snapshot_for_restore(state_snapshot: Dictionary) -> Dictionary:
+	var normalized := state_snapshot.duplicate(true)
+	var metadata_value: Variant = normalized.get("metadata", null)
+	if not metadata_value is Dictionary:
+		return {"ok": true, "state": normalized}
+	var metadata: Dictionary = metadata_value
+	var vertical_value: Variant = metadata.get("vertical_slice", null)
+	if vertical_value == null:
+		return {"ok": true, "state": normalized}
+	if not vertical_value is Dictionary:
+		return {"ok": false, "state": {}}
+	var vertical: Dictionary = vertical_value
+	var schema_value: Variant = vertical.get("schema_version", null)
+	if not _is_integer_value(schema_value):
+		return {"ok": false, "state": {}}
+	var schema_version := int(schema_value)
+	if not SaveSchemaAuthorityScript.is_supported_vertical_schema(schema_version):
+		return {"ok": false, "state": {}}
+	var population_value: Variant = vertical.get("population", null)
+	if not population_value is Dictionary:
+		return {"ok": false, "state": {}}
+	var parsed_population = PopulationSystemScript.from_dict(population_value as Dictionary)
+	if parsed_population == null:
+		return {"ok": false, "state": {}}
+	vertical["population"] = parsed_population.to_dict()
+	metadata["vertical_slice"] = vertical
+	normalized["metadata"] = metadata
+	return {"ok": true, "state": normalized}
 
 
 func _migrate_state_snapshot_to_current_pair(state_snapshot: Dictionary) -> Dictionary:
@@ -198,12 +245,42 @@ func _migrate_state_snapshot_to_current_pair(state_snapshot: Dictionary) -> Dict
 
 func save_now(path: String = "") -> Error:
 	var resolved_path: String = path if not path.is_empty() else save_path
+	if not _validate_runtime_population_save_boundary():
+		save_service.last_error_message = "Refusing to save: runtime NPC data does not exactly match canonical population metadata."
+		return ERR_INVALID_DATA
 	var envelope = make_envelope()
 	var validated_state = CityStateScript.from_dict(envelope.state)
 	if validated_state == null or not _validate_envelope_semantics(envelope, validated_state):
 		save_service.last_error_message = "Refusing to save a semantically inconsistent session snapshot."
 		return ERR_INVALID_DATA
 	return save_service.save_atomic(resolved_path, envelope)
+
+
+func _validate_runtime_population_save_boundary() -> bool:
+	var metadata_value: Variant = state.metadata.get("vertical_slice", null)
+	if metadata_value == null:
+		return state.npcs.is_empty()
+	if not metadata_value is Dictionary:
+		return false
+	var population_value: Variant = (metadata_value as Dictionary).get("population", null)
+	if population_value == null:
+		return state.npcs.is_empty()
+	if not population_value is Dictionary:
+		return false
+	var parsed_population = PopulationSystemScript.from_dict(population_value as Dictionary)
+	if parsed_population == null:
+		return false
+	var canonical_records: Array = parsed_population.to_dict().get("records", [])
+	if canonical_records.size() != state.npcs.size():
+		return false
+	for record_value: Variant in canonical_records:
+		var record: Dictionary = record_value
+		var npc_id := str(record.get("npc_id", ""))
+		if npc_id.is_empty() or not state.npcs.has(npc_id):
+			return false
+		if _canonicalize(state.npcs[npc_id]) != _canonicalize(record):
+			return false
+	return true
 
 
 func load_now(path: String = "") -> bool:
@@ -384,7 +461,7 @@ func _validate_vertical_slice_metadata(restored_state, runtime: Dictionary) -> b
 	if not _is_integer_value(schema_value):
 		return false
 	var schema_version := int(schema_value)
-	if schema_version < 0 or schema_version > MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA:
+	if not SaveSchemaAuthorityScript.is_supported_vertical_schema(schema_version):
 		return false
 	# Schema 4 adds an optional persisted UI-event latch. Older saves omit it;
 	# current saves must keep it string-typed and inside the governance failure
@@ -395,44 +472,33 @@ func _validate_vertical_slice_metadata(restored_state, runtime: Dictionary) -> b
 			return false
 	if not _validate_core_building_records(restored_state, schema_version >= 6):
 		return false
-	# Schemas 1-2 predate the canonical persistent population snapshot. Schema 3
-	# and later require it, so a missing block is corruption rather than a legacy save.
-	if schema_version < 3:
-		return true
 	var population_value: Variant = vertical.get("population", null)
 	if not population_value is Dictionary:
 		return false
 	var population: Dictionary = population_value
-	var population_schema: Variant = population.get("schema_version", 1)
-	if not _is_integer_value(population_schema) or int(population_schema) < MIN_SUPPORTED_POPULATION_SCHEMA or int(population_schema) > MAX_SUPPORTED_POPULATION_SCHEMA:
+	var parsed_population = PopulationSystemScript.from_dict(population)
+	if parsed_population == null:
 		return false
-	var population_schema_version := int(population_schema)
-	var records_value: Variant = population.get("records", null)
-	if not records_value is Array:
-		return false
+	var normalized_population: Dictionary = parsed_population.to_dict()
+	var records_value: Variant = normalized_population.get("records", null)
 	var canonical_ids: Dictionary = {}
+	var canonical_records: Dictionary = {}
 	for record_value: Variant in records_value:
-		if not record_value is Dictionary:
-			return false
 		var record: Dictionary = record_value
-		var record_schema: Variant = record.get("schema_version", 1)
-		if not _is_integer_value(record_schema) or int(record_schema) < MIN_SUPPORTED_NPC_RECORD_SCHEMA or int(record_schema) > MAX_SUPPORTED_NPC_RECORD_SCHEMA:
-			return false
-		for nonnegative_field: String in ["income", "salary", "debt"]:
-			if not record.has(nonnegative_field) or record[nonnegative_field] == null:
-				continue
-			if not _is_integer_value(record[nonnegative_field]) or int(record[nonnegative_field]) < 0:
-				return false
 		var npc_id := str(record.get("npc_id", ""))
 		if npc_id.is_empty() or canonical_ids.has(npc_id):
 			return false
 		canonical_ids[npc_id] = true
+		canonical_records[npc_id] = record
 	if canonical_ids.size() != restored_state.npcs.size():
 		return false
 	for core_id: Variant in restored_state.npcs.keys():
-		if not canonical_ids.has(str(core_id)):
+		var npc_id := str(core_id)
+		if not canonical_ids.has(npc_id):
 			return false
-	var requests_value: Variant = population.get("requests", [])
+		if _canonicalize(restored_state.npcs[core_id]) != _canonicalize(canonical_records[npc_id]):
+			return false
+	var requests_value: Variant = normalized_population.get("requests", [])
 	if not requests_value is Array:
 		return false
 	for request_value: Variant in requests_value:
@@ -441,8 +507,6 @@ func _validate_vertical_slice_metadata(restored_state, runtime: Dictionary) -> b
 		var request_npc_id := str((request_value as Dictionary).get("npc_id", ""))
 		if not request_npc_id.is_empty() and not canonical_ids.has(request_npc_id):
 			return false
-	if population_schema_version >= 2 and not _validate_population_finance_snapshot(population):
-		return false
 	for building_value: Variant in restored_state.buildings.values():
 		var building: Dictionary = building_value
 		if not building.has("resident_ids"):

@@ -5,7 +5,7 @@
     "id": "game_session_save_boundary",
     "writer_allowed": true,
     "save_envelope_schema_version": 1,
-    "city_state_schema_version": 1,
+    "city_state_schema_version": 2,
     "vertical_slice_schema_version": 8,
     "terrain_layout_version": 3,
     "population_schema_version": 2,
@@ -13,7 +13,7 @@
   },
   "version_ceiling": {
     "save_envelope_schema_version": 1,
-    "city_state_schema_version": 1,
+    "city_state_schema_version": 2,
     "vertical_slice_schema_version": 8,
     "terrain_layout_version": 3,
     "population_schema_version": 2,
@@ -29,17 +29,17 @@
     },
     {
       "component": "city_state",
-      "current_version": 1,
-      "max_supported_version": 1,
-      "supported_read_versions": [1],
-      "compatibility": "exact"
+      "current_version": 2,
+      "max_supported_version": 2,
+      "supported_read_versions": [1, 2],
+      "compatibility": "migration_1_current_2_canonical_population_only"
     },
     {
       "component": "vertical_slice",
       "current_version": 8,
       "max_supported_version": 8,
-      "supported_read_versions": [0, 1, 2, 3, 4, 5, 6, 7, 8],
-      "compatibility": "direct_read_0_to_6_migration_pair_7_current_8"
+      "supported_read_versions": [4, 5, 6, 7, 8],
+      "compatibility": "unsupported_0_to_3_direct_read_4_to_6_migration_pair_7_current_8"
     },
     {
       "component": "terrain_layout",
@@ -65,7 +65,13 @@
   ],
   "paired_support_matrix": [
     {
-      "vertical_slice_schema_versions": [0, 1, 2, 3, 4, 5, 6],
+      "vertical_slice_schema_versions": [0, 1, 2, 3],
+      "terrain_layout_version": null,
+      "status": "explicit_unsupported_no_proven_format",
+      "writer_allowed": false
+    },
+    {
+      "vertical_slice_schema_versions": [4, 5, 6],
       "terrain_layout_version": null,
       "status": "direct_read_compatibility",
       "writer_allowed": false
@@ -87,12 +93,12 @@
     {
       "id": "current_round_trip",
       "path": "res://tests/fixtures/save_schema/current_round_trip.json",
-      "behavior": "current_round_trip_no_loss"
+      "behavior": "current_round_trip_single_population_copy"
     },
     {
       "id": "supported_legacy_migration",
       "path": "res://tests/fixtures/save_schema/supported_legacy_migration.json",
-      "behavior": "supported_legacy_migration"
+      "behavior": "city_state_1_mirror_match_to_2_and_vertical_7_layout_2_to_8_layout_3"
     },
     {
       "id": "future_reject",
@@ -103,9 +109,35 @@
       "id": "corrupt_minimal",
       "path": "res://tests/fixtures/save_schema/corrupt_minimal.json",
       "behavior": "explicit_reject_no_overwrite"
+    },
+    {
+      "id": "oldest_supported_vertical_4",
+      "path": "res://tests/fixtures/save_schema/oldest_supported_vertical_4.json",
+      "behavior": "oldest_supported_vertical_4_direct_read"
+    },
+    {
+      "id": "unsupported_vertical_3",
+      "path": "res://tests/fixtures/save_schema/unsupported_vertical_3.json",
+      "behavior": "explicit_reject_no_overwrite"
     }
   ],
   "migration_registry": [
+    {
+      "id": "city_state_1_npc_mirror_to_2",
+      "source": {
+        "city_state_schema_version": 1
+      },
+      "target": {
+        "city_state_schema_version": 2
+      },
+      "precondition": "canonical_population_exactly_matches_mirror_or_both_empty;nonempty_core_only_reject",
+      "implementation": [
+        "scripts/core/city_state.gd:migrate_dict"
+      ],
+      "test": "res://tests/unit/core/save_recovery_self_test.gd",
+      "fixture": "res://tests/fixtures/save_schema/supported_legacy_migration.json",
+      "status": "active"
+    },
     {
       "id": "vertical_7_layout_2_to_8_layout_3",
       "source": {

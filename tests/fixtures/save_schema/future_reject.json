@@ -7,7 +7,7 @@
 	"event_sequence": 0,
 	"command_sequence": 0,
 	"state": {
-		"schema_version": 1,
+		"schema_version": 3,
 		"city_id": "city_001",
 		"game_time": 0,
 		"last_event_sequence": 0,
@@ -41,30 +41,6 @@
 		},
 		"buildings": {},
 		"construction_jobs": {},
-		"npcs": {
-			"npc_000001": {
-				"schema_version": 2,
-				"npc_id": "npc_000001",
-				"display_name": "Fixture Resident",
-				"age": 37,
-				"gender": "unspecified",
-				"personality": "steady",
-				"personality_tags": [],
-				"appearance_tags": [],
-				"preferences": [
-					"parks"
-				],
-				"education": "secondary",
-				"income": 31000,
-				"salary": null,
-				"debt": null,
-				"address_id": "home_fixture",
-				"job_id": "",
-				"employment_state": "employed",
-				"policy_attitudes": {},
-				"relationships": {}
-			}
-		},
 		"scheduled_events": {},
 		"event_book": [],
 		"governance": {
@@ -83,7 +59,7 @@
 		},
 		"metadata": {
 			"vertical_slice": {
-				"schema_version": 9,
+				"schema_version": 8,
 				"construction": {
 					"schema_version": 1,
 					"seed": 8024611,

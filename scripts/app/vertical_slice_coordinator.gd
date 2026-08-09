@@ -78,6 +78,8 @@ func new_game(seed: int = DEFAULT_SEED, initial_funds: int = DEFAULT_INITIAL_FUN
 	governance = GovernanceSystemScript.new(seed)
 	population = PopulationSystemScript.new()
 	population.initialize(300, seed)
+	if not session.hydrate_runtime_population(population.to_dict()):
+		push_error("Failed to hydrate the new-game runtime NPC lookup from canonical population data.")
 	terrain_map = CityTerrainMapScript.new()
 	terrain_map.apply_default_city_layout()
 	transport = TransportNetworkSystemScript.new()
@@ -95,12 +97,6 @@ func new_game(seed: int = DEFAULT_SEED, initial_funds: int = DEFAULT_INITIAL_FUN
 	_set_metric("population", population.population_count(), "population.initialized")
 	_set_metric("municipal_trust", governance.municipal_trust, "governance.initialized")
 	_set_metric("grievance", governance.grievance, "governance.initialized")
-	for npc_id: String in population.sorted_npc_ids():
-		session.submit_command("upsert_npc", {
-			"npc_id": npc_id,
-			"record": population.get_record(npc_id).to_dict(),
-			"reason_tag": "population.initialized"
-		}, _operation_id("npc_seed"))
 	_emit_changed()
 
 func process_frame(delta_seconds: float, city_context: Dictionary = {}, autosave: bool = true) -> Array[Dictionary]:
@@ -1689,7 +1685,7 @@ func _restore_subsystems() -> void:
 	population = PopulationSystemScript.from_dict(population_data as Dictionary) if population_data is Dictionary else null
 	if population == null or not has_population_snapshot:
 		population = PopulationSystemScript.new()
-		population.initialize(300, int(session.kernel.rng_seed))
+		population.initialize(int(session.state.metrics.get("population", 0)), int(session.kernel.rng_seed))
 	var terrain_data: Variant = data.get("terrain", {})
 	if terrain_data is Dictionary and not (terrain_data as Dictionary).is_empty():
 		terrain_map = CityTerrainMapScript.create_from_dict(terrain_data)
@@ -1753,7 +1749,8 @@ func _restore_subsystems() -> void:
 		blueprint_library_service.active_blueprint_by_building = persisted_active_blueprints
 	_reconcile_transport_stations_from_buildings()
 	_normalize_selected_population_references()
-	_sync_population_to_core("population.load_reconcile" if has_population_snapshot else "population.load_fallback")
+	if not session.hydrate_runtime_population(population.to_dict()):
+		push_error("Failed to hydrate the restored runtime NPC lookup from canonical population data.")
 
 
 func _transport_plan_for_tiles(kind: String, operation: String, tile_ids: Array) -> Dictionary:

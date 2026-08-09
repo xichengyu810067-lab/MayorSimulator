@@ -12,12 +12,15 @@ const SAVE_ENVELOPE_CURRENT_SCHEMA_VERSION := 1
 const SAVE_ENVELOPE_MIN_SUPPORTED_SCHEMA_VERSION := 1
 const SAVE_ENVELOPE_MAX_SUPPORTED_SCHEMA_VERSION := 1
 
-const CITY_STATE_CURRENT_SCHEMA_VERSION := 1
+const CITY_STATE_CURRENT_SCHEMA_VERSION := 2
 const CITY_STATE_MIN_SUPPORTED_SCHEMA_VERSION := 1
-const CITY_STATE_MAX_SUPPORTED_SCHEMA_VERSION := 1
+const CITY_STATE_MAX_SUPPORTED_SCHEMA_VERSION := 2
 
 const CURRENT_VERTICAL_SCHEMA_VERSION := 8
+const MIN_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA := 4
 const MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA := 8
+const SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMAS := [4, 5, 6, 7, 8]
+const UNSUPPORTED_HISTORICAL_VERTICAL_SCHEMAS := [0, 1, 2, 3]
 const LEGACY_MIGRATION_VERTICAL_SCHEMA_VERSION := 7
 
 const CURRENT_TERRAIN_LAYOUT_VERSION := 3
@@ -51,14 +54,14 @@ const _EXPECTED_COMPONENT_MATRIX := {
 	"city_state": {
 		"current_version": CITY_STATE_CURRENT_SCHEMA_VERSION,
 		"max_supported_version": CITY_STATE_MAX_SUPPORTED_SCHEMA_VERSION,
-		"supported_read_versions": [1],
-		"compatibility": "exact",
+		"supported_read_versions": [1, 2],
+		"compatibility": "migration_1_current_2_canonical_population_only",
 	},
 	"vertical_slice": {
 		"current_version": CURRENT_VERTICAL_SCHEMA_VERSION,
 		"max_supported_version": MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA,
-		"supported_read_versions": [0, 1, 2, 3, 4, 5, 6, 7, 8],
-		"compatibility": "direct_read_0_to_6_migration_pair_7_current_8",
+		"supported_read_versions": SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMAS,
+		"compatibility": "unsupported_0_to_3_direct_read_4_to_6_migration_pair_7_current_8",
 	},
 	"terrain_layout": {
 		"current_version": CURRENT_TERRAIN_LAYOUT_VERSION,
@@ -83,11 +86,11 @@ const _EXPECTED_COMPONENT_MATRIX := {
 const _EXPECTED_FIXTURES := {
 	"current_round_trip": {
 		"path": "res://tests/fixtures/save_schema/current_round_trip.json",
-		"behavior": "current_round_trip_no_loss",
+		"behavior": "current_round_trip_single_population_copy",
 	},
 	"supported_legacy_migration": {
 		"path": "res://tests/fixtures/save_schema/supported_legacy_migration.json",
-		"behavior": "supported_legacy_migration",
+		"behavior": "city_state_1_mirror_match_to_2_and_vertical_7_layout_2_to_8_layout_3",
 	},
 	"future_reject": {
 		"path": "res://tests/fixtures/save_schema/future_reject.json",
@@ -95,6 +98,14 @@ const _EXPECTED_FIXTURES := {
 	},
 	"corrupt_minimal": {
 		"path": "res://tests/fixtures/save_schema/corrupt_minimal.json",
+		"behavior": FUTURE_VERSION_POLICY,
+	},
+	"oldest_supported_vertical_4": {
+		"path": "res://tests/fixtures/save_schema/oldest_supported_vertical_4.json",
+		"behavior": "oldest_supported_vertical_4_direct_read",
+	},
+	"unsupported_vertical_3": {
+		"path": "res://tests/fixtures/save_schema/unsupported_vertical_3.json",
 		"behavior": FUTURE_VERSION_POLICY,
 	},
 }
@@ -136,6 +147,10 @@ static func is_legacy_migration_pair(vertical_schema_version: int, terrain_layou
 		vertical_schema_version == LEGACY_MIGRATION_VERTICAL_SCHEMA_VERSION
 		and terrain_layout_version == LEGACY_MIGRATION_TERRAIN_LAYOUT_VERSION
 	)
+
+
+static func is_supported_vertical_schema(vertical_schema_version: int) -> bool:
+	return vertical_schema_version in SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMAS
 
 
 static func validate_registry_json(registry_json: String) -> bool:
@@ -221,11 +236,17 @@ static func _validate_component_matrix(value: Variant) -> bool:
 
 
 static func _validate_paired_support_matrix(value: Variant) -> bool:
-	if not value is Array or (value as Array).size() != 3:
+	if not value is Array or (value as Array).size() != 4:
 		return false
 	var expected := [
 		{
-			"vertical_slice_schema_versions": [0, 1, 2, 3, 4, 5, 6],
+			"vertical_slice_schema_versions": UNSUPPORTED_HISTORICAL_VERTICAL_SCHEMAS,
+			"terrain_layout_version": null,
+			"status": "explicit_unsupported_no_proven_format",
+			"writer_allowed": false,
+		},
+		{
+			"vertical_slice_schema_versions": [4, 5, 6],
 			"terrain_layout_version": null,
 			"status": "direct_read_compatibility",
 			"writer_allowed": false,
@@ -300,13 +321,29 @@ static func _validate_fixture_registry(value: Variant) -> bool:
 
 
 static func _validate_migration_registry(value: Variant) -> bool:
-	if not value is Array or (value as Array).size() != 1:
+	if not value is Array or (value as Array).size() != 2:
 		return false
-	var item: Variant = (value as Array)[0]
-	if not item is Dictionary:
+	var city_item: Variant = (value as Array)[0]
+	var terrain_item: Variant = (value as Array)[1]
+	if not city_item is Dictionary or not terrain_item is Dictionary:
 		return false
-	var migration: Dictionary = item
+	var city_migration: Dictionary = city_item
+	var migration: Dictionary = terrain_item
 	return (
+		_has_exact_keys(city_migration, [
+			"id", "source", "target", "precondition", "implementation", "test", "fixture", "status",
+		])
+		and str(city_migration.get("id", "")) == "city_state_1_npc_mirror_to_2"
+		and _matches_city_state_version(city_migration.get("source", null), 1)
+		and _matches_city_state_version(city_migration.get("target", null), CITY_STATE_CURRENT_SCHEMA_VERSION)
+		and str(city_migration.get("precondition", "")) == "canonical_population_exactly_matches_mirror_or_both_empty;nonempty_core_only_reject"
+		and _string_arrays_equal(city_migration.get("implementation", null), [
+			"scripts/core/city_state.gd:migrate_dict",
+		])
+		and str(city_migration.get("test", "")) == "res://tests/unit/core/save_recovery_self_test.gd"
+		and str(city_migration.get("fixture", "")) == "res://tests/fixtures/save_schema/supported_legacy_migration.json"
+		and str(city_migration.get("status", "")) == "active"
+		and
 		_has_exact_keys(migration, [
 			"id", "source", "target", "implementation", "test", "fixture", "status",
 		])
@@ -328,6 +365,17 @@ static func _validate_migration_registry(value: Variant) -> bool:
 		and str(migration.get("test", "")) == "res://tests/unit/core/save_recovery_self_test.gd"
 		and str(migration.get("fixture", "")) == "res://tests/fixtures/save_schema/supported_legacy_migration.json"
 		and str(migration.get("status", "")) == "active"
+	)
+
+
+static func _matches_city_state_version(value: Variant, version: int) -> bool:
+	if not value is Dictionary:
+		return false
+	var source: Dictionary = value
+	return (
+		_has_exact_keys(source, ["city_state_schema_version"])
+		and _is_integer_value(source.get("city_state_schema_version", null))
+		and int(source["city_state_schema_version"]) == version
 	)
 
 
