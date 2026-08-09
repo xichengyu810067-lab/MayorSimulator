@@ -5,11 +5,11 @@
       "update_id": "2026-08-10-alpha-2-internal-rc",
       "version": "0.1.0-alpha.2",
       "date": "2026-08-10",
-      "title": "Internal Alpha RC 收斂",
+      "title": "Internal Alpha RC convergence",
       "changes": [
-        "Windows x64 Internal-only Release Candidate 已建立。",
-        "本次僅限授權內部測試，不構成公開發行。",
-        "公開散布的權利與素材來源缺口仍未解除。"
+        "Windows x64 internal-only Release Candidate prepared.",
+        "Authorized internal testing only; this is not a public release.",
+        "Public distribution rights and asset-provenance gaps remain open."
       ]
     },
     {
