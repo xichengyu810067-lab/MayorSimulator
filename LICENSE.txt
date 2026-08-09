@@ -1,5 +1,5 @@
 Mayor Simulator MVP Internal Pre-Release License
 ------------------------------------------------
-This repository and binary package contain internal pre-release software (Version 0.1.0-alpha.1).
+This repository and binary package contain internal pre-release software (Version 0.1.0-alpha.2).
 All rights reserved by the Civonance project team.
 For internal access-controlled testing only. Commercial distribution or public release is strictly prohibited.

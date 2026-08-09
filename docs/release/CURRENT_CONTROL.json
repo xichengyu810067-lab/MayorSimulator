@@ -1,133 +1,16 @@
 {
   "schema_version": 1,
-  "record_kind": "mayor_simulator_live_control_pointer",
-  "captured_at": "2026-08-10T02:01:46.6698339+08:00",
-  "task": {
-    "thread_id": "019fc87e-d138-7010-a95c-29ca1fb678bf",
-    "title": "城諾之音 Alpha 發布接管",
-    "status_at_capture": "active",
-    "completed_at": null,
-    "completion_authority": "Local Internal Alpha RC evidence is current; remote CI, private pre-release, and public release are not verified or authorized by this record."
-  },
+  "control_task": "019fc87e-d138-7010-a95c-29ca1fb678bf",
+  "branch": "main",
   "versioning": {
-    "product_stage": "MVP Alpha",
-    "version": "0.1.0-alpha.1",
-    "channel_progression": [
-      "alpha",
-      "beta",
-      "pre-release",
-      "release"
-    ],
-    "target_tag": "v0.1.0-alpha.1",
-    "github_private_prerelease_allowed": true,
-    "github_public_release_allowed": false,
-    "github_public_release_block_reason": "Public-release governance gates remain blocked; only an access-controlled MVP Alpha pre-release is authorized."
+    "version": "0.1.0-alpha.2",
+    "windows_metadata": "0.1.0.0",
+    "target_tag": "v0.1.0-alpha.2",
+    "historic_alpha_1_tag": "4818b9e2bf23a97b33b98432858f7228bee14334",
+    "historic_alpha_1_baseline": "dac20a65365b62a1ba370d7be8317536f67be755"
   },
-  "authority": {
-    "project_root": "C:\\Users\\USER\\遊戲\\MayorSimulator-Rebuild-20260805\\30_core",
-    "branch": "main",
-    "base_commit": "dac20a65365b62a1ba370d7be8317536f67be755",
-    "release_source_commit": "dac20a65365b62a1ba370d7be8317536f67be755",
-    "sdk_gitlink_commit": "956f0414b6cd42dc8b7a648e3ce942d7e061430a",
-    "dirty_worktree_is_authoritative_wip": false
-  },
-  "historical_snapshots": [
-    {
-      "path": "專案移交_2026-08-02/GOAL_CURRENT.json",
-      "status": "historical_only",
-      "reason": "References the prior 019fbd41 task and its paused state; it is not the live controller."
-    },
-    {
-      "path": "專案移交_2026-08-02/PACKAGE_CONTENT_MANIFEST.json",
-      "status": "historical_only",
-      "reason": "Captured at 2026-08-02T01:49:54+08:00 from a different source path and before the current validation work."
-    }
-  ],
-  "related_tasks": {
-    "t0_sdk_handoff_guard": "019fc19d-8949-79b3-87e6-3ca277c38cc3",
-    "t2_original_city_sim_traceability": "019fc19d-b026-7102-87b6-389dc1acb720",
-    "t3_visible_transport_npc_terrain_acceptance": "019fc19d-ecfd-79c2-b4ea-d8668059a17e"
-  },
-  "acceptance_at_capture": {
-    "runtime_assertion_matrix": {
-      "status": "PASS",
-      "evidence": ".tmp/alpha-release-20260810/dac20a6-release-acceptance/qa/assertion-matrix/summary.json",
-      "baseline_evidence": ".tmp/alpha-release-20260810/assertion-matrix/summary.json",
-      "selected": 67,
-      "passed": 67,
-      "product_clean": 67,
-      "failed": 0,
-      "environment_warning_tests": 0
-    },
-    "os_kill_save_qa": {
-      "status": "PASS",
-      "evidence": ".tmp/alpha-release-20260810/dac20a6-release-acceptance/qa/save-os-kill/summary.json",
-      "baseline_evidence": ".tmp/alpha-release-20260810/save-qa/summary.json",
-      "phases_passed": 5,
-      "semantic_checks": 173,
-      "forced_terminations": 5,
-      "all_processes_stopped": true
-    },
-    "native_gui": {
-      "status": "PASS",
-      "evidence": ".tmp/alpha-release-20260810/ui-qa/summary.json",
-      "t3_evidence": ".tmp/alpha-release-20260810/ui-qa/summary.json",
-      "required_capture_count": 4,
-      "capture_count": 4,
-      "capture_surface_kind": "native_fullscreen_root",
-      "scene_parent": "root_window",
-      "physical_size": [2880, 1800],
-      "window_size": [2880, 1800],
-      "logical_size": [1280, 800],
-      "root_texture_size": [6480, 4050],
-      "product_diagnostic_count": 0,
-      "environment_warning_count": 0,
-      "source_unchanged": true
-    },
-    "offscreen_high_resolution_evidence": {
-      "status": "PASS",
-      "evidence": ".tmp/alpha-release-20260810/ui-qa/summary.json",
-      "t3_evidence": ".tmp/alpha-release-20260810/ui-qa/summary.json",
-      "required_capture_count": 33,
-      "capture_count": 33,
-      "physical_size": [2880, 1800],
-      "logical_size": [1280, 800],
-      "capture_surface_kind": "offscreen_subviewport",
-      "capture_surface_mirrored": false,
-      "success_marker_count": 1,
-      "product_diagnostic_count": 0,
-      "environment_warning_count": 0,
-      "source_unchanged": true
-    },
-    "t3_visible_acceptance": {
-      "status": "PASS",
-      "evidence": "檢驗結果.md",
-      "ui_evidence": ".tmp/alpha-release-20260810/ui-qa/summary.json",
-      "assertion_evidence": ".tmp/alpha-release-20260810/dac20a6-release-acceptance/qa/assertion-matrix/summary.json",
-      "save_evidence": ".tmp/alpha-release-20260810/dac20a6-release-acceptance/qa/save-os-kill/summary.json",
-      "process_evidence": ".tmp/alpha-release-20260810/dac20a6-release-acceptance/release-evidence.json",
-      "godot_processes_remaining": 0
-    },
-    "public_release": {
-      "status": "blocked",
-      "runtime_blocked": false,
-      "blockers": [
-        "No selected root LICENSE or COPYING file",
-        "88 runtime assets remain blocked for distribution-rights approval",
-        "City-map background source rights remain unresolved",
-        "Train-station provenance remains blocked"
-      ]
-    }
-  },
-  "ui_acceptance_override": {
-    "historical_instruction_superseded": "Any historical instruction not to modify UI or UX is superseded for the active task.",
-    "current_requirement": "Wrong-resolution, empty, mirrored, or offscreen-only native windows are failures and must be repaired before completion."
-  },
-  "required_evidence_relative_paths": [
-    ".tmp/alpha-release-20260810/dac20a6-release-acceptance/qa/assertion-matrix/summary.json",
-    ".tmp/alpha-release-20260810/dac20a6-release-acceptance/qa/save-os-kill/summary.json",
-    ".tmp/alpha-release-20260810/ui-qa/summary.json",
-    ".tmp/alpha-release-20260810/dac20a6-release-acceptance/release-evidence.json",
-    "檢驗結果.md"
-  ]
+  "distribution": "internal_only",
+  "public_release": "no_go",
+  "public_p0": ["P0-RIGHTS-001", "P0-RIGHTS-002", "P0-RIGHTS-003"],
+  "internal_verdict": "conditional_go_pending_exact_acceptance"
 }
