@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "record_kind": "mayor_simulator_live_control_pointer",
-  "captured_at": "2026-08-03T02:16:50.5689863+08:00",
+  "captured_at": "2026-08-10T02:01:46.6698339+08:00",
   "task": {
-    "thread_id": "019fa248-259e-7040-a887-cc73da543621",
-    "title": "Mayor Simulator｜專案中控中心",
+    "thread_id": "019fc87e-d138-7010-a95c-29ca1fb678bf",
+    "title": "城諾之音 Alpha 發布接管",
     "status_at_capture": "active",
     "completed_at": null,
-    "completion_authority": "Current /goal remains active until tag CI and private pre-release verification complete"
+    "completion_authority": "Local Internal Alpha RC evidence is current; remote CI, private pre-release, and public release are not verified or authorized by this record."
   },
   "versioning": {
     "product_stage": "MVP Alpha",
@@ -24,11 +24,11 @@
     "github_public_release_block_reason": "Public-release governance gates remain blocked; only an access-controlled MVP Alpha pre-release is authorized."
   },
   "authority": {
-    "project_root": "C:\\Users\\XCJ\\遊戲\\MayorSimulator_Authoritative_2026-08-02",
-    "branch": "agent/semver-alpha-release",
-    "base_commit": "8769f78118f1afbf2cf0cb7e060e1bd698477be6",
+    "project_root": "C:\\Users\\USER\\遊戲\\MayorSimulator-Rebuild-20260805\\30_core",
+    "branch": "main",
+    "base_commit": "4818b9e2bf23a97b33b98432858f7228bee14334",
     "sdk_gitlink_commit": "956f0414b6cd42dc8b7a648e3ce942d7e061430a",
-    "dirty_worktree_is_authoritative_wip": true
+    "dirty_worktree_is_authoritative_wip": false
   },
   "historical_snapshots": [
     {
@@ -50,18 +50,18 @@
   "acceptance_at_capture": {
     "runtime_assertion_matrix": {
       "status": "PASS",
-      "evidence": "artifacts/goal-visible-qa/t3/final-assertion-freeze-20260802/summary.json",
-      "baseline_evidence": ".tmp/sdk/assertion-matrix/final-66-post-l10n-20260802T2105/summary.json",
-      "selected": 66,
-      "passed": 66,
-      "product_clean": 66,
+      "evidence": ".tmp/alpha-release-20260810/release-acceptance-retry/qa/assertion-matrix/summary.json",
+      "baseline_evidence": ".tmp/alpha-release-20260810/assertion-matrix/summary.json",
+      "selected": 67,
+      "passed": 67,
+      "product_clean": 67,
       "failed": 0,
       "environment_warning_tests": 0
     },
     "os_kill_save_qa": {
       "status": "PASS",
-      "evidence": "artifacts/goal-visible-qa/t3/final-save-freeze-20260802/summary.json",
-      "baseline_evidence": ".tmp/sdk/save-qa/final-post-l10n-20260802T2130/summary.json",
+      "evidence": ".tmp/alpha-release-20260810/release-acceptance-retry/qa/save-os-kill/summary.json",
+      "baseline_evidence": ".tmp/alpha-release-20260810/save-qa/summary.json",
       "phases_passed": 5,
       "semantic_checks": 173,
       "forced_terminations": 5,
@@ -69,24 +69,24 @@
     },
     "native_gui": {
       "status": "PASS",
-      "evidence": ".tmp/sdk/ui-qa/final-native-and-offscreen-20260802-v6/summary.json",
-      "t3_evidence": "artifacts/goal-visible-qa/t3/final-ui-freeze-20260802/summary.json",
+      "evidence": ".tmp/alpha-release-20260810/ui-qa/summary.json",
+      "t3_evidence": ".tmp/alpha-release-20260810/ui-qa/summary.json",
       "required_capture_count": 4,
       "capture_count": 4,
       "capture_surface_kind": "native_fullscreen_root",
       "scene_parent": "root_window",
-      "physical_size": [1656, 843],
-      "window_size": [1656, 843],
-      "logical_size": [1414, 720],
-      "root_texture_size": [1939, 987],
+      "physical_size": [2880, 1800],
+      "window_size": [2880, 1800],
+      "logical_size": [1280, 800],
+      "root_texture_size": [6480, 4050],
       "product_diagnostic_count": 0,
       "environment_warning_count": 0,
       "source_unchanged": true
     },
     "offscreen_high_resolution_evidence": {
       "status": "PASS",
-      "evidence": ".tmp/sdk/ui-qa/final-native-and-offscreen-20260802-v6/summary.json",
-      "t3_evidence": "artifacts/goal-visible-qa/t3/final-ui-freeze-20260802/summary.json",
+      "evidence": ".tmp/alpha-release-20260810/ui-qa/summary.json",
+      "t3_evidence": ".tmp/alpha-release-20260810/ui-qa/summary.json",
       "required_capture_count": 33,
       "capture_count": 33,
       "physical_size": [2880, 1800],
@@ -100,11 +100,11 @@
     },
     "t3_visible_acceptance": {
       "status": "PASS",
-      "evidence": "docs/acceptance/goal_visible_qa_t3.md",
-      "ui_evidence": "artifacts/goal-visible-qa/t3/final-ui-freeze-20260802/summary.json",
-      "assertion_evidence": "artifacts/goal-visible-qa/t3/final-assertion-freeze-20260802/summary.json",
-      "save_evidence": "artifacts/goal-visible-qa/t3/final-save-freeze-20260802/summary.json",
-      "process_evidence": "artifacts/goal-visible-qa/t3/final-process-check.json",
+      "evidence": "檢驗結果.md",
+      "ui_evidence": ".tmp/alpha-release-20260810/ui-qa/summary.json",
+      "assertion_evidence": ".tmp/alpha-release-20260810/release-acceptance-retry/qa/assertion-matrix/summary.json",
+      "save_evidence": ".tmp/alpha-release-20260810/release-acceptance-retry/qa/save-os-kill/summary.json",
+      "process_evidence": ".tmp/alpha-release-20260810/release-acceptance-retry/release-evidence.json",
       "godot_processes_remaining": 0
     },
     "public_release": {
@@ -123,14 +123,10 @@
     "current_requirement": "Wrong-resolution, empty, mirrored, or offscreen-only native windows are failures and must be repaired before completion."
   },
   "required_evidence_relative_paths": [
-    ".tmp/sdk/assertion-matrix/final-66-post-l10n-20260802T2105/summary.json",
-    ".tmp/sdk/save-qa/final-post-l10n-20260802T2130/summary.json",
-    ".tmp/sdk/ui-qa/final-native-and-offscreen-20260802-v6/summary.json",
-    "artifacts/goal-visible-qa/t3/final-ui-freeze-20260802/summary.json",
-    "artifacts/goal-visible-qa/t3/final-assertion-freeze-20260802/summary.json",
-    "artifacts/goal-visible-qa/t3/final-save-freeze-20260802/summary.json",
-    "artifacts/goal-visible-qa/t3/final-process-check.json",
-    "artifacts/goal-visible-qa/t3/written-files.txt",
-    "docs/acceptance/goal_visible_qa_t3.md"
+    ".tmp/alpha-release-20260810/release-acceptance-retry/qa/assertion-matrix/summary.json",
+    ".tmp/alpha-release-20260810/release-acceptance-retry/qa/save-os-kill/summary.json",
+    ".tmp/alpha-release-20260810/ui-qa/summary.json",
+    ".tmp/alpha-release-20260810/release-acceptance-retry/release-evidence.json",
+    "檢驗結果.md"
   ]
 }

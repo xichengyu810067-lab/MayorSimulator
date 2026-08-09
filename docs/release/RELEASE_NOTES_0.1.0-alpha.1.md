@@ -1,22 +1,25 @@
-# Mayor Simulator MVP Alpha 0.1.0-alpha.1
+# Mayor Simulator MVP Alpha 0.1.0-alpha.1 — 本機 RC
 
-這是 Mayor Simulator 的第一個 MVP Alpha 私有預發行版本，供授權的專案成員進行功能、UI、存檔耐久性與跨平台封裝驗收。
+本次為授權內部測試使用的 Windows x64 Release Candidate；未建立 GitHub Release、未 push、未公開上傳。
 
-## 已驗證範圍
+## 本次已驗證
 
-- Godot 4.7 專案匯入與 67 項隔離 assertion matrix。
-- 五階段 OS-kill 存檔耐久性測試與 173 項語意檢查。
-- Windows 匯出成品啟動 smoke test。
-- Linux 匯出成品啟動 smoke test。
-- Windows ZIP、Linux tar.gz、SHA256SUMS 與機器可讀 release evidence。
+- 單次 canonical release acceptance：67/67 assertion product-clean、OS-kill save 5/5（173 semantic checks）、Godot 匯入、Windows/Linux export、Windows 匯出檔 smoke、封裝與來源指紋一致。
+- Windows 原生 GUI：2880×1800、DPI 192、4 張 native captures；另有 33 張高解析 UI evidence，產品 diagnostics 為 0。
+- RC 證據：`.tmp/alpha-release-20260810/release-acceptance-retry/release-evidence.json`。
+
+## 產物
+
+- Windows x64 ZIP：`MayorSimulator-Windows-x86_64-0.1.0-alpha.1.zip`，59,745,101 bytes，SHA-256 `ac39d9d82fdc297f8083e7dbfb90e6ecccf4b113e7e1e1bfc0d1ec2abb1cb139`。
+- Linux x64 tar.gz 已輸出與封裝；未在 Windows 主機上執行 Linux smoke。
+- 完整雜湊請見封裝內或 evidence 同目錄的 `SHA256SUMS`。
 
 ## 版本契約
 
-- 產品版本：`0.1.0-alpha.1`（SemVer；權威來源為 `VERSION`）。
-- Git tag：`v0.1.0-alpha.1`。
-- Windows 檔案／產品 metadata：`0.1.0.0`，僅作四段式平台相容欄位。
-- 後續通道順序：Alpha → Beta → Pre-release → Release。
+- 產品版本：`0.1.0-alpha.1`（`VERSION`）。
+- 現有回滾點：`v0.1.0-alpha.1` / `4818b9e2bf23a97b33b98432858f7228bee14334`。
+- Windows metadata：`0.1.0.0`。
 
-## 發行限制
+## 散布限制
 
-本 GitHub Release 必須標示為 Pre-release，且目前僅限私有 repository 的授權成員測試。專案根 LICENSE/COPYING、部分 runtime 素材分發權利、city-map 背景來源權利與 train-station provenance 尚未完成治理閉環，因此不得公開散布、販售或宣稱為正式發行版。
+本 RC 為 Internal Alpha。缺少專案根 LICENSE/COPYING、背景素材公開散布權利與 train-station provenance；因此公開散布、販售與正式 Release 均為 NO-GO。
