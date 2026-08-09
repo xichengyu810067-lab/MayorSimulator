@@ -1,6 +1,8 @@
 {
   "schema_version": 1,
   "control_task": "019fc87e-d138-7010-a95c-29ca1fb678bf",
+  "product_name": "CivicTale: Voice of Promise",
+  "product_name_zh_tw": "城諾之音",
   "branch": "main",
   "versioning": {
     "version": "0.1.0-alpha.2",
