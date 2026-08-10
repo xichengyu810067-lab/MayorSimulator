@@ -267,10 +267,13 @@ func _validate_runtime_population_save_boundary() -> bool:
 		return state.npcs.is_empty()
 	if not population_value is Dictionary:
 		return false
-	var parsed_population = PopulationSystemScript.from_dict(population_value as Dictionary)
-	if parsed_population == null:
+	var population: Dictionary = population_value
+	if not PopulationSystemScript.validate_snapshot(population):
 		return false
-	var canonical_records: Array = parsed_population.to_dict().get("records", [])
+	# The metadata block was produced by PopulationSystem.to_dict(). Full snapshot
+	# validation plus direct comparison avoids constructing a second 200k-object
+	# PopulationSystem merely to validate the save boundary.
+	var canonical_records: Array = population.get("records", [])
 	if canonical_records.size() != state.npcs.size():
 		return false
 	for record_value: Variant in canonical_records:

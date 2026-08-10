@@ -387,7 +387,7 @@ func _test_schema_authority_runtime_constants() -> void:
 	_check(NpcRecordScript.MAX_SUPPORTED_SCHEMA_VERSION == SaveSchemaAuthorityScript.NPC_RECORD_MAX_SUPPORTED_SCHEMA_VERSION, "NPC ceiling uses the shared authority")
 	_check(GameSessionScript.MAX_SUPPORTED_POPULATION_SCHEMA == PopulationSystemScript.MAX_SUPPORTED_SCHEMA_VERSION, "GameSession population ceiling cannot drift from PopulationSystem")
 	_check(GameSessionScript.MAX_SUPPORTED_NPC_RECORD_SCHEMA == NpcRecordScript.MAX_SUPPORTED_SCHEMA_VERSION, "GameSession NPC ceiling cannot drift from MayorNpcRecord")
-	_check(PopulationSystemScript.MAX_POPULATION == 500, "persisted population ceiling remains 500")
+	_check(PopulationSystemScript.MAX_POPULATION == 200_000, "persisted population ceiling is 200000")
 
 
 func _test_city_state_population_migration_boundary() -> void:
@@ -425,6 +425,26 @@ func _test_city_state_population_migration_boundary() -> void:
 	var current_probe = GameSessionScript.new(814, 814)
 	_check(current_probe.restore_envelope(current_envelope), "current CityState v2 envelope restores")
 	_check(current_probe.state != null and current_probe.state.npcs.size() == 300, "current restore hydrates 300 runtime NPC records")
+	var capacity_coordinator = VerticalSliceCoordinatorScript.new(815, 815_000, 500)
+	capacity_coordinator.call("_stash_subsystems")
+	var capacity_envelope = capacity_coordinator.session.make_envelope()
+	var capacity_probe = GameSessionScript.new(816, 816)
+	_check(capacity_probe.restore_envelope(capacity_envelope), "current 500-resident save remains readable")
+	_check(capacity_probe.state != null and capacity_probe.state.npcs.size() == 500, "current 500-resident save hydrates every runtime NPC")
+	var legacy_capacity_data: Dictionary = capacity_envelope.to_dict()
+	var legacy_capacity_population: Dictionary = legacy_capacity_data.get("state", {}).get("metadata", {}).get("vertical_slice", {}).get("population", {})
+	legacy_capacity_population["schema_version"] = 1
+	legacy_capacity_population.erase("next_transaction_sequence")
+	legacy_capacity_population.erase("income_transactions")
+	for record_value: Variant in legacy_capacity_population.get("records", []):
+		var legacy_record: Dictionary = record_value
+		legacy_record["schema_version"] = 1
+		for current_only_field: String in ["personality_tags", "appearance_tags", "salary", "debt"]:
+			legacy_record.erase(current_only_field)
+	var legacy_capacity_envelope = SaveEnvelopeScript.from_dict(legacy_capacity_data)
+	var legacy_capacity_probe = GameSessionScript.new(817, 817)
+	_check(legacy_capacity_envelope != null and legacy_capacity_probe.restore_envelope(legacy_capacity_envelope), "legacy 500-resident save remains readable")
+	_check(legacy_capacity_probe.state != null and legacy_capacity_probe.state.npcs.size() == 500, "legacy 500-resident save hydrates every runtime NPC")
 	var future_state_data: Dictionary = current_envelope.to_dict()
 	(future_state_data["state"] as Dictionary)["schema_version"] = SaveSchemaAuthorityScript.CITY_STATE_MAX_SUPPORTED_SCHEMA_VERSION + 1
 	var future_state_envelope = SaveEnvelopeScript.from_dict(future_state_data)
@@ -434,17 +454,15 @@ func _test_city_state_population_migration_boundary() -> void:
 	var over_ceiling_data: Dictionary = current_envelope.to_dict()
 	var over_ceiling_state: Dictionary = over_ceiling_data.get("state", {})
 	var over_ceiling_population: Dictionary = over_ceiling_state.get("metadata", {}).get("vertical_slice", {}).get("population", {})
-	var over_ceiling_records: Array = over_ceiling_population.get("records", [])
-	var record_template: Dictionary = Dictionary(over_ceiling_records[0]).duplicate(true)
-	for sequence: int in range(over_ceiling_records.size() + 1, PopulationSystemScript.MAX_POPULATION + 2):
-		var extra_record := record_template.duplicate(true)
-		extra_record["npc_id"] = "npc_%06d" % sequence
-		over_ceiling_records.append(extra_record)
+	var over_ceiling_records: Array = []
+	over_ceiling_records.resize(PopulationSystemScript.MAX_POPULATION + 1)
+	over_ceiling_population["records"] = over_ceiling_records
+	over_ceiling_population["next_npc_sequence"] = PopulationSystemScript.MAX_POPULATION + 2
 	(over_ceiling_state.get("metrics", {}) as Dictionary)["population"] = over_ceiling_records.size()
 	var over_ceiling_envelope = SaveEnvelopeScript.from_dict(over_ceiling_data)
 	var ceiling_hash := current_probe.deterministic_hash()
-	_check(over_ceiling_records.size() == 501, "over-ceiling fixture contains 501 unique NPC records")
-	_check(over_ceiling_envelope != null and not current_probe.restore_envelope(over_ceiling_envelope), "persisted population above 500 is rejected")
+	_check(over_ceiling_records.size() == 200_001, "over-ceiling fixture declares 200001 NPC slots")
+	_check(over_ceiling_envelope != null and not current_probe.restore_envelope(over_ceiling_envelope), "persisted population above 200000 is rejected")
 	_check(current_probe.deterministic_hash() == ceiling_hash, "population ceiling rejection does not overwrite the live session")
 
 

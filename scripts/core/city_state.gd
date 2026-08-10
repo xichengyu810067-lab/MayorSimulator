@@ -216,7 +216,10 @@ static func from_dict(data: Dictionary):
 	var hydration := _runtime_npcs_from_metadata(migrated)
 	if not bool(hydration.get("ok", false)):
 		return null
-	state.npcs = Dictionary(hydration.get("records", {})).duplicate(true)
+	# The hydration helper already deep-copies every canonical record into a new
+	# dictionary. Taking ownership here preserves the atomic boundary without a
+	# second 200k-record deep copy.
+	state.npcs = hydration.get("records", {}) as Dictionary
 	if not loaded_metrics.has("population"):
 		state.metrics["population"] = state.npcs.size()
 	state.scheduled_events = (migrated.get("scheduled_events", {}) as Dictionary).duplicate(true)
@@ -263,7 +266,9 @@ func hydrate_runtime_npcs_from_population(population_snapshot: Dictionary) -> bo
 	var hydration := _runtime_npcs_from_population_snapshot(population_snapshot)
 	if not bool(hydration.get("ok", false)):
 		return false
-	npcs = Dictionary(hydration.get("records", {})).duplicate(true)
+	# The candidate lookup is detached from the input and complete before this
+	# assignment, so taking ownership remains atomic and capacity-safe.
+	npcs = hydration.get("records", {}) as Dictionary
 	return true
 
 

@@ -3,8 +3,9 @@ extends RefCounted
 
 const SaveSchemaAuthorityScript = preload("res://scripts/core/save_schema_authority.gd")
 
-## Deterministic small-population simulation for the vertical slice.
-## All 300-500 residents remain persistent; only proxy dictionaries are pooled for display.
+## Deterministic persistent-population simulation for the vertical slice.
+## All residents remain canonical records; only bounded cohorts are simulated and
+## bounded proxy dictionaries are materialized for display.
 
 const NpcRecordScript = preload("res://scripts/systems/population/npc_record.gd")
 const PopulationRequestScript = preload("res://scripts/systems/population/population_request.gd")
@@ -14,7 +15,7 @@ const SCHEMA_VERSION := SaveSchemaAuthorityScript.POPULATION_CURRENT_SCHEMA_VERS
 const MIN_SUPPORTED_SCHEMA_VERSION := SaveSchemaAuthorityScript.POPULATION_MIN_SUPPORTED_SCHEMA_VERSION
 const MAX_SUPPORTED_SCHEMA_VERSION := SaveSchemaAuthorityScript.POPULATION_MAX_SUPPORTED_SCHEMA_VERSION
 const DEFAULT_INITIAL_POPULATION := 300
-const MAX_POPULATION := 500
+const MAX_POPULATION := 200_000
 const DEFAULT_VISIBLE_PROXIES := 24
 const MAX_VISIBLE_PROXIES := 80
 const DEFAULT_SEED := 270_419
@@ -59,14 +60,19 @@ var _sorted_npc_id_cache: Array[String] = []
 var _sorted_npc_id_cache_valid := false
 
 
-func initialize(initial_count: int = DEFAULT_INITIAL_POPULATION, seed_value: int = DEFAULT_SEED) -> void:
+func initialize(initial_count: int = DEFAULT_INITIAL_POPULATION, seed_value: int = DEFAULT_SEED) -> bool:
+	# Capacity rejection is atomic. In particular, callers probing 200001 must
+	# retain the prior canonical population instead of receiving a clamped state.
+	if initial_count > MAX_POPULATION:
+		return false
 	simulation_seed = absi(seed_value) if seed_value != 0 else DEFAULT_SEED
 	next_npc_sequence = 1
 	next_request_sequence = 1
 	next_transaction_sequence = 1
 	current_year = 1
 	records.clear()
-	_invalidate_sorted_npc_id_cache()
+	_sorted_npc_id_cache.clear()
+	_sorted_npc_id_cache_valid = true
 	requests.clear()
 	income_transactions.clear()
 	event_book = EventBookScript.new()
@@ -80,6 +86,7 @@ func initialize(initial_count: int = DEFAULT_INITIAL_POPULATION, seed_value: int
 		"population": safe_count,
 		"seed": simulation_seed,
 	})
+	return true
 
 
 func population_count() -> int:
@@ -336,17 +343,21 @@ func get_visible_proxy_data(requested_ids: PackedStringArray = PackedStringArray
 
 
 ## Returns one deterministic, unique cohort without re-sorting the population.
-## Consecutive cohort indices tile the cached ID order and wrap only after the
-## complete population has been covered.
+## Consecutive cohort indices tile the cached ID order. The final batch is a
+## short tail; wrapping begins with the following batch instead of mixing the
+## tail with records from the next traversal.
 func get_bounded_deterministic_cohort(cohort_size: int, cohort_index: int) -> PackedStringArray:
 	var ids := _cached_sorted_npc_ids()
 	var safe_size := clampi(cohort_size, 0, ids.size())
 	var cohort := PackedStringArray()
 	if safe_size == 0:
 		return cohort
-	var start := _positive_mod(cohort_index * safe_size, ids.size())
-	for offset: int in range(safe_size):
-		cohort.append(ids[(start + offset) % ids.size()])
+	var batch_count := ceili(float(ids.size()) / float(safe_size))
+	var normalized_batch := _positive_mod(cohort_index, batch_count)
+	var start := normalized_batch * safe_size
+	var batch_size := mini(safe_size, ids.size() - start)
+	for offset: int in range(batch_size):
+		cohort.append(ids[start + offset])
 	return cohort
 
 

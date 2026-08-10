@@ -66,10 +66,23 @@ var save_path: String = SAVE_PATH
 var _queued_ui_events: Array[Dictionary] = []
 var _terminal_failure_event_reason: String = ""
 
-func _init(seed: int = DEFAULT_SEED, initial_funds: int = DEFAULT_INITIAL_FUNDS) -> void:
-	new_game(seed, initial_funds)
+func _init(
+	seed: int = DEFAULT_SEED,
+	initial_funds: int = DEFAULT_INITIAL_FUNDS,
+	initial_population: int = PopulationSystemScript.DEFAULT_INITIAL_POPULATION
+) -> void:
+	new_game(seed, initial_funds, initial_population)
 
-func new_game(seed: int = DEFAULT_SEED, initial_funds: int = DEFAULT_INITIAL_FUNDS) -> void:
+
+func new_game(
+	seed: int = DEFAULT_SEED,
+	initial_funds: int = DEFAULT_INITIAL_FUNDS,
+	initial_population: int = PopulationSystemScript.DEFAULT_INITIAL_POPULATION
+) -> bool:
+	# Reject unsupported capacity before touching the live coordinator. This also
+	# keeps the invalid path free of save I/O and partial runtime state changes.
+	if initial_population < 0 or initial_population > PopulationSystemScript.MAX_POPULATION:
+		return false
 	session = GameSessionScript.new(seed, initial_funds)
 	session.clock.day_length_seconds = GAME_DAY_LENGTH_SECONDS
 	session.clock.paused = false
@@ -77,9 +90,10 @@ func new_game(seed: int = DEFAULT_SEED, initial_funds: int = DEFAULT_INITIAL_FUN
 	durability = DurabilitySystemScript.new()
 	governance = GovernanceSystemScript.new(seed)
 	population = PopulationSystemScript.new()
-	population.initialize(300, seed)
+	if not population.initialize(initial_population, seed):
+		return false
 	if not session.hydrate_runtime_population(population.to_dict()):
-		push_error("Failed to hydrate the new-game runtime NPC lookup from canonical population data.")
+		return false
 	terrain_map = CityTerrainMapScript.new()
 	terrain_map.apply_default_city_layout()
 	transport = TransportNetworkSystemScript.new()
@@ -98,6 +112,7 @@ func new_game(seed: int = DEFAULT_SEED, initial_funds: int = DEFAULT_INITIAL_FUN
 	_set_metric("municipal_trust", governance.municipal_trust, "governance.initialized")
 	_set_metric("grievance", governance.grievance, "governance.initialized")
 	_emit_changed()
+	return true
 
 func process_frame(delta_seconds: float, city_context: Dictionary = {}, autosave: bool = true) -> Array[Dictionary]:
 	if _seal_terminal_failure():

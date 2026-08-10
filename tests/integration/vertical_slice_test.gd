@@ -100,6 +100,15 @@ func _test_population_contract() -> void:
 		_check(coordinator.population.get_record(npc_id) != null, "NPC record is queryable: %s" % npc_id)
 	_check(coordinator.visible_npc_proxies(500).size() == 80, "visible NPC proxy pool remains capped at 80")
 	_check_population_mirror(coordinator, 300, "initial population")
+	var injected = _coordinator_script.new(TEST_SEED + 1, TEST_FUNDS, 500)
+	_check(injected.population.population_count() == 500, "production constructor accepts an injected initial population")
+	_check(injected.session.state.npcs.size() == 500, "injected population uses the canonical atomic runtime hydration path")
+	_check(injected.session.kernel.command_sequence == 3 and injected.session.kernel.event_sequence == 3, "injected population emits only the three metric commands and events")
+	_check(injected.next_operation_sequence == 4, "injected bulk hydration consumes no operation IDs")
+	var before_rejected_new_game_hash: String = injected.deterministic_hash()
+	_check(not injected.new_game(TEST_SEED + 2, TEST_FUNDS, 200_001), "production new_game rejects 200001 residents")
+	_check(injected.deterministic_hash() == before_rejected_new_game_hash, "rejected production new_game leaves the live state unchanged")
+	_check(not FileAccess.file_exists(ProjectSettings.globalize_path(TEST_SAVE_PATH)), "rejected production new_game performs no save I/O")
 
 
 func _test_request_completion_fact() -> void:
