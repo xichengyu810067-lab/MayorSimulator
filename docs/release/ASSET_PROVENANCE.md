@@ -1,4 +1,4 @@
-# Asset Provenance Inventory — 0.1.0-alpha.2
+# Asset Provenance Inventory — 0.1.0-alpha.3
 
 Status: **Internal-only evidence inventory. It does not grant redistribution rights.**
 

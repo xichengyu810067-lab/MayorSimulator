@@ -5,17 +5,17 @@
   "product_name_zh_tw": "城諾之音",
   "branch": "main",
   "versioning": {
-    "version": "0.1.0-alpha.2",
+    "version": "0.1.0-alpha.3",
     "windows_metadata": "0.1.0.0",
-    "target_tag": "v0.1.0-alpha.2",
+    "target_tag": null,
     "historic_alpha_1_tag": "4818b9e2bf23a97b33b98432858f7228bee14334",
     "historic_alpha_1_baseline": "dac20a65365b62a1ba370d7be8317536f67be755"
   },
   "distribution": "internal_only",
   "public_release": "no_go",
   "public_p0": ["P0-RIGHTS-001", "P0-RIGHTS-002", "P0-RIGHTS-003"],
-  "release_source_commit": "da28bd13fbc53a5dc0ddcebe944d99d402136df3",
-  "release_tag": "v0.1.0-alpha.2",
-  "internal_verdict": "conditional_go",
+  "release_source_commit": null,
+  "release_tag": null,
+  "internal_verdict": "pending_fresh_acceptance",
   "public_verdict": "no_go"
 }

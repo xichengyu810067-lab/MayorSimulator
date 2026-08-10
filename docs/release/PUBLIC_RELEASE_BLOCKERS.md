@@ -1,4 +1,4 @@
-# 《城諾之音》 / CivicTale: Voice of Promise — Public Release Blockers 0.1.0-alpha.2
+# 《城諾之音》 / CivicTale: Voice of Promise — Public Release Blockers 0.1.0-alpha.3
 
 **Public release: NO-GO.** The Windows package is INTERNAL-ONLY and must not be
 forwarded outside the authorized test group.
