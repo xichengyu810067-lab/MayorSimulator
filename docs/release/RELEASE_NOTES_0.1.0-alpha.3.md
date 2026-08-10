@@ -15,6 +15,9 @@ delivered or supported platform.
 
 ## Current decision boundary
 
-Fresh alpha.3 acceptance, ZIP fingerprint, and internal verdict are pending.
+Fresh alpha.3 acceptance passed on source `d55c62033c9d9b50d9ae359f9f9c63ce7079f0d1`:
+67/67 assertion tests, OS-kill 5/5, Windows smoke with zero product/leak
+diagnostics, and native UI capture acceptance. Internal Alpha is
+**CONDITIONAL GO** because five-language manual GUI evidence remains open.
 Public release is **NO-GO** until all three rights P0 items in
 `PUBLIC_RELEASE_BLOCKERS.md` are closed with owner-supplied evidence.

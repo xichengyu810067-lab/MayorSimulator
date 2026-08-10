@@ -14,8 +14,8 @@
   "distribution": "internal_only",
   "public_release": "no_go",
   "public_p0": ["P0-RIGHTS-001", "P0-RIGHTS-002", "P0-RIGHTS-003"],
-  "release_source_commit": null,
+  "release_source_commit": "d55c62033c9d9b50d9ae359f9f9c63ce7079f0d1",
   "release_tag": null,
-  "internal_verdict": "pending_fresh_acceptance",
+  "internal_verdict": "conditional_go",
   "public_verdict": "no_go"
 }
