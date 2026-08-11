@@ -353,7 +353,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          timeout 60s builds/linux/MayorSimulator.x86_64 --verbose --headless -- --qa-release-smoke-frames=120 > .ci/linux-startup.log 2>&1
+          timeout 60s builds/linux/MayorSimulator.x86_64 --headless -- --qa-release-smoke-frames=120 > .ci/linux-startup.log 2>&1
           grep -Fxq 'QA_RELEASE_SMOKE_ARMED frames=120' .ci/linux-startup.log
           grep -Fxq 'QA_RELEASE_SMOKE_COMPLETED' .ci/linux-startup.log
           if grep -E '^(SCRIPT ERROR|ERROR):|ObjectDB instances? .* leaked|resources? still in use at exit|Leaked instance:' .ci/linux-startup.log; then

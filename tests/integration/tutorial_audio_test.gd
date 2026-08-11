@@ -16,6 +16,7 @@ const AUDIO_PATHS := [
 var _failed := false
 var _completed_count := 0
 var _page_turn_cue_count := 0
+var _audio_tree_exited := false
 
 
 func _initialize() -> void:
@@ -105,12 +106,26 @@ func _run() -> void:
 	_check(not audio.music_enabled and not audio.music_player.playing, "music can be disabled independently")
 	audio.set_sfx_enabled(false)
 	_check(not audio.sfx_enabled, "sound effects can be disabled independently")
+	audio.set_music_enabled(true)
+	await process_frame
+	_check(audio.music_player.playing, "music is playing before graceful audio shutdown")
+	audio.tree_exited.connect(func() -> void: _audio_tree_exited = true)
+	await audio.settle_for_shutdown(self)
+	_check(not audio.music_player.playing, "graceful audio shutdown stops music playback")
+	_check(audio.music_player.stream == null, "graceful audio shutdown detaches the music stream")
+	for player: AudioStreamPlayer in audio.sfx_players:
+		_check(player.stream == null, "graceful audio shutdown detaches every SFX stream")
+	audio.free()
+	audio = null
+	for _frame in range(AudioDirectorScript.SHUTDOWN_FREE_SETTLE_FRAMES):
+		await process_frame
+	_check(_audio_tree_exited, "graceful audio shutdown releases AudioDirector before process exit")
 
 	if _failed:
-		await TestCleanup.finish(self, [audio, overlay], 1)
+		await TestCleanup.finish(self, [overlay], 1)
 	else:
 		print("Tutorial animation and original audio test passed. Pages=6 AudioAssets=%d" % AUDIO_PATHS.size())
-		await TestCleanup.finish(self, [audio, overlay], 0)
+		await TestCleanup.finish(self, [overlay], 0)
 
 
 func _check(condition: bool, message: String) -> void:
