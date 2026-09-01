@@ -2,6 +2,7 @@ extends SceneTree
 
 const NetworkLayerScript = preload("res://scripts/world/transport_network_layer.gd")
 const VehicleControllerScript = preload("res://scripts/world/transport_vehicle_controller.gd")
+const SquareGridLayoutScript = preload("res://scripts/world/square_grid_layout.gd")
 
 var _failed := false
 var _checks := 0
@@ -21,6 +22,14 @@ func _run() -> void:
 	var vehicles = VehicleControllerScript.new()
 	stage.add_child(vehicles)
 	await process_frame
+	var marker_center := Vector2(180, 120)
+	var marker_points := NetworkLayerScript.construction_marker_points(marker_center)
+	_check(marker_points.size() == 5 and marker_points[0] == marker_points[4], "construction marker is not a closed four-corner shape")
+	_check(is_equal_approx(marker_points[0].y, marker_points[1].y) and is_equal_approx(marker_points[1].x, marker_points[2].x), "construction marker still uses diamond edges")
+	var marker_width := marker_points[0].distance_to(marker_points[1])
+	var marker_height := marker_points[1].distance_to(marker_points[2])
+	_check(is_equal_approx(marker_width, marker_height), "construction marker is not square")
+	_check(is_equal_approx(marker_width, SquareGridLayoutScript.CELL_SIZE.x - 12.0), "construction marker is not constrained by canonical cell size")
 
 	var centers := {
 		"0": Vector2(80, 120),

@@ -162,11 +162,11 @@ func _validate_navigation_grid_contract() -> Object:
 	for required_kind: String in ["river_lake", "hill_cliff", "trees_scenery"]:
 		_check(represented_kinds.has(required_kind), "static navigation omits %s obstacles" % required_kind)
 
-	# This deterministic query forces the direct segment through the north lake;
-	# a valid route must bend through the meadow and remain clear at <=4 px
-	# samples after string pulling.
-	var static_start := Vector2(420, 320)
-	var static_target := Vector2(850, 320)
+	# This deterministic query forces the direct segment through the frozen
+	# north-lake squares; a valid route must bend through adjacent flat cells and
+	# remain clear at <=4 px samples after string pulling.
+	var static_start := Vector2(595, 95)
+	var static_target := Vector2(245, 305)
 	_check(bool(grid.call("is_position_walkable", static_start)), "static detour fixture start is not walkable")
 	_check(bool(grid.call("is_position_walkable", static_target)), "static detour fixture target is not walkable")
 	_check(not bool(grid.call("is_segment_walkable", static_start, static_target)), "static detour fixture no longer crosses the river/lake mask")
@@ -177,9 +177,9 @@ func _validate_navigation_grid_contract() -> Object:
 
 	# Dynamic blockers must immediately affect A* solidity and path smoothing.
 	grid.call("clear_dynamic_blockers")
-	var dynamic_start := Vector2(260, 460)
-	var dynamic_target := Vector2(860, 460)
-	var blocker_center := Vector2(560, 460)
+	var dynamic_start := Vector2(385, 445)
+	var dynamic_target := Vector2(805, 445)
+	var blocker_center := Vector2(595, 445)
 	var before_path: PackedVector2Array = grid.call("find_path", dynamic_start, dynamic_target, false)
 	_check(not before_path.is_empty(), "dynamic fixture has no baseline path")
 	grid.call("set_building_blocker", DYNAMIC_TILE_INDEX, blocker_center, true, Vector2(64, 40))

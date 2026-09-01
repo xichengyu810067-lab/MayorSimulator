@@ -1,7 +1,7 @@
 class_name CityTerrainMap
 extends RefCounted
 
-const CityNavigationGridScript = preload("res://scripts/world/city_navigation_grid.gd")
+const CityTerrainLayoutScript = preload("res://data/catalogs/city_terrain_layout.gd")
 
 ## Authoritative logical terrain state for the city map.
 ##
@@ -12,13 +12,13 @@ const CityNavigationGridScript = preload("res://scripts/world/city_navigation_gr
 
 const SCHEMA_VERSION := 1
 const LEGACY_LAYOUT_VERSION := 2
-const LAYOUT_VERSION := 3
-const GRID_COLUMNS := 10
-const GRID_ROWS := 10
-const CELL_COUNT := GRID_COLUMNS * GRID_ROWS
-const LEGACY_GRID_SIZE := 8
-const LEGACY_CELL_COUNT := LEGACY_GRID_SIZE * LEGACY_GRID_SIZE
-const LEGACY_OFFSET := Vector2i(1, 1)
+const LAYOUT_VERSION := CityTerrainLayoutScript.LAYOUT_VERSION
+const GRID_COLUMNS := CityTerrainLayoutScript.GRID_COLUMNS
+const GRID_ROWS := CityTerrainLayoutScript.GRID_ROWS
+const CELL_COUNT := CityTerrainLayoutScript.CELL_COUNT
+const LEGACY_GRID_SIZE := CityTerrainLayoutScript.LEGACY_GRID_SIZE
+const LEGACY_CELL_COUNT := CityTerrainLayoutScript.LEGACY_CELL_COUNT
+const LEGACY_OFFSET := CityTerrainLayoutScript.LEGACY_OFFSET
 const INVALID_COORDINATE := Vector2i(-1, -1)
 
 const KIND_FLAT_GRASS := "flat_grass"
@@ -131,13 +131,11 @@ func apply_default_city_layout() -> void:
 	# the established base_kind/flattened record shape so the atomic 2 -> 3
 	# migration can preserve all 100 records without reclassifying terrain.
 	_reset_terrain_state()
-	for coordinate: Vector2i in coordinates_in_display_order():
-		var model: Dictionary = CityNavigationGridScript.backdrop_terrain_for_coordinate(coordinate)
-		var modeled_kind := str(model.get("kind", KIND_FLAT_GRASS))
-		var terrain_kind := KIND_TREES if modeled_kind == "trees_scenery" else modeled_kind
+	for tile_id in CELL_COUNT:
+		var terrain_kind := CityTerrainLayoutScript.terrain_kind_for_tile_id(tile_id)
 		if not TERRAIN_RULES.has(terrain_kind):
 			terrain_kind = KIND_FLAT_GRASS
-		_base_kinds[tile_id_for_coordinate(coordinate)] = terrain_kind
+		_base_kinds[tile_id] = terrain_kind
 
 
 func is_valid_terrain_kind(kind: String) -> bool:
@@ -219,9 +217,7 @@ func tile_state(tile_id: int) -> Dictionary:
 func backdrop_model_for_tile(tile_id: int) -> Dictionary:
 	if not is_valid_tile_id(tile_id):
 		return {}
-	return CityNavigationGridScript.backdrop_terrain_for_coordinate(
-		coordinate_for_tile_id(tile_id)
-	)
+	return CityTerrainLayoutScript.model_for_tile_id(tile_id)
 
 
 func all_tile_states() -> Array[Dictionary]:
@@ -410,21 +406,8 @@ func _initialize_coordinate_mapping() -> void:
 	_coordinates_by_tile_id.clear()
 	_tile_id_by_coordinate.clear()
 
-	# Preserve the original row-major 8x8 tile ids in the central 8x8 area.
-	for legacy_row in range(LEGACY_GRID_SIZE):
-		for legacy_column in range(LEGACY_GRID_SIZE):
-			_register_coordinate(Vector2i(
-				legacy_column + LEGACY_OFFSET.x,
-				legacy_row + LEGACY_OFFSET.y
-			))
-
-	# Append the 36 new outer-ring coordinates in display row-major order.
-	for row in range(GRID_ROWS):
-		for column in range(GRID_COLUMNS):
-			var coordinate := Vector2i(column, row)
-			if _tile_id_by_coordinate.has(coordinate):
-				continue
-			_register_coordinate(coordinate)
+	for tile_id in CELL_COUNT:
+		_register_coordinate(CityTerrainLayoutScript.coordinate_for_tile_id(tile_id))
 
 	assert(_coordinates_by_tile_id.size() == CELL_COUNT)
 	assert(_tile_id_by_coordinate.size() == CELL_COUNT)

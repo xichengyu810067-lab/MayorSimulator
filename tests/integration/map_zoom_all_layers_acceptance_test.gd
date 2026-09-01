@@ -157,6 +157,8 @@ func _validate_zoom_snapshot(
 	_check(target_button != null and target_button.get_parent() == main.tile_layer, "%s click target remains on the tile layer" % phase)
 	if target_button != null:
 		var target_local_center := target_button.position + target_button.size * 0.5
+		_check(target_local_center.distance_to(local_probe) <= ROUND_TRIP_EPSILON, "%s tile control and transport endpoint share the square-cell center" % phase)
+		_check(main.npc_map_controller.tile_at_feet(local_probe) == target_tile, "%s NPC tile lookup resolves the same square-cell center" % phase)
 		var expected_target_global: Vector2 = main.tile_layer.get_global_transform_with_canvas() * target_local_center
 		_check(target_button.get_global_rect().get_center().distance_to(expected_target_global) <= TRANSFORM_EPSILON, "%s click target rect follows the shared transform" % phase)
 

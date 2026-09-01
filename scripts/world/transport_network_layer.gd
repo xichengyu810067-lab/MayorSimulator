@@ -1,6 +1,8 @@
 class_name TransportNetworkLayer
 extends Control
 
+const SquareGridLayoutScript = preload("res://scripts/world/square_grid_layout.gd")
+
 ## Static and construction-state rendering for the player-authored transport
 ## graph.  Vehicles deliberately live in TransportVehicleController so an
 ## isolated tile or station can never invent its own traffic.
@@ -171,14 +173,27 @@ func _draw_level_crossing(tile_id: int, center: Vector2, crossing_kind: String) 
 
 func _draw_construction_marker(center: Vector2, status: String) -> void:
 	var color := Color(1.0, 0.70, 0.08, 0.92) if status != "demolishing" else Color(0.94, 0.24, 0.16, 0.92)
-	var polygon := PackedVector2Array([
-		center + Vector2(0, -25), center + Vector2(26, 0),
-		center + Vector2(0, 25), center + Vector2(-26, 0), center + Vector2(0, -25),
+	var polygon := construction_marker_points(center)
+	for point_index in 4:
+		draw_dashed_line(
+			polygon[point_index],
+			polygon[point_index + 1],
+			color,
+			3.0,
+			6.0,
+			true
+		)
+
+
+static func construction_marker_points(center: Vector2) -> PackedVector2Array:
+	var half_size := SquareGridLayoutScript.CELL_SIZE * 0.5 - Vector2(6, 6)
+	return PackedVector2Array([
+		center + Vector2(-half_size.x, -half_size.y),
+		center + Vector2(half_size.x, -half_size.y),
+		center + Vector2(half_size.x, half_size.y),
+		center + Vector2(-half_size.x, half_size.y),
+		center + Vector2(-half_size.x, -half_size.y),
 	])
-	draw_dashed_line(polygon[0], polygon[1], color, 3.0, 6.0, true)
-	draw_dashed_line(polygon[1], polygon[2], color, 3.0, 6.0, true)
-	draw_dashed_line(polygon[2], polygon[3], color, 3.0, 6.0, true)
-	draw_dashed_line(polygon[3], polygon[4], color, 3.0, 6.0, true)
 
 
 func _center_for(tile_id: int) -> Vector2:

@@ -1,6 +1,9 @@
 class_name CityNavigationGrid
 extends RefCounted
 
+const CityTerrainLayoutScript = preload("res://data/catalogs/city_terrain_layout.gd")
+const SquareGridLayoutScript = preload("res://scripts/world/square_grid_layout.gd")
+
 ## Deterministic, stage-local navigation for the fixed 1120x820 city map.
 ##
 ## The navigation grid deliberately does not depend on Control/global canvas
@@ -10,10 +13,10 @@ extends RefCounted
 
 const STAGE_SIZE := Vector2(1120.0, 820.0)
 const BACKDROP_ASSET_PATH := "res://assets/images/world/backgrounds/city-map-background.png"
-const BACKDROP_ISO_TILE_STEP := Vector2(56.0, 32.0)
-const BACKDROP_ISO_MAP_ORIGIN := Vector2(560.0, 104.0)
-const BACKDROP_TILE_FOOT_OFFSET_Y := 34.0
-const BACKDROP_PLOT_HALF_EXTENTS := Vector2(49.0, 29.0)
+const BACKDROP_ISO_TILE_STEP := SquareGridLayoutScript.CELL_SIZE
+const BACKDROP_ISO_MAP_ORIGIN := SquareGridLayoutScript.GRID_ORIGIN
+const BACKDROP_TILE_FOOT_OFFSET_Y := 0.0
+const BACKDROP_PLOT_HALF_EXTENTS := SquareGridLayoutScript.CELL_SIZE * 0.5
 const BACKDROP_MIN_PLOT_COVERAGE := 0.035
 const GRID_CELL_SIZE := 10.0
 const GRID_SIZE := Vector2i(112, 82)
@@ -39,7 +42,7 @@ var _last_query_diagnostics: Dictionary = {}
 
 func _init(foot_radius: float = DEFAULT_FOOT_RADIUS) -> void:
 	_foot_radius = maxf(0.0, foot_radius)
-	_static_polygons = _create_static_polygons()
+	_static_polygons = _create_layout_terrain_polygons()
 	_configure_astar()
 	_rebuild_static_solidity()
 	_refresh_grid_solidity()
@@ -97,19 +100,15 @@ func static_classification_at(position: Vector2) -> PackedStringArray:
 	return kinds
 
 
-## The backdrop polygons are the single terrain source for both plot legality
-## and NPC navigation. They model scenery painted into the original image.
+## Layout 3's frozen backdrop classification is the shared terrain source for
+## both plot legality and NPC navigation. Its geometry now comes from the
+## canonical square grid while retaining the original image-derived kinds.
 static func backdrop_terrain_for_coordinate(coordinate: Vector2i) -> Dictionary:
-	return backdrop_terrain_for_plot(
-		backdrop_tile_center(coordinate), BACKDROP_PLOT_HALF_EXTENTS
-	)
+	return CityTerrainLayoutScript.model_for_coordinate(coordinate)
 
 
 static func backdrop_tile_center(coordinate: Vector2i) -> Vector2:
-	return Vector2(
-		BACKDROP_ISO_MAP_ORIGIN.x + float(coordinate.x - coordinate.y) * BACKDROP_ISO_TILE_STEP.x,
-		BACKDROP_ISO_MAP_ORIGIN.y + float(coordinate.x + coordinate.y) * BACKDROP_ISO_TILE_STEP.y + BACKDROP_TILE_FOOT_OFFSET_Y
-	)
+	return SquareGridLayoutScript.center_for_coordinate(coordinate)
 
 
 static func backdrop_terrain_for_plot(center: Vector2, half_extents: Vector2) -> Dictionary:
@@ -264,7 +263,7 @@ func set_building_blocker(
 	enabled: bool = true,
 	half_extents: Vector2 = DEFAULT_DYNAMIC_HALF_EXTENTS
 ) -> void:
-	set_dynamic_diamond(
+	set_dynamic_rect(
 		"building:%d" % tile_index,
 		center,
 		half_extents,
@@ -281,7 +280,7 @@ func set_construction_blocker(
 	enabled: bool = true,
 	half_extents: Vector2 = DEFAULT_DYNAMIC_HALF_EXTENTS
 ) -> void:
-	set_dynamic_diamond(
+	set_dynamic_rect(
 		"construction:%d" % tile_index,
 		center,
 		half_extents,
@@ -299,7 +298,7 @@ func set_terrain_blocker(
 	enabled: bool = true,
 	half_extents: Vector2 = DEFAULT_DYNAMIC_HALF_EXTENTS
 ) -> void:
-	set_dynamic_diamond(
+	set_dynamic_rect(
 		"terrain:%d" % tile_index,
 		center,
 		half_extents,
@@ -446,7 +445,36 @@ func set_dynamic_diamond(
 		safe_extents,
 		kind,
 		tile_index,
-		source if not source.is_empty() else kind
+		source if not source.is_empty() else kind,
+		_diamond_points(center, safe_extents)
+	)
+	_refresh_grid_solidity()
+
+
+func set_dynamic_rect(
+	blocker_id: String,
+	center: Vector2,
+	half_extents: Vector2,
+	enabled: bool = true,
+	kind: String = "dynamic",
+	tile_index: int = -1,
+	source: String = ""
+) -> void:
+	if blocker_id.is_empty():
+		return
+	if not enabled:
+		_dynamic_blockers.erase(blocker_id)
+		_refresh_grid_solidity()
+		return
+	var safe_extents := _safe_half_extents(half_extents)
+	_dynamic_blockers[blocker_id] = _dynamic_blocker_record(
+		blocker_id,
+		center,
+		safe_extents,
+		kind,
+		tile_index,
+		source if not source.is_empty() else kind,
+		_rect_points(center, safe_extents)
 	)
 	_refresh_grid_solidity()
 
@@ -467,12 +495,10 @@ func set_flattened_terrain_apertures(
 ) -> void:
 	var next_apertures: Dictionary = {}
 	var safe_extents := _safe_half_extents(half_extents)
-	var edge_normal_length := sqrt(
-		1.0 / (safe_extents.x * safe_extents.x)
-		+ 1.0 / (safe_extents.y * safe_extents.y)
+	var walkable_extents := Vector2(
+		maxf(0.5, safe_extents.x - _foot_radius),
+		maxf(0.5, safe_extents.y - _foot_radius)
 	)
-	var clearance_scale := clampf(1.0 - _foot_radius * edge_normal_length, 0.05, 1.0)
-	var walkable_extents := safe_extents * clearance_scale
 	for tile_variant: Variant in flattened_centers.keys():
 		var center_variant: Variant = flattened_centers[tile_variant]
 		if not center_variant is Vector2:
@@ -484,7 +510,7 @@ func set_flattened_terrain_apertures(
 			"center": center_variant,
 			"half_extents": safe_extents,
 			"walkable_half_extents": walkable_extents,
-			"points": _diamond_points(center_variant, walkable_extents),
+			"points": _rect_points(center_variant, walkable_extents),
 		}
 	_flattened_terrain_apertures = next_apertures
 	_rebuild_static_solidity()
@@ -795,8 +821,10 @@ func _dynamic_blocker_record(
 	half_extents: Vector2,
 	kind: String,
 	tile_index: int,
-	source: String
+	source: String,
+	points: PackedVector2Array = PackedVector2Array()
 ) -> Dictionary:
+	var resolved_points := points if not points.is_empty() else _rect_points(center, half_extents)
 	return {
 		"id": blocker_id,
 		"kind": kind,
@@ -804,8 +832,17 @@ func _dynamic_blocker_record(
 		"tile_index": tile_index,
 		"center": center,
 		"half_extents": half_extents,
-		"points": _diamond_points(center, half_extents),
+		"points": resolved_points,
 	}
+
+
+static func _rect_points(center: Vector2, half_extents: Vector2) -> PackedVector2Array:
+	return PackedVector2Array([
+		center + Vector2(-half_extents.x, -half_extents.y),
+		center + Vector2(half_extents.x, -half_extents.y),
+		center + Vector2(half_extents.x, half_extents.y),
+		center + Vector2(-half_extents.x, half_extents.y),
+	])
 
 
 func _reset_query_diagnostics() -> void:
@@ -819,6 +856,27 @@ func _reset_query_diagnostics() -> void:
 		"smoothed_point_count": 0,
 		"path_length": 0.0,
 	}
+
+
+static func _create_layout_terrain_polygons() -> Array[Dictionary]:
+	var polygons: Array[Dictionary] = []
+	for tile_id in CityTerrainLayoutScript.CELL_COUNT:
+		if not CityTerrainLayoutScript.is_blocked_tile_id(tile_id):
+			continue
+		var model := CityTerrainLayoutScript.model_for_tile_id(tile_id)
+		var center := Vector2(model.get("plot_center", Vector2.INF))
+		if center == Vector2.INF:
+			continue
+		var half_extents := SquareGridLayoutScript.CELL_SIZE * 0.5
+		polygons.append({
+			"id": "terrain_layout3:%d" % tile_id,
+			"kind": str(model.get("kind", "terrain")),
+			"tile_index": tile_id,
+			"center": center,
+			"half_extents": half_extents,
+			"points": _rect_points(center, half_extents),
+		})
+	return polygons
 
 
 static func _create_static_polygons() -> Array[Dictionary]:

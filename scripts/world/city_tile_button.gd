@@ -118,12 +118,7 @@ func _ready() -> void:
 
 
 func _has_point(point: Vector2) -> bool:
-	if size.x <= 0.0 or size.y <= 0.0:
-		return false
-	var center := size * 0.5
-	var normalized := absf(point.x - center.x) / maxf(center.x, 1.0)
-	normalized += absf(point.y - center.y) / maxf(center.y, 1.0)
-	return normalized <= 1.0
+	return size.x > 0.0 and size.y > 0.0 and Rect2(Vector2.ZERO, size).has_point(point)
 
 func set_tile(data: Dictionary) -> void:
 	tile_index = int(data.get("index", 0))
@@ -354,12 +349,11 @@ func _draw_flattened_ground_patch() -> void:
 		draw_line(center + tuft_offset, center + tuft_offset + Vector2(2, -5), Color(0.30, 0.55, 0.16, 0.75), 1.4, true)
 
 func _draw_terrain_overlay() -> void:
-	var c := size * 0.5
 	var p := PackedVector2Array([
-		Vector2(c.x, 3),
-		Vector2(size.x - 4, c.y),
-		Vector2(c.x, size.y - 4),
-		Vector2(4, c.y)
+		Vector2(3, 3),
+		Vector2(size.x - 3, 3),
+		Vector2(size.x - 3, size.y - 3),
+		Vector2(3, size.y - 3),
 	])
 	var overlay_color := Color(1.0, 1.0, 1.0, 0.08) if not is_dark_mode else Color(0.0, 0.0, 0.0, 0.22)
 	if is_building_mode and building_name == "" and construction_job.is_empty() and placement_allowed:
@@ -1205,13 +1199,12 @@ func _draw_pictogram_p(pos: Vector2) -> void:
 	draw_line(pos + Vector2(0, 12), pos + Vector2(16, 12), white, 4)
 
 func _draw_selection() -> void:
-	var c := size * 0.5
 	var p := PackedVector2Array([
-		Vector2(c.x, 2),
-		Vector2(size.x - 2, c.y),
-		Vector2(c.x, size.y - 2),
-		Vector2(2, c.y),
-		Vector2(c.x, 2)
+		Vector2(2, 2),
+		Vector2(size.x - 2, 2),
+		Vector2(size.x - 2, size.y - 2),
+		Vector2(2, size.y - 2),
+		Vector2(2, 2)
 	])
 	var color := Color(1.0, 0.88, 0.20) if selected else Color(1.0, 1.0, 1.0, 0.85)
 	draw_polyline(p, color, 4.0)

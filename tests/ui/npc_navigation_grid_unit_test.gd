@@ -1,6 +1,8 @@
 extends SceneTree
 
 const CityNavigationGridScript = preload("res://scripts/world/city_navigation_grid.gd")
+const CityTerrainLayoutScript = preload("res://data/catalogs/city_terrain_layout.gd")
+const SquareGridLayoutScript = preload("res://scripts/world/square_grid_layout.gd")
 const SAMPLE_STEP := 4.0
 
 var _failed := false
@@ -17,10 +19,8 @@ func _run() -> void:
 	_check(is_equal_approx(navigation.grid_cell_size(), 10.0), "AStar grid cell size is not 10 px")
 	_check(is_equal_approx(navigation.foot_radius(), 9.0), "default foot radius changed")
 
-	_validate_landmarks(navigation)
-	_validate_isolated_scenery_routes(navigation)
+	_validate_square_layout_terrain(navigation)
 	_validate_foot_radius_inflation(navigation)
-	_validate_static_detours(navigation)
 	_validate_dynamic_replanning(navigation)
 	_validate_corner_safety(navigation)
 	_validate_nearest_and_no_route(navigation)
@@ -34,6 +34,23 @@ func _run() -> void:
 			navigation.get_debug_static_polygons().size(),
 		])
 		quit(0)
+
+
+func _validate_square_layout_terrain(navigation) -> void:
+	var blocked_count := 0
+	for tile_id in CityTerrainLayoutScript.CELL_COUNT:
+		var model := CityTerrainLayoutScript.model_for_tile_id(tile_id)
+		var center := Vector2(model.get("plot_center", Vector2.INF))
+		var blocked := CityTerrainLayoutScript.is_blocked_tile_id(tile_id)
+		_check(center != Vector2.INF, "layout 3 tile %d lacks a square center" % tile_id)
+		_check(navigation.is_position_walkable(center) != blocked, "layout 3 tile %d walkability disagrees with its frozen terrain kind" % tile_id)
+		var classifications: PackedStringArray = navigation.static_classification_at(center)
+		if blocked:
+			blocked_count += 1
+			_check(classifications.has(str(model.get("kind", ""))), "layout 3 tile %d lacks its frozen static classification" % tile_id)
+		else:
+			_check(classifications.is_empty(), "flat layout 3 tile %d inherited non-square scenery" % tile_id)
+	_check(blocked_count == 32, "frozen layout 3 static blocker count changed")
 
 
 func _validate_landmarks(navigation) -> void:
@@ -214,7 +231,7 @@ func _validate_corner_safety(navigation) -> void:
 
 
 func _validate_nearest_and_no_route(navigation) -> void:
-	var unsafe_lake_point := Vector2(650, 260)
+	var unsafe_lake_point := SquareGridLayoutScript.center_for_coordinate(Vector2i(1, 1))
 	var nearest_variant: Variant = navigation.nearest_safe_position(unsafe_lake_point, 160.0)
 	_check(nearest_variant != null, "nearest-safe lookup failed near the lake")
 	if nearest_variant != null:

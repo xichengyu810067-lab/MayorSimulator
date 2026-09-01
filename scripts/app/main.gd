@@ -7,6 +7,7 @@ const BuildingVisuals = preload("res://data/catalogs/building_visuals.gd")
 const Policies = preload("res://data/catalogs/policies.gd")
 const CityBackdrop = preload("res://scripts/world/city_backdrop.gd")
 const CityTileButton = preload("res://scripts/world/city_tile_button.gd")
+const SquareGridLayoutScript = preload("res://scripts/world/square_grid_layout.gd")
 const NpcMapControllerScript = preload("res://scripts/app/npc_map_controller.gd")
 const VerticalSliceCoordinatorScript = preload("res://scripts/app/vertical_slice_coordinator.gd")
 const CitySimulationServiceScript = preload("res://scripts/app/city_simulation_service.gd")
@@ -43,10 +44,13 @@ const RESIDENT_INCOME_TREASURY_SCALE := 0.0005
 
 const GRID_SIZE := CityTerrainMapScript.GRID_COLUMNS
 const CELL_COUNT := CityTerrainMapScript.CELL_COUNT
-const ISO_TILE_SIZE := Vector2(104, 104)
-const ISO_TILE_STEP := Vector2(56, 32)
-const ISO_MAP_ORIGIN := Vector2(560, 104)
-const MAP_STAGE_SIZE := Vector2(1120, 820)
+const GRID_CELL_SIZE := SquareGridLayoutScript.CELL_SIZE
+# Compatibility aliases for existing integrations. Their values now describe
+# the square grid, not an isometric projection.
+const ISO_TILE_SIZE := GRID_CELL_SIZE
+const ISO_TILE_STEP := GRID_CELL_SIZE
+const ISO_MAP_ORIGIN := SquareGridLayoutScript.GRID_ORIGIN
+const MAP_STAGE_SIZE := SquareGridLayoutScript.STAGE_SIZE
 const MAP_ZOOM_MIN := 0.65
 const MAP_ZOOM_MAX := 1.75
 const MAP_ZOOM_STEP := 0.10
@@ -2092,11 +2096,8 @@ func _build_map_panel() -> Control:
 
 	grid_buttons.resize(CELL_COUNT)
 	var terrain = _terrain_map()
-	for layer in range(GRID_SIZE * 2 - 1):
-		for row in range(GRID_SIZE):
-			var col := layer - row
-			if col < 0 or col >= GRID_SIZE:
-				continue
+	for row in range(GRID_SIZE):
+		for col in range(GRID_SIZE):
 			var index: int = int(terrain.tile_id_for_coordinate(Vector2i(col, row))) if terrain != null else row * GRID_SIZE + col
 			var cell: Button = CityTileButton.new()
 			cell.custom_minimum_size = ISO_TILE_SIZE
@@ -2158,16 +2159,10 @@ func _build_map_panel() -> Control:
 
 
 func _iso_tile_position(index: int) -> Vector2:
-	var coordinate := _terrain_coordinate(index)
-	var row := coordinate.y
-	var col := coordinate.x
-	return Vector2(
-		ISO_MAP_ORIGIN.x + float(col - row) * ISO_TILE_STEP.x - ISO_TILE_SIZE.x * 0.5,
-		ISO_MAP_ORIGIN.y + float(col + row) * ISO_TILE_STEP.y - 36.0
-	)
+	return SquareGridLayoutScript.rect_for_coordinate(_terrain_coordinate(index)).position
 
 func _iso_tile_center(index: int) -> Vector2:
-	return _iso_tile_position(index) + Vector2(ISO_TILE_SIZE.x * 0.5, 70.0)
+	return SquareGridLayoutScript.center_for_coordinate(_terrain_coordinate(index))
 
 
 func _terrain_map():
@@ -2277,12 +2272,18 @@ func _transport_direction_pair(from_tile: int, to_tile: int) -> PackedStringArra
 
 func _npc_map_snapshot() -> Dictionary:
 	var tile_centers := PackedVector2Array()
+	var tile_ids_by_display_order := PackedInt32Array()
 	var building_centers := {}
 	var construction_centers := {}
 	var blocked_tiles := {}
 	var terrain_blockers := {}
 	var flattened_terrain_centers := {}
 	var terrain = _terrain_map()
+	if terrain != null:
+		tile_ids_by_display_order = terrain.tile_ids_in_display_order()
+	else:
+		for tile_index in CELL_COUNT:
+			tile_ids_by_display_order.append(tile_index)
 	var transport_blocked_tiles := PackedInt32Array()
 	var crossing_tile_ids := PackedInt32Array()
 	if vertical_slice != null and vertical_slice.has_method("transport_navigation_blocked_tile_ids"):
@@ -2348,16 +2349,19 @@ func _npc_map_snapshot() -> Dictionary:
 			blocked_tiles[tile_index] = true
 	return {
 		"tile_centers": tile_centers,
+		"tile_ids_by_display_order": tile_ids_by_display_order,
 		"building_centers": building_centers,
 		"construction_centers": construction_centers,
 		"terrain_blockers": terrain_blockers,
 		"flattened_terrain_centers": flattened_terrain_centers,
 		"blocked_tiles": blocked_tiles,
 		"crossing_tile_ids": crossing_tile_ids,
-		"iso_tile_size": ISO_TILE_SIZE,
-		"iso_tile_step": ISO_TILE_STEP,
-		"terrain_blocker_half_extents": Vector2(ISO_TILE_SIZE.x * 0.48, ISO_TILE_STEP.y),
-		"structure_blocker_half_extents": Vector2(ISO_TILE_SIZE.x * 0.48, ISO_TILE_STEP.y),
+		"grid_cell_size": GRID_CELL_SIZE,
+		"grid_origin": SquareGridLayoutScript.GRID_ORIGIN,
+		"iso_tile_size": GRID_CELL_SIZE,
+		"iso_tile_step": GRID_CELL_SIZE,
+		"terrain_blocker_half_extents": GRID_CELL_SIZE * 0.5,
+		"structure_blocker_half_extents": GRID_CELL_SIZE * 0.5,
 	}
 
 func _layout_map_stage() -> void:

@@ -2,6 +2,7 @@ extends SceneTree
 
 const CityTerrainMapScript = preload("res://scripts/world/city_terrain_map.gd")
 const NpcMapControllerScript = preload("res://scripts/app/npc_map_controller.gd")
+const SquareGridLayoutScript = preload("res://scripts/world/square_grid_layout.gd")
 
 const TERRAIN_KINDS := [
 	"trees",
@@ -177,16 +178,19 @@ func _validate_all_terrain_blockers(navigation, centers: PackedVector2Array) -> 
 
 
 func _validate_backdrop_flatten_aperture(navigation) -> void:
-	var lake_point := Vector2(640, 260)
+	var lake_point := SquareGridLayoutScript.center_for_coordinate(Vector2i(1, 1))
+	var adjacent_lake_point := SquareGridLayoutScript.center_for_coordinate(Vector2i(2, 1))
 	_check(
 		navigation.static_classification_at(lake_point).has("river_lake"),
-		"known lake point is absent from the backdrop model"
+		"frozen lake tile is absent from the square terrain model"
 	)
-	_check(not navigation.is_position_walkable(lake_point), "NPC can walk on the backdrop lake")
-	navigation.set_flattened_terrain_apertures({97: lake_point}, Vector2(74, 46))
-	_check(navigation.is_position_walkable(lake_point), "completed earthworks did not open the flattened backdrop plot")
+	_check(not navigation.is_position_walkable(lake_point), "NPC can walk on the frozen square lake tile")
+	_check(not navigation.is_position_walkable(adjacent_lake_point), "adjacent frozen lake fixture is unexpectedly walkable")
+	navigation.set_flattened_terrain_apertures({0: lake_point}, SquareGridLayoutScript.CELL_SIZE * 0.5)
+	_check(navigation.is_position_walkable(lake_point), "completed earthworks did not open the flattened square plot")
+	_check(not navigation.is_position_walkable(adjacent_lake_point), "flattening one square plot opened an adjacent tile")
 	var apertures: Array[Dictionary] = navigation.get_debug_flattened_terrain_apertures()
-	_check(apertures.size() == 1 and int(apertures[0].get("tile_index", -1)) == 97, "flattened backdrop aperture is not traceable")
+	_check(apertures.size() == 1 and int(apertures[0].get("tile_index", -1)) == 0, "flattened square aperture is not traceable")
 
 
 func _records_by_id(records: Array[Dictionary]) -> Dictionary:
