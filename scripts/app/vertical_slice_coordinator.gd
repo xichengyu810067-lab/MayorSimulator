@@ -16,6 +16,8 @@ const VerticalSliceViewModelAssemblerScript = preload("res://scripts/app/vertica
 const CityTerrainMapScript = preload("res://scripts/world/city_terrain_map.gd")
 const TransportNetworkSystemScript = preload("res://scripts/systems/city/transport_network_system.gd")
 const TransportModesScript = preload("res://data/catalogs/transport_modes.gd")
+const SaveSchemaAuthorityScript = preload("res://scripts/core/save_schema_authority.gd")
+const BuildingFootprintsScript = preload("res://data/catalogs/building_footprints.gd")
 
 const DEFAULT_SEED := 20_260_715
 const DEFAULT_INITIAL_FUNDS := 250_000
@@ -266,6 +268,69 @@ func placement_quote(display_name: String, worker_count: int = -1) -> Dictionary
 		"can_afford": treasury_balance() >= total_cost,
 		"blueprint": blueprint.duplicate(true)
 	}
+
+
+func placement_footprint_quote(
+	display_name: String,
+	anchor_tile_id: int,
+	worker_count: int = -1
+) -> Dictionary:
+	var quote := placement_quote(display_name, worker_count)
+	if not bool(quote.get("ok", false)):
+		return quote
+	var blueprint: Dictionary = quote.get("blueprint", {})
+	var footprint := BuildingFootprintsScript.resolve_for_size(
+		str(blueprint.get("size_tier", "")),
+		anchor_tile_id,
+		terrain_map
+	)
+	if not bool(footprint.get("ok", false)):
+		return {
+			"ok": false,
+			"error": str(footprint.get("error", "invalid_footprint")),
+			"anchor_tile_id": anchor_tile_id,
+		}
+	var occupied_tile_ids: Array[int] = []
+	for tile_variant: Variant in footprint.get("occupied_tile_ids", []):
+		occupied_tile_ids.append(int(tile_variant))
+	var transport_tiles: Dictionary = {}
+	for tile_id: int in transport_navigation_blocked_tile_ids():
+		transport_tiles[tile_id] = true
+	for tile_id: int in occupied_tile_ids:
+		if not terrain_map.is_buildable(tile_id):
+			return {
+				"ok": false,
+				"error": "terrain_not_flat",
+				"anchor_tile_id": anchor_tile_id,
+				"blocked_tile_id": tile_id,
+				"terrain": terrain_map.tile_state(tile_id),
+			}
+		if not get_building_by_tile(tile_id).is_empty():
+			return {
+				"ok": false,
+				"error": "tile_occupied",
+				"occupancy_kind": "building",
+				"blocked_tile_id": tile_id,
+			}
+		if not active_construction_for_tile(tile_id).is_empty():
+			return {
+				"ok": false,
+				"error": "tile_occupied",
+				"occupancy_kind": "construction",
+				"blocked_tile_id": tile_id,
+			}
+		if transport_tiles.has(tile_id):
+			return {
+				"ok": false,
+				"error": "tile_occupied",
+				"occupancy_kind": "transport",
+				"blocked_tile_id": tile_id,
+			}
+	quote["anchor_tile_id"] = anchor_tile_id
+	quote["footprint_id"] = str(footprint.get("footprint_id", ""))
+	quote["occupied_tile_ids"] = occupied_tile_ids
+	quote["can_place"] = true
+	return quote
 
 
 func active_construction_for_tile(tile_index: int) -> Dictionary:
@@ -738,20 +803,15 @@ func start_approved_building(display_name: String, tile_index: int, worker_count
 		return _terminal_command_error()
 	if terrain_map == null or not terrain_map.is_valid_tile_id(tile_index):
 		return {"ok": false, "error": "invalid_tile_id"}
-	if not terrain_map.is_buildable(tile_index):
-		return {
-			"ok": false,
-			"error": "terrain_not_flat",
-			"terrain": terrain_map.tile_state(tile_index),
-		}
-	if get_building_by_tile(tile_index).size() > 0 or _has_active_job_on_tile(tile_index):
-		return {"ok": false, "error": "tile_occupied"}
-	var active := active_blueprint_status(display_name)
-	var library_id := str(active.get("library_id", ""))
+	var placement := placement_footprint_quote(display_name, tile_index, worker_count)
+	if not bool(placement.get("ok", false)):
+		if str(placement.get("error", "")) == "blueprint_not_found":
+			return {"ok": false, "error": "approved_blueprint_required"}
+		return placement
+	var library_id := str(placement.get("library_id", ""))
 	if library_id.is_empty() or not blueprint_library_service.has_entry(library_id):
 		return {"ok": false, "error": "approved_blueprint_required"}
-	var library_entry: Dictionary = blueprint_library_service.entry(library_id)
-	var blueprint: Dictionary = Dictionary(library_entry.get("blueprint", {})).duplicate(true)
+	var blueprint: Dictionary = Dictionary(placement.get("blueprint", {})).duplicate(true)
 	var estimate: Dictionary = construction.estimate_job(blueprint, "build", worker_count)
 	var total_cost := int(blueprint.get("base_cost", 0)) + int(estimate.get("total_labor_cost", 0))
 	if treasury_balance() < total_cost:
@@ -762,7 +822,13 @@ func start_approved_building(display_name: String, tile_index: int, worker_count
 		worker_count,
 		game_day(),
 		"tile_%02d" % tile_index,
-		{"tile_index": tile_index, "building_name": display_name}
+		{
+			"tile_index": tile_index,
+			"anchor_tile_id": tile_index,
+			"footprint_id": str(placement.get("footprint_id", "")),
+			"occupied_tile_ids": Array(placement.get("occupied_tile_ids", [])).duplicate(),
+			"building_name": display_name,
+		}
 	)
 	if not bool(result.get("ok", false)):
 		return result
@@ -777,28 +843,51 @@ func start_approved_building(display_name: String, tile_index: int, worker_count
 	_upsert_construction(job)
 	_push_ui_event("construction_started", {"job": job, "total_cost": total_cost})
 	_emit_changed()
-	return {"ok": true, "job": job, "total_cost": total_cost, "blueprint_library_id": library_id}
+	return {
+		"ok": true,
+		"job": job,
+		"total_cost": total_cost,
+		"blueprint_library_id": library_id,
+		"anchor_tile_id": tile_index,
+		"footprint_id": str(placement.get("footprint_id", "")),
+		"occupied_tile_ids": Array(placement.get("occupied_tile_ids", [])).duplicate(),
+	}
 
-func register_existing_building(tile_index: int, display_name: String, customization: Dictionary = {}) -> Dictionary:
+func register_existing_building(
+	tile_index: int,
+	display_name: String,
+	customization: Dictionary = {},
+	size_tier: String = BuildingFootprintsScript.SMALL
+) -> Dictionary:
 	if governance.has_failed():
 		return _terminal_command_error()
-	var existing := get_building_by_tile(tile_index)
-	if not existing.is_empty():
-		return existing
-	# Existing-building registration is a migration/bootstrap seam.  Preserve its
-	# structure and normalize the occupied tile to the same invariant enforced by
-	# normal construction, without charging a second time.
-	if terrain_map != null and terrain_map.is_valid_tile_id(tile_index) and not terrain_map.is_buildable(tile_index):
-		terrain_map.flatten_tile(tile_index)
+	var footprint := BuildingFootprintsScript.resolve_for_size(size_tier, tile_index, terrain_map)
+	if not bool(footprint.get("ok", false)):
+		return {}
+	var occupied_tile_ids: Array = Array(footprint.get("occupied_tile_ids", [])).duplicate()
 	var definition = _definition_for_name(display_name)
 	if definition == null:
 		return {}
+	for occupied_tile_id: int in occupied_tile_ids:
+		var existing := get_building_by_tile(occupied_tile_id)
+		if not existing.is_empty():
+			return existing if occupied_tile_id == tile_index else {}
+	# Existing-building registration is a current bootstrap seam. It does not
+	# charge construction costs, but its explicit size still derives the same
+	# canonical footprint as normal construction. Legacy single-tile provenance
+	# is written only by GameSession's schema 4-8 migration path.
+	for occupied_tile_id: int in occupied_tile_ids:
+		if not terrain_map.is_buildable(occupied_tile_id):
+			terrain_map.flatten_tile(occupied_tile_id)
 	var instance_id := _next_building_id()
 	var record := {
 		"building_id": instance_id,
 		"definition_id": String(definition.id),
 		"building_name": display_name,
 		"tile_index": tile_index,
+		"anchor_tile_id": tile_index,
+		"footprint_id": str(footprint.get("footprint_id", "")),
+		"occupied_tile_ids": occupied_tile_ids,
 		"status": "active",
 		"durability": 100,
 		"blueprint": {
@@ -806,7 +895,7 @@ func register_existing_building(tile_index: int, display_name: String, customiza
 			"building_id": String(definition.id),
 			"material_id": String(definition.default_material_id),
 			"floors": 2,
-			"size_tier": "medium",
+			"size_tier": size_tier,
 			"customization": customization.duplicate(true)
 		}
 	}
@@ -844,6 +933,7 @@ func start_demolition(tile_index: int, worker_count: int) -> Dictionary:
 	if str(building.get("status", "active")) == "demolition" or _has_active_job_for_target(str(building.get("building_id", ""))):
 		return {"ok": false, "error": "demolition_already_active"}
 	var blueprint: Dictionary = building.get("blueprint", {})
+	var anchor_tile_id := int(building.get("anchor_tile_id", building.get("tile_index", tile_index)))
 	# Demolition must be financially rejected before start_operation() allocates
 	# a job ID or inserts a job. Keep the scheduler's validation order so an
 	# invalid worker request is still reported before a treasury error.
@@ -863,7 +953,7 @@ func start_demolition(tile_index: int, worker_count: int) -> Dictionary:
 		worker_count,
 		game_day(),
 		str(building["building_id"]),
-		{"tile_index": tile_index, "building_name": str(building["building_name"])}
+		{"tile_index": anchor_tile_id, "building_name": str(building["building_name"])}
 	)
 	if not bool(result.get("ok", false)):
 		return result
@@ -888,6 +978,7 @@ func repair_building(tile_index: int) -> Dictionary:
 	if building.is_empty():
 		return {"ok": false, "error": "building_not_found"}
 	var building_id := str(building["building_id"])
+	var anchor_tile_id := int(building.get("anchor_tile_id", building.get("tile_index", tile_index)))
 	if _has_active_demolition_job_for_target(building_id):
 		return {"ok": false, "error": "demolition_in_progress"}
 	var quote: Dictionary = durability.repair_quote(building_id)
@@ -896,14 +987,14 @@ func repair_building(tile_index: int) -> Dictionary:
 	var cost := int(quote.get("total_cost", 0))
 	if treasury_balance() < cost:
 		return {"ok": false, "error": "insufficient_treasury", "required": cost}
-	_post_ledger(-cost, "durability.repair", building_id, {"tile_index": tile_index})
+	_post_ledger(-cost, "durability.repair", building_id, {"tile_index": anchor_tile_id})
 	var result: Dictionary = durability.repair(building_id, game_day())
 	if bool(result.get("ok", false)):
 		building["durability"] = 100
 		building["status"] = "active"
 		_upsert_building(building, "building.repaired")
 		_record_fact(result["event"])
-		_push_ui_event("building_repaired", {"tile_index": tile_index, "cost": cost})
+		_push_ui_event("building_repaired", {"tile_index": anchor_tile_id, "cost": cost})
 	_emit_changed()
 	return result
 
@@ -1160,7 +1251,12 @@ func set_maintenance_payment(enabled: bool) -> void:
 func get_building_by_tile(tile_index: int) -> Dictionary:
 	for building_id in _sorted_keys(session.state.buildings):
 		var building: Dictionary = session.state.buildings[building_id]
-		if int(building.get("tile_index", -1)) == tile_index:
+		var occupied_value: Variant = building.get("occupied_tile_ids", null)
+		if occupied_value is Array or occupied_value is PackedInt32Array or occupied_value is PackedInt64Array:
+			for occupied_variant: Variant in occupied_value:
+				if int(occupied_variant) == tile_index:
+					return building.duplicate(true)
+		if occupied_value == null and int(building.get("tile_index", -1)) == tile_index:
 			return building.duplicate(true)
 	return {}
 
@@ -1409,16 +1505,34 @@ func _handle_construction_fact(event: Dictionary) -> bool:
 	if operation == "build":
 		var display_name := str(metadata.get("building_name", ""))
 		var definition = _definition_for_name(display_name)
+		var footprint_validation := BuildingFootprintsScript.validate_persisted_record(
+			metadata,
+			terrain_map,
+			str(job.get("blueprint", {}).get("size_tier", ""))
+		)
+		if not bool(footprint_validation.get("valid", false)):
+			_push_ui_event("building_completion_failed", {
+				"job_id": job_id,
+				"error": str(footprint_validation.get("error", "invalid_footprint")),
+			})
+			return false
 		var instance_id := _next_building_id()
 		var record := {
 			"building_id": instance_id,
 			"definition_id": str(job.get("blueprint", {}).get("building_id", "")),
 			"building_name": display_name,
 			"tile_index": int(metadata.get("tile_index", -1)),
+			"anchor_tile_id": int(footprint_validation.get("anchor_tile_id", -1)),
+			"footprint_id": str(footprint_validation.get("footprint_id", "")),
+			"occupied_tile_ids": Array(footprint_validation.get("occupied_tile_ids", [])).duplicate(),
 			"status": "active",
 			"durability": 100,
 			"blueprint": job.get("blueprint", {}).duplicate(true)
 		}
+		if bool(footprint_validation.get("legacy_single_provenance", false)):
+			record[BuildingFootprintsScript.LEGACY_SINGLE_PROVENANCE_FIELD] = (
+				BuildingFootprintsScript.LEGACY_SINGLE_PROVENANCE
+			)
 		var population_change := _adjust_population(
 			maxi(0, int(definition.effects.get("population", 0))) if definition != null else 0,
 			"population.building_completed",
@@ -1670,7 +1784,7 @@ func _sync_governance_to_core(reason_tag: String) -> void:
 func _stash_subsystems() -> void:
 	var blueprint_snapshot: Dictionary = blueprint_library_service.snapshot()
 	session.state.metadata["vertical_slice"] = {
-		"schema_version": 7,
+		"schema_version": SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION,
 		"construction": construction.to_dict(),
 		"durability": durability.to_dict(),
 		"governance": governance.to_dict(),
@@ -1733,9 +1847,9 @@ func _restore_subsystems() -> void:
 	if source_schema < 5:
 		for building_variant: Variant in session.state.buildings.values():
 			var building_record: Dictionary = building_variant
-			var occupied_tile := int(building_record.get("tile_index", -1))
-			if terrain_map.is_valid_tile_id(occupied_tile) and not terrain_map.is_buildable(occupied_tile):
-				terrain_map.flatten_tile(occupied_tile)
+			for occupied_tile: int in _building_record_occupied_tile_ids(building_record):
+				if terrain_map.is_valid_tile_id(occupied_tile) and not terrain_map.is_buildable(occupied_tile):
+					terrain_map.flatten_tile(occupied_tile)
 		for job_variant: Variant in construction.active_jobs():
 			var job: Dictionary = job_variant
 			for job_tile: int in _construction_job_tile_indices(job):
@@ -1898,9 +2012,9 @@ func _transport_occupied_tile_ids(city_grid: Array) -> Array[int]:
 		if not str(city_grid[tile_id]).is_empty():
 			occupied[tile_id] = true
 	for building_variant: Variant in session.state.buildings.values():
-		var tile_id := int(Dictionary(building_variant).get("tile_index", -1))
-		if tile_id >= 0:
-			occupied[tile_id] = true
+		for tile_id: int in _building_record_occupied_tile_ids(Dictionary(building_variant)):
+			if tile_id >= 0:
+				occupied[tile_id] = true
 	var result: Array[int] = []
 	for tile_variant: Variant in occupied.keys():
 		result.append(int(tile_variant))
@@ -1925,7 +2039,7 @@ func _construction_job_tile_indices(job_variant: Variant) -> Array[int]:
 		return []
 	var metadata: Dictionary = Dictionary(job_variant).get("metadata", {})
 	var result: Array[int] = []
-	var multiple: Variant = metadata.get("tile_indices", [])
+	var multiple: Variant = metadata.get("occupied_tile_ids", metadata.get("tile_indices", []))
 	if multiple is Array or multiple is PackedInt32Array or multiple is PackedInt64Array:
 		for tile_variant: Variant in multiple:
 			var tile_id := int(tile_variant)
@@ -1934,6 +2048,22 @@ func _construction_job_tile_indices(job_variant: Variant) -> Array[int]:
 	var single := int(metadata.get("tile_index", -1))
 	if single >= 0 and not result.has(single):
 		result.append(single)
+	result.sort()
+	return result
+
+
+func _building_record_occupied_tile_ids(building: Dictionary) -> Array[int]:
+	var result: Array[int] = []
+	var occupied_value: Variant = building.get("occupied_tile_ids", null)
+	if occupied_value is Array:
+		for tile_variant: Variant in occupied_value:
+			var tile_id := int(tile_variant)
+			if tile_id >= 0 and not result.has(tile_id):
+				result.append(tile_id)
+	else:
+		var tile_id := int(building.get("tile_index", -1))
+		if tile_id >= 0:
+			result.append(tile_id)
 	result.sort()
 	return result
 

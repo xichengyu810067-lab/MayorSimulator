@@ -239,7 +239,7 @@ func _test_demolition_durability_interlock() -> void:
 	if residence_definition == null:
 		return
 	var building: Dictionary = coordinator.register_existing_building(
-		17, str(residence_definition.display_name)
+		17, str(residence_definition.display_name), {}, "medium"
 	)
 	_check(not building.is_empty(), "demolition durability fixture registers a populated building")
 	if building.is_empty():
@@ -419,7 +419,10 @@ func _test_justice_buildings_flow() -> void:
 			continue
 		var review: Dictionary = submitted["review"]
 		coordinator.advance_days(int(review["review_days"]), CITY_CONTEXT)
-		var build_tile := 22 + index
+		var build_tile := _find_valid_building_anchor(coordinator, building_name, 20)
+		_check(build_tile >= 0, "%s has a legal complete footprint" % building_name)
+		if build_tile < 0:
+			continue
 		var started: Dictionary = coordinator.start_approved_building(building_name, build_tile, 20)
 		_check(bool(started.get("ok", false)), "%s construction starts" % building_name)
 		if not bool(started.get("ok", false)):
@@ -571,6 +574,14 @@ func _check(condition: bool, label: String) -> void:
 		return
 	_failed = true
 	push_error("Vertical slice test failed: %s" % label)
+
+
+func _find_valid_building_anchor(coordinator, building_name: String, worker_count: int) -> int:
+	for tile_id: int in coordinator.terrain_map.tile_ids_in_display_order():
+		var quote: Dictionary = coordinator.placement_footprint_quote(building_name, tile_id, worker_count)
+		if bool(quote.get("ok", false)):
+			return tile_id
+	return -1
 
 
 func _cleanup_test_save() -> void:

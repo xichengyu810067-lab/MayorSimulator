@@ -4103,8 +4103,24 @@ func _on_grid_pressed(index: int) -> void:
 		return
 	_pending_terrain_tile = -1
 	var workers: int = int(vertical_slice_panel.selected_worker_count()) if vertical_slice_panel else 5
-	var quote: Dictionary = vertical_slice.placement_quote(placement_building_name, workers)
-	if not bool(quote.get("ok", false)) or str(quote.get("status", "")) != "approved":
+	var quote: Dictionary = vertical_slice.placement_footprint_quote(
+		placement_building_name,
+		index,
+		workers
+	)
+	if not bool(quote.get("ok", false)):
+		var placement_error := str(quote.get("error", "unknown"))
+		if placement_error in ["blueprint_not_found", "approved_blueprint_required"]:
+			_set_hint("目前沒有可放置的核准藍圖。", true)
+			_cancel_building_placement(false)
+			_update_ui()
+			return
+		_set_hint("此處無法完整放置「%s」：%s" % [
+			placement_building_name,
+			_vertical_error_text(placement_error),
+		], true)
+		return
+	if str(quote.get("status", "")) != "approved":
 		_set_hint("目前沒有可放置的核准藍圖。", true)
 		_cancel_building_placement(false)
 		_update_ui()
@@ -5061,6 +5077,9 @@ func _vertical_error_text(error_code: String) -> String:
 		"insufficient_treasury": "城市公庫不足",
 		"insufficient_workers": "工程隊人力不足，最多共用 20 人",
 		"tile_occupied": "該地格已有建築",
+		"footprint_out_of_bounds": "建築占地超出地圖東側邊界",
+		"unsupported_building_size": "建築規模沒有對應占地規則",
+		"unsupported_footprint": "建築占地格式不受支援",
 		"invalid_tile_id": "地格編號無效",
 		"terrain_not_flat": "地形尚未整平",
 		"terrain_not_flattenable": "該地形不可整平",

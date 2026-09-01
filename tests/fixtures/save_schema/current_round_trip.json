@@ -59,7 +59,7 @@
 		},
 		"metadata": {
 			"vertical_slice": {
-				"schema_version": 8,
+				"schema_version": 9,
 				"construction": {
 					"schema_version": 1,
 					"seed": 8024611,
