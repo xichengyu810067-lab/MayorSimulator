@@ -95,8 +95,10 @@ func _run() -> void:
 		return
 	if not _save_capture(LOW_CAPTURE):
 		return
-	var low_net := int(scene.call("_projected_net_income"))
-	var low_buffer := int(scene.call("_fiscal_safety_buffer"))
+	var low_draft: Dictionary = scene.call("debug_fiscal_draft_state")
+	var low_net := int(low_draft.get("projected_net", 0))
+	var low_projection: Dictionary = scene.call("_fiscal_projection_snapshot", true)
+	var low_buffer := int(low_projection.get("safety_buffer", 0))
 
 	_set_recommended_values(scene, tax_sliders, utility_sliders, service_sliders)
 	tabs.current_tab = 0

@@ -16,6 +16,7 @@
     { "id": "transport_network_integration", "script": "res://tests/integration/transport_network_integration_test.gd", "success_pattern": "Transport network integration test passed." },
     { "id": "transport_all_mode_lifecycle_contract", "script": "res://tests/integration/transport_all_mode_lifecycle_contract_test.gd", "success_pattern": "Transport all-mode lifecycle contract passed." },
     { "id": "fiscal_slider_pointer", "script": "res://tests/ui/fiscal_slider_pointer_test.gd", "success_pattern": "Fiscal stadium pointer test passed." },
+    { "id": "fiscal_draft_workflow", "script": "res://tests/ui/fiscal_draft_workflow_test.gd", "success_pattern": "Fiscal draft workflow test passed." },
     { "id": "governance_status_tabs", "script": "res://tests/ui/governance_status_tabs_test.gd", "success_pattern": "Governance status tabs test passed." },
     { "id": "public_affairs_status_rendering", "script": "res://tests/ui/public_affairs_status_lifecycle_test.gd", "success_pattern": "Public affairs status rendering test passed." },
     { "id": "public_affairs_reload_lifecycle", "script": "res://tests/integration/public_affairs_reload_lifecycle_test.gd", "success_pattern": "Public affairs reload lifecycle test passed.", "timeout_seconds": 240 },

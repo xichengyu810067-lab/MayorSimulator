@@ -205,6 +205,17 @@ var service_sliders: Dictionary = {}
 var tax_inputs: Dictionary = {}
 var utility_inputs: Dictionary = {}
 var service_inputs: Dictionary = {}
+var fiscal_apply_button: Button
+var fiscal_discard_button: Button
+var fiscal_draft_status_label: Label
+var _fiscal_draft_active := false
+var _fiscal_draft_tax_rates: Dictionary = {}
+var _fiscal_draft_utility_fees: Dictionary = {}
+var _fiscal_draft_service_fees: Dictionary = {}
+var _fiscal_draft_base_tax_rates: Dictionary = {}
+var _fiscal_draft_base_utility_fees: Dictionary = {}
+var _fiscal_draft_base_service_fees: Dictionary = {}
+var _fiscal_apply_generation := 0
 var bill_buttons: Dictionary = {}
 var governance_status_tabs: TabContainer
 var governance_status_grids: Dictionary = {}
@@ -545,7 +556,7 @@ func _build_ui() -> void:
 
 	municipal_overlay = _build_management_overlay()
 	municipal_overlay.page_opened.connect(Callable(self, "_on_municipal_page_opened"))
-	municipal_overlay.overlay_closed.connect(Callable(self, "_sync_map_interaction_for_ui"))
+	municipal_overlay.overlay_closed.connect(Callable(self, "_on_municipal_overlay_closed"))
 	add_child(municipal_overlay)
 	settings_overlay = SettingsOverlayScript.new()
 	settings_overlay.set_dark_mode(is_dark_mode)
@@ -773,6 +784,7 @@ func _initialize_fresh_game() -> void:
 	tax_rates = {"income": 10, "consumption": 5, "business": 8, "industry": 10}
 	utility_fees = {"garbage": 20, "water": 25, "electricity": 30, "gas": 20}
 	service_fees = {"parking": 20, "medical": 50, "tuition": 100, "stadium": 80}
+	_fiscal_draft_active = false
 	tax_rate = 10
 	active_policies.clear()
 	for policy_name in policies.keys():
@@ -855,6 +867,7 @@ func _capture_player_shell_state() -> Dictionary:
 func _restore_player_shell_state(state: Dictionary) -> void:
 	if state.is_empty():
 		return
+	_fiscal_draft_active = false
 	var saved_tax: Dictionary = state.get("tax_rates", {})
 	for key in tax_rates.keys():
 		if saved_tax.has(key):
@@ -1379,8 +1392,19 @@ func _sync_map_interaction_for_ui() -> void:
 	_set_map_interaction_enabled(not blocked)
 
 
+func _on_municipal_overlay_closed() -> void:
+	if _fiscal_draft_active:
+		_discard_fiscal_draft(false, false)
+	_sync_map_interaction_for_ui()
+
+
 func _on_municipal_page_opened(page_id: String) -> void:
 	_set_map_npc_tooltips_enabled(false)
+	if page_id == "finance":
+		_begin_fiscal_draft()
+		return
+	if _fiscal_draft_active:
+		_discard_fiscal_draft(false, true)
 	if page_id == "transport_planning":
 		_refresh_transport_planning_panel()
 		return
@@ -1806,9 +1830,28 @@ func _build_fiscal_tab() -> ScrollContainer:
 	forecast_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	forecast_title.max_lines_visible = 2
 	summary_box.add_child(forecast_title)
-	var forecast_help := _label("算法：每次只變動目前選項，其他條件維持不變。", 15, _theme_muted())
+	var forecast_help := _label("先調整多個項目、比較整體結果，再一次套用；離開前未套用的變更會放棄。", 15, _theme_muted())
 	forecast_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	summary_box.add_child(forecast_help)
+	fiscal_draft_status_label = _label("正式設定｜尚未變更", 16, _theme_muted())
+	fiscal_draft_status_label.name = "FiscalDraftStatus"
+	fiscal_draft_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	fiscal_draft_status_label.custom_minimum_size = Vector2(0, 48)
+	summary_box.add_child(fiscal_draft_status_label)
+	var action_row := HBoxContainer.new()
+	action_row.name = "FiscalDraftActions"
+	action_row.add_theme_constant_override("separation", 8)
+	fiscal_discard_button = _button("放棄變更")
+	fiscal_discard_button.name = "FiscalDiscardButton"
+	fiscal_discard_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	fiscal_discard_button.pressed.connect(Callable(self, "_discard_fiscal_draft").bind(true, true))
+	action_row.add_child(fiscal_discard_button)
+	fiscal_apply_button = _button("套用全部", "primary")
+	fiscal_apply_button.name = "FiscalApplyAllButton"
+	fiscal_apply_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	fiscal_apply_button.pressed.connect(Callable(self, "_apply_fiscal_draft"))
+	action_row.add_child(fiscal_apply_button)
+	summary_box.add_child(action_row)
 	summary_box.add_child(_finance_visual_row("fiscal_total_income", "預估月收入", "$"))
 	summary_box.add_child(_finance_visual_row("fiscal_total_expense", "市政月支出", "支"))
 	summary_box.add_child(_finance_visual_row("fiscal_net_income", "預估月淨額", "Σ"))
@@ -3414,6 +3457,187 @@ func _update_finance_visual(label_key: String, amount: int, scale: int, color: C
 
 
 
+func _begin_fiscal_draft() -> void:
+	_fiscal_draft_active = true
+	_fiscal_draft_base_tax_rates = tax_rates.duplicate(true)
+	_fiscal_draft_base_utility_fees = utility_fees.duplicate(true)
+	_fiscal_draft_base_service_fees = service_fees.duplicate(true)
+	_fiscal_draft_tax_rates = tax_rates.duplicate(true)
+	_fiscal_draft_utility_fees = utility_fees.duplicate(true)
+	_fiscal_draft_service_fees = service_fees.duplicate(true)
+	_sync_fiscal_controls_from_draft()
+	_update_ui()
+
+
+func _fiscal_draft_dictionary(kind: String) -> Dictionary:
+	match kind:
+		"tax":
+			return _fiscal_draft_tax_rates
+		"utility":
+			return _fiscal_draft_utility_fees
+		"service":
+			return _fiscal_draft_service_fees
+	return {}
+
+
+func _fiscal_draft_base_dictionary(kind: String) -> Dictionary:
+	match kind:
+		"tax":
+			return _fiscal_draft_base_tax_rates
+		"utility":
+			return _fiscal_draft_base_utility_fees
+		"service":
+			return _fiscal_draft_base_service_fees
+	return {}
+
+
+func _fiscal_dirty_count() -> int:
+	if not _fiscal_draft_active:
+		return 0
+	var changed := 0
+	for kind in ["tax", "utility", "service"]:
+		var draft := _fiscal_draft_dictionary(kind)
+		var base := _fiscal_draft_base_dictionary(kind)
+		for key in draft.keys():
+			if int(draft[key]) != int(base.get(key, draft[key])):
+				changed += 1
+	return changed
+
+
+func _fiscal_display_value(kind: String, key: String, suffix: String) -> String:
+	var value := _fiscal_value(kind, key)
+	if not _fiscal_draft_active:
+		return "%d%s" % [value, suffix]
+	var base := int(_fiscal_draft_base_dictionary(kind).get(key, value))
+	if base == value:
+		return "%d%s" % [value, suffix]
+	return "%d%s → %d%s" % [base, suffix, value, suffix]
+
+
+func _set_fiscal_draft_value(kind: String, key: String, value: int) -> void:
+	if not _fiscal_draft_active:
+		_begin_fiscal_draft()
+	var definition := _fiscal_definition(kind, key)
+	var normalized := clampi(value, int(definition["min"]), int(definition["max"]))
+	_fiscal_draft_dictionary(kind)[key] = normalized
+	match kind:
+		"tax":
+			tax_sliders[key].set_value_no_signal(normalized)
+			_sync_number_input(tax_inputs, key, normalized, true)
+		"utility":
+			utility_sliders[key].set_value_no_signal(normalized)
+			_sync_number_input(utility_inputs, key, normalized, true)
+		"service":
+			service_sliders[key].set_value_no_signal(normalized)
+			_sync_number_input(service_inputs, key, normalized, true)
+	_update_ui()
+
+
+func _sync_fiscal_controls_from_draft() -> void:
+	if not _fiscal_draft_active:
+		return
+	for key in _fiscal_draft_tax_rates.keys():
+		if tax_sliders.has(key):
+			tax_sliders[key].set_value_no_signal(int(_fiscal_draft_tax_rates[key]))
+		_sync_number_input(tax_inputs, key, int(_fiscal_draft_tax_rates[key]), true)
+	for key in _fiscal_draft_utility_fees.keys():
+		if utility_sliders.has(key):
+			utility_sliders[key].set_value_no_signal(int(_fiscal_draft_utility_fees[key]))
+		_sync_number_input(utility_inputs, key, int(_fiscal_draft_utility_fees[key]), true)
+	for key in _fiscal_draft_service_fees.keys():
+		if service_sliders.has(key):
+			service_sliders[key].set_value_no_signal(int(_fiscal_draft_service_fees[key]))
+		_sync_number_input(service_inputs, key, int(_fiscal_draft_service_fees[key]), true)
+
+
+func _refresh_fiscal_draft_actions() -> void:
+	var changed := _fiscal_dirty_count()
+	if fiscal_draft_status_label != null:
+		fiscal_draft_status_label.text = "尚未套用：%d 項變更\n下方預估已包含整組草稿。" % changed if changed > 0 else "正式設定｜尚未變更\n可先調整多項，再一次套用。"
+		fiscal_draft_status_label.add_theme_color_override("font_color", COLOR_CAUTION if changed > 0 else _theme_muted())
+	if fiscal_apply_button != null:
+		fiscal_apply_button.disabled = changed == 0
+		fiscal_apply_button.text = "套用全部（%d）" % changed if changed > 0 else "套用全部"
+	if fiscal_discard_button != null:
+		fiscal_discard_button.disabled = changed == 0
+
+
+func _discard_fiscal_draft(explicit_action: bool = true, keep_active: bool = true) -> void:
+	if not _fiscal_draft_active:
+		return
+	_fiscal_draft_base_tax_rates = tax_rates.duplicate(true)
+	_fiscal_draft_base_utility_fees = utility_fees.duplicate(true)
+	_fiscal_draft_base_service_fees = service_fees.duplicate(true)
+	_fiscal_draft_tax_rates = tax_rates.duplicate(true)
+	_fiscal_draft_utility_fees = utility_fees.duplicate(true)
+	_fiscal_draft_service_fees = service_fees.duplicate(true)
+	_fiscal_draft_active = keep_active
+	if keep_active:
+		_sync_fiscal_controls_from_draft()
+	_update_ui()
+	if explicit_action:
+		_set_hint("已放棄尚未套用的稅務與收費變更。", false)
+
+
+func _apply_fiscal_draft() -> void:
+	var changed := _fiscal_dirty_count()
+	if not _fiscal_draft_active or changed == 0:
+		return
+	tax_rates = _fiscal_draft_tax_rates.duplicate(true)
+	utility_fees = _fiscal_draft_utility_fees.duplicate(true)
+	service_fees = _fiscal_draft_service_fees.duplicate(true)
+	tax_rate = int(tax_rates["income"])
+	_fiscal_draft_base_tax_rates = tax_rates.duplicate(true)
+	_fiscal_draft_base_utility_fees = utility_fees.duplicate(true)
+	_fiscal_draft_base_service_fees = service_fees.duplicate(true)
+	_fiscal_draft_tax_rates = tax_rates.duplicate(true)
+	_fiscal_draft_utility_fees = utility_fees.duplicate(true)
+	_fiscal_draft_service_fees = service_fees.duplicate(true)
+	_fiscal_apply_generation += 1
+	_recalculate_satisfaction()
+	_recalculate_score()
+	_reconcile_resident_request_completion()
+	_sync_fiscal_controls_from_draft()
+	_update_ui()
+	_set_hint("已一次套用 %d 項稅務與收費變更。" % changed, false)
+	_autosave("action:fiscal_draft_applied")
+
+
+func _fiscal_projection_snapshot(use_draft: bool) -> Dictionary:
+	var authority_tax := tax_rates
+	var authority_utility := utility_fees
+	var authority_service := service_fees
+	if use_draft and _fiscal_draft_active:
+		tax_rates = _fiscal_draft_tax_rates.duplicate(true)
+		utility_fees = _fiscal_draft_utility_fees.duplicate(true)
+		service_fees = _fiscal_draft_service_fees.duplicate(true)
+	var snapshot := {
+		"income": _projected_total_income(),
+		"expense": _projected_total_expense(),
+		"net": _projected_net_income(),
+		"safety_buffer": _fiscal_safety_buffer(),
+	}
+	tax_rates = authority_tax
+	utility_fees = authority_utility
+	service_fees = authority_service
+	return snapshot
+
+
+func debug_fiscal_draft_state() -> Dictionary:
+	var authoritative := _fiscal_projection_snapshot(false)
+	var projected := _fiscal_projection_snapshot(true)
+	return {
+		"active": _fiscal_draft_active,
+		"dirty_count": _fiscal_dirty_count(),
+		"tax": _fiscal_draft_tax_rates.duplicate(true),
+		"utility": _fiscal_draft_utility_fees.duplicate(true),
+		"service": _fiscal_draft_service_fees.duplicate(true),
+		"authoritative_net": int(authoritative["net"]),
+		"projected_net": int(projected["net"]),
+		"apply_generation": _fiscal_apply_generation,
+	}
+
+
 func _fiscal_category_hint(category_title: String) -> String:
 	match category_title:
 		"居民稅":
@@ -3721,32 +3945,13 @@ func _on_blueprint_library_selection_requested(building_name: String, library_id
 		_set_hint("無法載入藍圖：%s" % _vertical_error_text(str(result.get("error", "unknown"))), true)
 
 func _on_tax_changed(value: float, tax_key: String) -> void:
-	tax_rates[tax_key] = int(value)
-	tax_rate = int(tax_rates["income"])
-	_sync_number_input(tax_inputs, tax_key, tax_rates[tax_key])
-	_recalculate_satisfaction()
-	_recalculate_score()
-	_update_ui()
-	_autosave("action:tax_changed")
+	_set_fiscal_draft_value("tax", tax_key, int(value))
 
 func _on_utility_fee_changed(value: float, fee_key: String) -> void:
-	utility_fees[fee_key] = int(value)
-	_sync_number_input(utility_inputs, fee_key, utility_fees[fee_key])
-	_recalculate_satisfaction()
-	_recalculate_score()
-	_set_hint("%s調整為 %d。" % [UTILITY_DEFS[fee_key]["name"], utility_fees[fee_key]], false)
-	_reconcile_resident_request_completion()
-	_update_ui()
-	_autosave("action:utility_fee_changed")
+	_set_fiscal_draft_value("utility", fee_key, int(value))
 
 func _on_service_fee_changed(value: float, service_key: String) -> void:
-	service_fees[service_key] = int(value)
-	_sync_number_input(service_inputs, service_key, service_fees[service_key])
-	_recalculate_satisfaction()
-	_recalculate_score()
-	_set_hint("%s調整為 %d / %s。" % [SERVICE_DEFS[service_key]["name"], service_fees[service_key], SERVICE_DEFS[service_key]["unit"]], false)
-	_update_ui()
-	_autosave("action:service_fee_changed")
+	_set_fiscal_draft_value("service", service_key, int(value))
 
 func _on_tax_input_submitted(text: String, tax_key: String) -> void:
 	_commit_number_input("tax", tax_key, text)
@@ -5882,6 +6087,15 @@ func _service_detail_text(service_key: String) -> String:
 
 func _update_ui() -> void:
 	_sync_vertical_state()
+	# Render the finance page against the complete draft while keeping the live
+	# simulation and save authority untouched until the player applies it.
+	var fiscal_authority_tax := tax_rates
+	var fiscal_authority_utility := utility_fees
+	var fiscal_authority_service := service_fees
+	if _fiscal_draft_active:
+		tax_rates = _fiscal_draft_tax_rates.duplicate(true)
+		utility_fees = _fiscal_draft_utility_fees.duplicate(true)
+		service_fees = _fiscal_draft_service_fees.duplicate(true)
 	var terrain = _terrain_map()
 	if city_backdrop != null and terrain != null:
 		city_backdrop.call("set_terrain_snapshot", terrain.to_dict())
@@ -5923,19 +6137,19 @@ func _update_ui() -> void:
 	_set_bar_visual(header_bars["rating"], float(ranking_score), COLOR_GOLD)
 	for tax_key in tax_rates.keys():
 		var tax_forecast := _fiscal_item_forecast("tax", tax_key)
-		labels["tax_value_%s" % tax_key].text = "%d%%  ● %s" % [tax_rates[tax_key], tax_forecast["state_text"]]
+		labels["tax_value_%s" % tax_key].text = "%s  ● %s" % [_fiscal_display_value("tax", tax_key, "%"), tax_forecast["state_text"]]
 		labels["tax_value_%s" % tax_key].add_theme_color_override("font_color", tax_forecast["color"])
 		_apply_fee_slider_visual(tax_sliders[tax_key], str(tax_forecast["state"]))
 		tax_sliders[tax_key].tooltip_text = str(tax_forecast["summary"])
 	for fee_key in utility_fees.keys():
 		var utility_forecast := _fiscal_item_forecast("utility", fee_key)
-		labels["utility_%s" % fee_key].text = "%d / %s  ● %s" % [utility_fees[fee_key], UTILITY_DEFS[fee_key]["unit"], utility_forecast["state_text"]]
+		labels["utility_%s" % fee_key].text = "%s  ● %s" % [_fiscal_display_value("utility", fee_key, " / %s" % UTILITY_DEFS[fee_key]["unit"]), utility_forecast["state_text"]]
 		labels["utility_%s" % fee_key].add_theme_color_override("font_color", utility_forecast["color"])
 		_apply_fee_slider_visual(utility_sliders[fee_key], str(utility_forecast["state"]))
 		utility_sliders[fee_key].tooltip_text = str(utility_forecast["summary"])
 	for service_key in service_fees.keys():
 		var service_forecast := _fiscal_item_forecast("service", service_key)
-		labels["service_%s" % service_key].text = "%d / %s  ● %s" % [service_fees[service_key], SERVICE_DEFS[service_key]["unit"], service_forecast["state_text"]]
+		labels["service_%s" % service_key].text = "%s  ● %s" % [_fiscal_display_value("service", service_key, " / %s" % SERVICE_DEFS[service_key]["unit"]), service_forecast["state_text"]]
 		labels["service_%s" % service_key].add_theme_color_override("font_color", service_forecast["color"])
 		_apply_fee_slider_visual(service_sliders[service_key], str(service_forecast["state"]))
 		service_sliders[service_key].tooltip_text = str(service_forecast["summary"])
@@ -6049,6 +6263,11 @@ func _update_ui() -> void:
 	if oversight_panel:
 		oversight_panel.refresh(vertical_slice.governance.justice_system)
 	_update_building_info_panel()
+	if _fiscal_draft_active:
+		tax_rates = fiscal_authority_tax
+		utility_fees = fiscal_authority_utility
+		service_fees = fiscal_authority_service
+	_refresh_fiscal_draft_actions()
 	L10n.localize_tree(self)
 	_sync_placement_banner()
 	# Tile/NPC refreshes above restore their normal tooltip text. Re-apply the
@@ -6194,6 +6413,10 @@ func _rebuild_ui() -> void:
 	tax_inputs.clear()
 	utility_inputs.clear()
 	service_inputs.clear()
+	fiscal_apply_button = null
+	fiscal_discard_button = null
+	fiscal_draft_status_label = null
+	_fiscal_draft_active = false
 	bill_buttons.clear()
 	governance_status_tabs = null
 	governance_status_grids.clear()
@@ -6263,43 +6486,16 @@ func _commit_number_input(kind: String, key: String, raw_text: String) -> void:
 		return
 
 	var value := int(cleaned)
-	var min_value := 0
-	var max_value := 0
-	if kind == "tax":
-		min_value = int(TAX_DEFS[key]["min"])
-		max_value = int(TAX_DEFS[key]["max"])
-		value = clampi(value, min_value, max_value)
-		tax_rates[key] = value
-		tax_rate = int(tax_rates["income"])
-		tax_sliders[key].set_value_no_signal(value)
-		_sync_number_input(tax_inputs, key, value, true)
-	elif kind == "utility":
-		min_value = int(UTILITY_DEFS[key]["min"])
-		max_value = int(UTILITY_DEFS[key]["max"])
-		value = clampi(value, min_value, max_value)
-		utility_fees[key] = value
-		utility_sliders[key].set_value_no_signal(value)
-		_sync_number_input(utility_inputs, key, value, true)
-	elif kind == "service":
-		min_value = int(SERVICE_DEFS[key]["min"])
-		max_value = int(SERVICE_DEFS[key]["max"])
-		value = clampi(value, min_value, max_value)
-		service_fees[key] = value
-		service_sliders[key].set_value_no_signal(value)
-		_sync_number_input(service_inputs, key, value, true)
-
-	_recalculate_satisfaction()
-	_recalculate_score()
-	_update_ui()
-	_autosave("action:%s_value_committed" % kind)
+	_set_fiscal_draft_value(kind, key, value)
 
 func _restore_number_input(kind: String, key: String) -> void:
+	var value: int = int(_fiscal_draft_dictionary(kind).get(key, _fiscal_value(kind, key))) if _fiscal_draft_active else _fiscal_value(kind, key)
 	if kind == "tax":
-		_sync_number_input(tax_inputs, key, tax_rates[key], true)
+		_sync_number_input(tax_inputs, key, int(value), true)
 	elif kind == "utility":
-		_sync_number_input(utility_inputs, key, utility_fees[key], true)
+		_sync_number_input(utility_inputs, key, int(value), true)
 	elif kind == "service":
-		_sync_number_input(service_inputs, key, service_fees[key], true)
+		_sync_number_input(service_inputs, key, int(value), true)
 
 func _sync_number_input(inputs: Dictionary, key: String, value: int, force: bool = false) -> void:
 	if not inputs.has(key):
