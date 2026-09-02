@@ -1872,16 +1872,6 @@ func _build_fiscal_tab() -> ScrollContainer:
 	fiscal_draft_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	fiscal_draft_status_label.custom_minimum_size = Vector2(0, 48)
 	summary_box.add_child(fiscal_draft_status_label)
-	fiscal_draft_change_list = _label("", 14, _theme_text())
-	fiscal_draft_change_list.name = "FiscalDraftChangeList"
-	fiscal_draft_change_list.set_meta("l10n_skip", true)
-	fiscal_draft_change_list.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	summary_box.add_child(fiscal_draft_change_list)
-	fiscal_draft_risk_label = _label("", 15, _theme_muted())
-	fiscal_draft_risk_label.name = "FiscalDraftRisk"
-	fiscal_draft_risk_label.set_meta("l10n_skip", true)
-	fiscal_draft_risk_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	summary_box.add_child(fiscal_draft_risk_label)
 	var action_row := HBoxContainer.new()
 	action_row.name = "FiscalDraftActions"
 	action_row.add_theme_constant_override("separation", 8)
@@ -1896,6 +1886,16 @@ func _build_fiscal_tab() -> ScrollContainer:
 	fiscal_apply_button.pressed.connect(Callable(self, "_apply_fiscal_draft"))
 	action_row.add_child(fiscal_apply_button)
 	summary_box.add_child(action_row)
+	fiscal_draft_change_list = _label("", 14, _theme_text())
+	fiscal_draft_change_list.name = "FiscalDraftChangeList"
+	fiscal_draft_change_list.set_meta("l10n_skip", true)
+	fiscal_draft_change_list.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	summary_box.add_child(fiscal_draft_change_list)
+	fiscal_draft_risk_label = _label("", 15, _theme_muted())
+	fiscal_draft_risk_label.name = "FiscalDraftRisk"
+	fiscal_draft_risk_label.set_meta("l10n_skip", true)
+	fiscal_draft_risk_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	summary_box.add_child(fiscal_draft_risk_label)
 	summary_box.add_child(_finance_visual_row("fiscal_total_income", "預估月收入", "$"))
 	summary_box.add_child(_finance_visual_row("fiscal_total_expense", "市政月支出", "支"))
 	summary_box.add_child(_finance_visual_row("fiscal_net_income", "預估月淨額", "Σ"))

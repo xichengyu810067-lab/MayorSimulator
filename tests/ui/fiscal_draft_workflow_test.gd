@@ -134,6 +134,12 @@ func _run() -> void:
 	_check(main.service_fees == original_service, "service slider edits do not mutate authoritative values")
 	_check(int(edited.get("dirty_count", -1)) == 3, "three changed controls produce one three-item draft")
 	_check(int(edited.get("projected_net", 0)) != int(edited.get("authoritative_net", 0)), "forecast follows the whole draft before apply")
+	var action_row := main.find_child("FiscalDraftActions", true, false) as Control
+	_check(action_row != null and action_row.is_visible_in_tree(), "dirty draft exposes the action row")
+	if action_row != null and fiscal_scroll != null:
+		var action_rect: Rect2 = action_row.get_global_rect()
+		var scroll_rect: Rect2 = fiscal_scroll.get_global_rect()
+		_check(action_rect.position.y < scroll_rect.position.y + scroll_rect.size.y && action_rect.position.y + action_rect.size.y > scroll_rect.position.y, "dirty draft action row is within the active fiscal scroll viewport")
 
 	var apply_button := main.find_child("FiscalApplyAllButton", true, false) as Button
 	var discard_button := main.find_child("FiscalDiscardButton", true, false) as Button
