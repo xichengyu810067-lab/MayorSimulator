@@ -3,6 +3,7 @@ extends SceneTree
 const SquareGridLayoutScript = preload("res://scripts/world/square_grid_layout.gd")
 const CityTerrainMapScript = preload("res://scripts/world/city_terrain_map.gd")
 const CityTerrainLayoutScript = preload("res://data/catalogs/city_terrain_layout.gd")
+const CityBackdropScript = preload("res://scripts/world/city_backdrop.gd")
 
 var _failed := false
 var _checks := 0
@@ -57,6 +58,29 @@ func _run() -> void:
 			SquareGridLayoutScript.coordinate_for_point(outside) == SquareGridLayoutScript.INVALID_COORDINATE,
 			"out-of-grid point %s was accepted" % outside
 		)
+
+	var backdrop = CityBackdropScript.new()
+	backdrop.size = SquareGridLayoutScript.STAGE_SIZE
+	root.add_child(backdrop)
+	await process_frame
+	_check(backdrop.has_method("set_terrain_snapshot"), "visible backdrop has no terrain-authority projection input")
+	if backdrop.has_method("set_terrain_snapshot"):
+		backdrop.call("set_terrain_snapshot", terrain.to_dict())
+	var backdrop_debug: Dictionary = backdrop.call("debug_terrain_projection") if backdrop.has_method("debug_terrain_projection") else {}
+	_check(int(backdrop_debug.get("tile_count", 0)) == 100, "visible substrate does not project all 100 terrain-authority tiles")
+	_check(str(backdrop_debug.get("projection", "")) == "SquareGridLayout", "visible substrate is not bound to SquareGridLayout")
+	var visual_policy: Dictionary = backdrop_debug.get("visual_policy", {})
+	_check(str(visual_policy.get("base_asset", "")) == "city-map-background.png", "visible substrate does not retain the natural city map as its base asset")
+	_check(bool(visual_policy.get("background_primary", false)), "terrain hints replace the natural city map instead of remaining overlays")
+	_check(is_zero_approx(float(visual_policy.get("flat_grass_fill_alpha", -1.0))), "flat grass still receives an artificial solid fill")
+	_check(float(visual_policy.get("non_flat_fill_max_alpha", 1.0)) <= 0.20, "unbuildable terrain fill tint is too opaque")
+	var projected_tiles: Dictionary = backdrop_debug.get("tiles", {})
+	var lake_tile_id := terrain.tile_id_for_coordinate(Vector2i(1, 1))
+	var lake_projection: Dictionary = projected_tiles.get(str(lake_tile_id), {})
+	_check(str(lake_projection.get("terrain_kind", "")) == "river_lake", "visible substrate disagrees with CityTerrainMap at the frozen lake tile")
+	_check(Rect2(lake_projection.get("rect", Rect2())).is_equal_approx(SquareGridLayoutScript.rect_for_coordinate(Vector2i(1, 1))), "visible lake substrate does not use canonical square bounds")
+	backdrop.queue_free()
+	await process_frame
 
 	if _failed:
 		quit(1)

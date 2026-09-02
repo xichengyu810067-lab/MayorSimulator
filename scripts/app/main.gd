@@ -2120,6 +2120,9 @@ func _build_map_panel() -> Control:
 	city_backdrop.size = MAP_STAGE_SIZE
 	city_backdrop.call("set_dark_mode", is_dark_mode)
 	map_stage.add_child(city_backdrop)
+	var terrain = _terrain_map()
+	if terrain != null:
+		city_backdrop.call("set_terrain_snapshot", terrain.to_dict())
 
 	transport_network_layer = TransportNetworkLayerScript.new()
 	transport_network_layer.custom_minimum_size = MAP_STAGE_SIZE
@@ -2134,7 +2137,6 @@ func _build_map_panel() -> Control:
 	map_stage.add_child(tile_layer)
 
 	grid_buttons.resize(CELL_COUNT)
-	var terrain = _terrain_map()
 	for row in range(GRID_SIZE):
 		for col in range(GRID_SIZE):
 			var index: int = int(terrain.tile_id_for_coordinate(Vector2i(col, row))) if terrain != null else row * GRID_SIZE + col
@@ -5877,6 +5879,9 @@ func _service_detail_text(service_key: String) -> String:
 
 func _update_ui() -> void:
 	_sync_vertical_state()
+	var terrain = _terrain_map()
+	if city_backdrop != null and terrain != null:
+		city_backdrop.call("set_terrain_snapshot", terrain.to_dict())
 	_refresh_time_hud()
 	labels["funds"].text = _format_currency(funds)
 	labels["funds"].tooltip_text = L10n.text("城市公庫：$%d") % funds

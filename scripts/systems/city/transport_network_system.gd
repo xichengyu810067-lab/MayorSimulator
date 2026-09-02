@@ -418,8 +418,32 @@ func visual_runtime_snapshot(city_grid: Array, terrain_map: Variant) -> Dictiona
 		"tile_states": tile_states,
 		"operational_lines": active_lines(),
 		"private_road_paths": private_road_paths(city_grid, terrain_map),
+		"station_access_edges": station_access_edges(terrain_map),
 		"crossings": crossings.duplicate(true),
 	}
+
+
+func station_access_edges(terrain_map: Variant = null) -> Array[Dictionary]:
+	# Access edges are a runtime view of completed stations and completed
+	# guideways. They are deliberately absent from to_dict(): loading the same
+	# authorities must always recompute them instead of trusting stale topology.
+	var topology = terrain_map if terrain_map != null else _topology_map
+	var result: Array[Dictionary] = []
+	for station_id: String in _sorted_string_keys(stations):
+		var station: Dictionary = stations[station_id]
+		if str(station.get("status", "completed")) != "completed":
+			continue
+		var station_tile_id := int(station.get("tile_id", -1))
+		for network_kind: String in _station_access_network_kinds(str(station.get("building_name", ""))):
+			var network_tiles := _tile_set_for_segment_kind(network_kind)
+			for network_tile_variant: Variant in _network_attachments(station_tile_id, network_tiles, topology):
+				result.append({
+					"station_id": station_id,
+					"station_tile_id": station_tile_id,
+					"network_tile_id": int(network_tile_variant),
+					"kind": network_kind,
+				})
+	return result
 
 
 func network_snapshot_per_tile(city_grid: Array, terrain_map: Variant) -> Dictionary:
@@ -1628,6 +1652,22 @@ func _tile_set_for_segment_kind(kind: String) -> Dictionary:
 		for tile_variant: Variant in Array(segment.get("tile_path", [])):
 			result[int(tile_variant)] = true
 	return result
+
+
+func _station_access_network_kinds(building_name: String) -> Array[String]:
+	var station_spec := TransportModesScript.station_spec(building_name)
+	var route_mode := str(station_spec.get("route_mode", ""))
+	match route_mode:
+		"bus":
+			return ["road"]
+		"metro":
+			return ["metro_track"]
+		"train":
+			return ["rail_track"]
+		"air":
+			# Airports need both public road access and their own air-side taxiway.
+			return ["road", "taxiway"]
+	return []
 
 
 func _network_attachments(tile_id: int, network_tiles: Dictionary, terrain_map: Variant) -> Array[int]:

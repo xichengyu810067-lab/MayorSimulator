@@ -50,6 +50,12 @@ func _run() -> void:
 		"operational_lines": [],
 		"private_road_paths": [],
 		"crossings": {},
+		"station_access_edges": [{
+			"station_id": "bus_stop_fixture",
+			"station_tile_id": 1,
+			"network_tile_id": 0,
+			"kind": "road",
+		}],
 	}
 	ground.set_network_snapshot(isolated_snapshot, centers)
 	vehicles.set_runtime_snapshot(isolated_snapshot, centers)
@@ -57,6 +63,13 @@ func _run() -> void:
 	var ground_debug: Dictionary = ground.debug_snapshot()
 	_check(not bool(ground_debug.get("autonomous_vehicle_generation", true)), "ground layer must never own vehicle generation")
 	_check(bool(ground_debug.get("shares_map_stage_transform", false)), "network layer must inherit the map-stage transform")
+	_check(int(ground_debug.get("station_access_edge_count", 0)) == 1, "network layer dropped the derived station access edge")
+	var access_segments: Array = ground_debug.get("station_access_segments", [])
+	_check(access_segments.size() == 1, "network layer did not project the station access edge")
+	if access_segments.size() == 1:
+		var access_segment: Dictionary = access_segments[0]
+		_check(Vector2(access_segment.get("from", Vector2.INF)).is_equal_approx(centers["0"]), "station connector did not start at the authoritative road center")
+		_check(Vector2(access_segment.get("to", Vector2.INF)).is_equal_approx(centers["1"]), "station connector did not end at the authoritative station center")
 
 	var operational_snapshot := isolated_snapshot.duplicate(true)
 	operational_snapshot["tile_states"] = {

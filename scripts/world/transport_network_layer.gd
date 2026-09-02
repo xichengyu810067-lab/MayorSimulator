@@ -45,17 +45,21 @@ func set_dark_mode(enabled: bool) -> void:
 
 
 func debug_snapshot() -> Dictionary:
+	var access_segments := _project_station_access_segments()
 	return {
 		"owned_by_player_network": true,
 		"autonomous_vehicle_generation": false,
 		"shares_map_stage_transform": get_parent() != null,
 		"tile_state_count": Dictionary(_network_snapshot.get("tile_states", {})).size(),
 		"operational_line_count": Array(_network_snapshot.get("operational_lines", [])).size(),
+		"station_access_edge_count": Array(_network_snapshot.get("station_access_edges", [])).size(),
+		"station_access_segments": access_segments,
 		"crossing_states": _crossing_states.duplicate(true),
 	}
 
 
 func _draw() -> void:
+	_draw_station_access_edges()
 	var tile_states: Dictionary = _network_snapshot.get("tile_states", {})
 	var sorted_tiles: Array[int] = []
 	for key_variant: Variant in tile_states.keys():
@@ -74,6 +78,37 @@ func _draw() -> void:
 		var project_status := str(state.get("project_status", ""))
 		if project_status in ["planned", "under_construction", "demolishing"]:
 			_draw_construction_marker(center, project_status)
+
+
+func _draw_station_access_edges() -> void:
+	# Draw only edges derived by TransportNetworkSystem from completed topology.
+	# The layer never fabricates a connector from station proximity alone.
+	for segment_variant: Variant in _project_station_access_segments():
+		var segment: Dictionary = segment_variant
+		_draw_segment(
+			str(segment.get("kind", "road")),
+			Vector2(segment.get("from", Vector2.INF)),
+			Vector2(segment.get("to", Vector2.INF))
+		)
+
+
+func _project_station_access_segments() -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for edge_variant: Variant in _network_snapshot.get("station_access_edges", []):
+		if not edge_variant is Dictionary:
+			continue
+		var edge: Dictionary = edge_variant
+		var network_center := _center_for(int(edge.get("network_tile_id", -1)))
+		var station_center := _center_for(int(edge.get("station_tile_id", -1)))
+		if network_center == Vector2.INF or station_center == Vector2.INF:
+			continue
+		result.append({
+			"station_id": str(edge.get("station_id", "")),
+			"kind": str(edge.get("kind", "road")),
+			"from": network_center,
+			"to": station_center,
+		})
+	return result
 
 
 func _draw_tile_segments(tile_id: int, center: Vector2, state: Dictionary) -> void:

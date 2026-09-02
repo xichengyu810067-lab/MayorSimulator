@@ -43,6 +43,26 @@ func _validate_catalog_and_planning_rules() -> void:
 	_check(not bool(terrain_rejected.get("ok", false)) and _issues_have(terrain_rejected, "terrain_not_flat"), "non-flat terrain must reject infrastructure")
 	terrain.configure_tile(tree_tile, "flat_grass")
 
+	var lake_tile := _tile(1, 1)
+	terrain.configure_tile(lake_tile, "river_lake")
+	var before_lake_quote: Dictionary = planner.to_dict()
+	var lake_plan := {
+		"segments": [{"id": "lake_road", "kind": "road", "tile_path": [lake_tile]}],
+	}
+	var lake_quote: Dictionary = planner.quote_project("build", lake_plan, terrain)
+	_check(
+		not bool(lake_quote.get("ok", false)) and _issues_have(lake_quote, "terrain_not_flat"),
+		"unflattened river/lake must reject a direct road quote"
+	)
+	_check(planner.to_dict() == before_lake_quote, "rejected river/lake quote mutated transport authority")
+	var lake_start: Dictionary = planner.start_project("build", lake_plan, terrain)
+	_check(
+		not bool(lake_start.get("ok", false)) and _issues_have(lake_start, "terrain_not_flat"),
+		"unflattened river/lake must reject direct project start"
+	)
+	_check(planner.to_dict() == before_lake_quote, "rejected river/lake start mutated transport authority")
+	terrain.configure_tile(lake_tile, "flat_grass")
+
 	var non_cardinal: Dictionary = planner.quote_project("build", {
 		"segments": [{"kind": "road", "tile_path": [_tile(0, 0), _tile(1, 1)]}],
 	}, terrain)
@@ -80,6 +100,26 @@ func _validate_disconnected_station_never_spawns_vehicle() -> void:
 	_check(Array(runtime.get("operational_lines", [])).is_empty(), "disconnected station runtime must contain no vehicle-producing line")
 	_check(is_equal_approx(network.service_operational_factor("metro"), 0.0), "disconnected metro must produce no service factor")
 	_check(network.service_revenue("metro", 300, {"base_uses": 24, "reasonable": 30}) == 0, "disconnected metro must produce no service revenue")
+
+	var bus_network = TransportNetworkSystemScript.new()
+	_check(bool(bus_network.register_station("orphan_bus_a", "公車站", _tile(1, 2)).get("ok", false)), "first orphan bus station registration failed")
+	_check(bool(bus_network.register_station("orphan_bus_b", "公車站", _tile(4, 2)).get("ok", false)), "second orphan bus station registration failed")
+	var bus_created: Dictionary = bus_network.create_route({
+		"id": "orphan_bus_line",
+		"name": "未接道路公車",
+		"mode": "bus",
+		"stop_ids": ["orphan_bus_a", "orphan_bus_b"],
+		"fleet_size": 2,
+		"headway_minutes": 8,
+		"fare": 15,
+		"enabled": true,
+	})
+	_check(bool(bus_created.get("ok", false)) and not bool(bus_created.get("valid", true)), "bus route without station road access must remain invalid")
+	_check(bus_network.active_lines().is_empty(), "bus stations without road access must expose zero operational lines")
+	_check(bus_network.service_revenue("bus", 300, {"base_uses": 24, "reasonable": 15}) == 0, "bus stations without road access must earn zero revenue")
+	var bus_runtime: Dictionary = bus_network.visual_runtime_snapshot([], terrain)
+	_check(Array(bus_runtime.get("operational_lines", [])).is_empty(), "bus stations without road access must spawn zero vehicle-producing lines")
+	_check(Array(bus_runtime.get("station_access_edges", [])).is_empty(), "bus stations without road access must expose no derived visual connector")
 
 
 func _validate_demolition_races_and_snapshot_shapes() -> void:
@@ -666,6 +706,15 @@ func _validate_complete_networks_and_persistence() -> void:
 
 	var runtime := network.visual_runtime_snapshot(connected_city, terrain)
 	_check(Array(runtime.get("operational_lines", [])).size() == 4, "runtime snapshot must contain only the four operational lines")
+	var access_edges: Array = runtime.get("station_access_edges", [])
+	_check(not access_edges.is_empty(), "completed station guideway access must be derived for rendering")
+	var bus_stations_with_access: Dictionary = {}
+	for edge_variant: Variant in access_edges:
+		var edge: Dictionary = edge_variant
+		if str(edge.get("station_id", "")).begins_with("bus_stop_"):
+			bus_stations_with_access[str(edge.get("station_id", ""))] = true
+			_check(str(edge.get("kind", "")) == "road", "bus station access edge must terminate on a completed road")
+	_check(bus_stations_with_access.has("bus_stop_a") and bus_stations_with_access.has("bus_stop_b"), "each completed bus station must expose at least one same-cell or cardinal road access edge")
 	_check(Dictionary(runtime.get("tile_states", {})).has(str(_tile(5, 3))), "runtime snapshot must expose crossing tile state")
 	_check(Dictionary(runtime.get("crossings", {})).has(crossing_id), "runtime snapshot must expose authoritative crossing records")
 
@@ -681,6 +730,7 @@ func _validate_complete_networks_and_persistence() -> void:
 	_check(not network.crossings.has(crossing_id), "orphan level crossing must disappear after its track is removed")
 
 	var snapshot := network.to_dict()
+	_check(not snapshot.has("station_access_edges"), "derived station access edges must never enter the persisted transport schema")
 	var validation := TransportNetworkSystemScript.validate_snapshot(snapshot)
 	_check(bool(validation.get("valid", false)), "authoritative transport snapshot must validate before persistence: %s" % [validation.get("issues", [])])
 	var encoded := JSON.stringify(snapshot)
@@ -691,6 +741,7 @@ func _validate_complete_networks_and_persistence() -> void:
 	var restored = TransportNetworkSystemScript.create_from_dict(decoded)
 	var restored_snapshot: Dictionary = restored.to_dict()
 	_check(restored_snapshot == snapshot, "transport network must survive a deterministic JSON round trip")
+	_check(restored.station_access_edges(terrain) == network.station_access_edges(terrain), "station access edges must be recomputed deterministically after reload")
 	_check(restored.active_lines().size() == 3 and str(restored.routes.get("metro_line_1", {}).get("status", "")) == "suspended", "route operational and suspension states must survive loading")
 	_check(restored.navigation_blocker_ids() == network.navigation_blocker_ids(), "navigation blockers must survive loading")
 	var deletion_copy = TransportNetworkSystemScript.create_from_dict(decoded)
