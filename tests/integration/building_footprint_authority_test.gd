@@ -22,6 +22,23 @@ const FOOTPRINT_SCENARIOS := [
 	{"size": "medium", "display_name": "學校", "cell_count": 2},
 	{"size": "large", "display_name": "體育館", "cell_count": 3},
 ]
+const DEFAULT_FIRST_BLOCKER_OFFSETS := {
+	"small": {
+		"trees": [0],
+		"river_lake": [0],
+		"hill_cliff": [0],
+	},
+	"medium": {
+		"trees": [0, 1],
+		"river_lake": [0, 1],
+		"hill_cliff": [0],
+	},
+	"large": {
+		"trees": [0, 1, 2],
+		"river_lake": [0, 1],
+		"hill_cliff": [0],
+	},
+}
 
 var _failed := false
 var _checks := 0
@@ -79,6 +96,7 @@ func _test_natural_obstacle_feedback_for_every_footprint_cell() -> void:
 			_check(not Array(tile_state.get("backdrop_feature_ids", [])).is_empty(), "%s layout obstacle has no backdrop feature identity" % base_kind)
 	for obstacle_kind: String in NATURAL_OBSTACLE_KINDS:
 		_check(represented_kinds.has(obstacle_kind), "default 10x10 layout omits %s obstacles" % obstacle_kind)
+	_test_default_layout_obstacles_reach_placement_authority(layout_coordinator)
 
 	for scenario_variant: Variant in FOOTPRINT_SCENARIOS:
 		var scenario: Dictionary = scenario_variant
@@ -117,6 +135,81 @@ func _test_natural_obstacle_feedback_for_every_footprint_cell() -> void:
 					sequence_before,
 					label
 				)
+
+
+func _test_default_layout_obstacles_reach_placement_authority(coordinator) -> void:
+	# The synthetic matrix below locks every size/offset/kind combination. This
+	# bridge independently proves that layout 3's untouched backdrop-derived
+	# records reach the same placement authority. Only offsets that can be the
+	# first blocker in the frozen map are expected; unavailable combinations
+	# remain covered by the synthetic matrix instead of rewriting the layout.
+	var grid_size: Vector2i = coordinator.terrain_map.grid_size()
+	for scenario_variant: Variant in FOOTPRINT_SCENARIOS:
+		var scenario: Dictionary = scenario_variant
+		var size_tier := str(scenario["size"])
+		var cell_count := int(scenario["cell_count"])
+		var observed_offsets := {
+			"trees": [],
+			"river_lake": [],
+			"hill_cliff": [],
+		}
+		for row: int in range(grid_size.y):
+			for column: int in range(grid_size.x - cell_count + 1):
+				var anchor_tile_id := int(coordinator.terrain_map.tile_id_for_coordinate(Vector2i(column, row)))
+				var resolved: Dictionary = BuildingFootprintsScript.resolve_for_size(size_tier, anchor_tile_id, coordinator.terrain_map)
+				if not bool(resolved.get("ok", false)):
+					continue
+				var occupied_tiles: Array = resolved.get("occupied_tile_ids", [])
+				var first_blocked_offset := -1
+				var obstacle_kind := ""
+				for offset: int in cell_count:
+					var tile_id := int(occupied_tiles[offset])
+					if coordinator.terrain_map.is_buildable(tile_id):
+						continue
+					first_blocked_offset = offset
+					obstacle_kind = str(coordinator.terrain_map.base_kind(tile_id))
+					break
+				if obstacle_kind not in NATURAL_OBSTACLE_KINDS:
+					continue
+				var kind_offsets: Array = observed_offsets[obstacle_kind]
+				if kind_offsets.has(first_blocked_offset):
+					continue
+				kind_offsets.append(first_blocked_offset)
+				var blocked_tile_id := int(occupied_tiles[first_blocked_offset])
+				var label := "default %s offset %d %s" % [size_tier, first_blocked_offset, obstacle_kind]
+				for earlier_offset: int in first_blocked_offset:
+					_check(coordinator.terrain_map.is_buildable(int(occupied_tiles[earlier_offset])), "%s has an earlier blocked footprint cell" % label)
+				var blocked_state: Dictionary = coordinator.terrain_map.tile_state(blocked_tile_id)
+				_check(float(blocked_state.get("backdrop_coverage", 0.0)) > 0.0, "%s is not backed by visible default-layout coverage" % label)
+				_check(not Array(blocked_state.get("backdrop_feature_ids", [])).is_empty(), "%s has no default-layout feature identity" % label)
+				var balance_before := int(coordinator.treasury_balance())
+				var jobs_before: int = coordinator.construction.active_jobs().size()
+				var buildings_before: int = coordinator.session.state.buildings.size()
+				var sequence_before := int(coordinator.next_building_sequence)
+				var rejected: Dictionary = coordinator.start_approved_building(
+					str(scenario["display_name"]),
+					anchor_tile_id,
+					20
+				)
+				_check(not bool(rejected.get("ok", false)), "%s placement was not rejected" % label)
+				_check(str(rejected.get("error", "")) == "terrain_not_flat", "%s rejection reason is not terrain_not_flat" % label)
+				_check(int(rejected.get("blocked_tile_id", -1)) == blocked_tile_id, "%s does not report its native first blocker" % label)
+				var feedback_terrain: Dictionary = rejected.get("terrain", {})
+				_check(str(feedback_terrain.get("base_kind", "")) == obstacle_kind, "%s feedback lost its native obstacle kind" % label)
+				_check(int(feedback_terrain.get("tile_id", -1)) == blocked_tile_id, "%s feedback identifies the wrong native tile" % label)
+				_assert_no_placement_mutation(
+					coordinator,
+					balance_before,
+					jobs_before,
+					buildings_before,
+					sequence_before,
+					label
+				)
+		for obstacle_kind: String in NATURAL_OBSTACLE_KINDS:
+			var actual_offsets: Array = observed_offsets[obstacle_kind]
+			actual_offsets.sort()
+			var expected_offsets: Array = DEFAULT_FIRST_BLOCKER_OFFSETS[size_tier][obstacle_kind]
+			_check(actual_offsets == expected_offsets, "default %s %s first-blocker offsets changed: expected=%s actual=%s" % [size_tier, obstacle_kind, expected_offsets, actual_offsets])
 
 
 func _test_atomic_placement_and_single_building_identity() -> void:
