@@ -98,23 +98,14 @@ func _run() -> void:
 		if tab.is_visible_in_tree():
 			visible_persistent_tabs.append(tab)
 	_check(visible_persistent_tabs.is_empty(), "no persistent TabContainer navigation is visible over the map")
-	var fiscal_tabs := main.find_child("FiscalCategoryTabs", true, false) as TabContainer
-	_check(fiscal_tabs != null and fiscal_tabs.get_tab_count() == 3, "finance root exposes exactly three broad categories")
-	if fiscal_tabs != null:
-		var fiscal_tab_style := fiscal_tabs.get_theme_stylebox("tab_unselected") as StyleBoxFlat
-		_check(fiscal_tab_style != null, "finance tabs expose an explicit bordered style")
-		if fiscal_tab_style != null:
-			_check(
-				fiscal_tab_style.content_margin_left >= 8.0 and fiscal_tab_style.content_margin_right >= 8.0,
-				"finance tab labels keep visible horizontal padding"
-			)
-			_check(
-				fiscal_tab_style.get_border_width(SIDE_LEFT) >= 2 and fiscal_tab_style.get_border_width(SIDE_RIGHT) >= 2,
-				"finance tabs retain clear individual boundaries"
-			)
-		for fiscal_category_variant in fiscal_tabs.get_children():
-			var subcategories := fiscal_category_variant as TabContainer
-			_check(subcategories != null and subcategories.get_tab_count() == 2, "each finance category reveals exactly two focused subcategories")
+	_check(main.find_child("FiscalCategoryTabs", true, false) == null, "finance removes the legacy nested fiscal TabContainer")
+	var fiscal_state: Dictionary = main.call("debug_fiscal_draft_state")
+	var fiscal_ui: Dictionary = fiscal_state.get("ui", {})
+	_check(Array(fiscal_ui.get("category_ids", [])).size() == 6, "finance exposes six focused category choices")
+	_check(Array(fiscal_ui.get("plan_ids", [])).size() == 3, "each fiscal category exposes three plan choices")
+	for category_id in ["resident_tax", "industry_tax", "utilities", "environment_energy", "city_services", "education_leisure"]:
+		var fiscal_card := main.find_child("FiscalCategoryCard_%s" % category_id, true, false) as Button
+		_check(fiscal_card != null and fiscal_card.custom_minimum_size.y >= 44.0, "fiscal category '%s' remains a reachable 44px card" % category_id)
 	_check(main.find_child("RightPanel", true, false) == null, "legacy fixed side rail does not exist")
 	_check(main.find_child("ReportPanel", true, false) == null, "legacy fixed report rail does not exist")
 	_check(main.find_child("TopBar", true, false) == null, "legacy fixed TopBar is not instantiated")

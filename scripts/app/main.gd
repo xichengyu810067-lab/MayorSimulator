@@ -115,6 +115,15 @@ const SERVICE_DEFS := {
 	"stadium": {"name": "體育館門票", "min": 0, "max": 160, "default": 80, "reasonable": 80, "unit": "次", "basis": "按入場次數", "building": "體育館", "base_uses": 10}
 }
 
+const FISCAL_CATEGORY_SPECS := [
+	{"id": "resident_tax", "title": "居民稅", "items": [{"kind": "tax", "key": "income"}, {"kind": "tax", "key": "consumption"}]},
+	{"id": "industry_tax", "title": "產業稅", "items": [{"kind": "tax", "key": "business"}, {"kind": "tax", "key": "industry"}]},
+	{"id": "utilities", "title": "水電", "items": [{"kind": "utility", "key": "water"}, {"kind": "utility", "key": "electricity"}]},
+	{"id": "environment_energy", "title": "環境能源", "items": [{"kind": "utility", "key": "garbage"}, {"kind": "utility", "key": "gas"}]},
+	{"id": "city_services", "title": "城市服務", "items": [{"kind": "service", "key": "parking"}, {"kind": "service", "key": "medical"}]},
+	{"id": "education_leisure", "title": "教育休閒", "items": [{"kind": "service", "key": "tuition"}, {"kind": "service", "key": "stadium"}]},
+]
+
 const GOVERNANCE_STATUS_ORDER := ["implemented", "review", "unimplemented"]
 const GOVERNANCE_STATUS_TITLES := {
 	"unimplemented": "未實施",
@@ -207,6 +216,20 @@ var service_inputs: Dictionary = {}
 var fiscal_apply_button: Button
 var fiscal_discard_button: Button
 var fiscal_draft_status_label: Label
+var fiscal_category_surface: VBoxContainer
+var fiscal_category_grid: GridContainer
+var fiscal_plan_surface: VBoxContainer
+var fiscal_plan_title: Label
+var fiscal_plan_hint: Label
+var fiscal_custom_editor: VBoxContainer
+var fiscal_custom_pages: Dictionary = {}
+var fiscal_draft_preview: PanelContainer
+var fiscal_draft_change_list: Label
+var fiscal_draft_risk_label: Label
+var fiscal_responsive_layout: GridContainer
+var fiscal_page_scroll: ScrollContainer
+var _selected_fiscal_category := ""
+var _selected_fiscal_plan := ""
 var _fiscal_draft_active := false
 var _fiscal_draft_tax_rates: Dictionary = {}
 var _fiscal_draft_utility_fees: Dictionary = {}
@@ -1708,111 +1731,140 @@ func _build_building_tab() -> ScrollContainer:
 func _build_fiscal_tab() -> ScrollContainer:
 	var scroll := ScrollContainer.new()
 	scroll.name = "稅率與公共事業費"
+	fiscal_page_scroll = scroll
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	# The fiscal controls need more vertical room than a 1280x720 municipal
-	# window provides.  Let the outer page scroll instead of allowing its minimum
-	# height to escape the PageHost and clip below the viewport.
 	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 
 	var content := VBoxContainer.new()
-	content.custom_minimum_size = Vector2(0, 0)
 	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	content.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	content.add_theme_constant_override("separation", 12)
 	scroll.add_child(content)
 
 	content.add_child(_illustrated_section_title("funds", "稅率與公共收費"))
-	var legend := HFlowContainer.new()
-	legend.name = "FiscalWarningLegend"
-	legend.add_theme_constant_override("separation", 18)
-	legend.add_child(_label("● 綠色　正常／可負擔", 15, COLOR_SUCCESS))
-	legend.add_child(_label("● 黃色　收入不足", 15, COLOR_CAUTION))
-	legend.add_child(_label("● 紅色　負擔過高", 15, COLOR_WARNING))
-	content.add_child(legend)
+	var instruction := _label("先選一個分類，再選現行、合理建議或自訂方案；所有分類會累積成同一份草稿。", 16, _theme_muted())
+	instruction.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	content.add_child(instruction)
 
-	var body := HBoxContainer.new()
-	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	body.add_theme_constant_override("separation", 14)
-	content.add_child(body)
+	fiscal_responsive_layout = GridContainer.new()
+	fiscal_responsive_layout.name = "FiscalResponsiveLayout"
+	fiscal_responsive_layout.columns = 2
+	fiscal_responsive_layout.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	fiscal_responsive_layout.add_theme_constant_override("h_separation", 14)
+	fiscal_responsive_layout.add_theme_constant_override("v_separation", 14)
+	content.add_child(fiscal_responsive_layout)
 
-	var categories := TabContainer.new()
-	categories.name = "FiscalCategoryTabs"
-	categories.set_meta("progressive_choice_group", true)
-	categories.custom_minimum_size = Vector2(560, 500)
-	categories.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	categories.size_flags_stretch_ratio = 1.25
-	categories.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_style_tabs(categories)
-	categories.add_theme_font_size_override("font_size", 18)
-	categories.add_theme_constant_override("side_margin", 5)
-	body.add_child(categories)
+	var choice_panel := _panel(_theme_panel_alt(), 9, 14)
+	choice_panel.name = "FiscalChoicePanel"
+	choice_panel.custom_minimum_size = Vector2(560, 500)
+	choice_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	choice_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var choice_box := VBoxContainer.new()
+	choice_box.add_theme_constant_override("separation", 12)
+	choice_panel.add_child(choice_box)
+	fiscal_responsive_layout.add_child(choice_panel)
 
-	var category_families: Array[Dictionary] = [
-		{"title": "稅收", "specs": [
-			{"title": "居民稅", "kind": "tax", "keys": ["income", "consumption"]},
-			{"title": "產業稅", "kind": "tax", "keys": ["business", "industry"]},
-		]},
-		{"title": "公共事業", "specs": [
-			{"title": "水電", "kind": "utility", "keys": ["water", "electricity"]},
-			{"title": "環境能源", "kind": "utility", "keys": ["gas", "garbage"]},
-		]},
-		{"title": "服務收費", "specs": [
-			{"title": "城市服務", "kind": "service", "keys": ["parking", "medical"]},
-			{"title": "教育休閒", "kind": "service", "keys": ["tuition", "stadium"]},
-		]},
+	fiscal_category_surface = VBoxContainer.new()
+	fiscal_category_surface.name = "FiscalCategorySurface"
+	fiscal_category_surface.add_theme_constant_override("separation", 10)
+	choice_box.add_child(fiscal_category_surface)
+	fiscal_category_surface.add_child(_section_title("選擇調整分類"))
+	var category_help := _label("六個分類各自提供三種方案；切換分類不會清除其他草稿變更。", 15, _theme_muted())
+	category_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	fiscal_category_surface.add_child(category_help)
+	fiscal_category_grid = GridContainer.new()
+	fiscal_category_grid.name = "FiscalCategoryCardGrid"
+	fiscal_category_grid.columns = 2
+	fiscal_category_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	fiscal_category_grid.add_theme_constant_override("h_separation", 10)
+	fiscal_category_grid.add_theme_constant_override("v_separation", 10)
+	fiscal_category_surface.add_child(fiscal_category_grid)
+	for spec: Dictionary in FISCAL_CATEGORY_SPECS:
+		var category_button := _button(str(spec["title"]))
+		category_button.name = "FiscalCategoryCard_%s" % str(spec["id"])
+		category_button.tooltip_text = _fiscal_category_hint(str(spec["title"]))
+		category_button.custom_minimum_size = Vector2(250, 104)
+		category_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		category_button.add_theme_font_size_override("font_size", 18)
+		category_button.pressed.connect(Callable(self, "_select_fiscal_category").bind(str(spec["id"])))
+		fiscal_category_grid.add_child(category_button)
+
+	fiscal_plan_surface = VBoxContainer.new()
+	fiscal_plan_surface.name = "FiscalPlanSurface"
+	fiscal_plan_surface.add_theme_constant_override("separation", 10)
+	fiscal_plan_surface.hide()
+	choice_box.add_child(fiscal_plan_surface)
+	var back_button := _button("← 返回六個分類")
+	back_button.name = "FiscalBackToCategories"
+	back_button.custom_minimum_size = Vector2(0, 44)
+	back_button.pressed.connect(_show_fiscal_categories)
+	fiscal_plan_surface.add_child(back_button)
+	fiscal_plan_title = _section_title("分類方案")
+	fiscal_plan_title.name = "FiscalSelectedCategoryTitle"
+	fiscal_plan_title.set_meta("l10n_skip", true)
+	fiscal_plan_surface.add_child(fiscal_plan_title)
+	fiscal_plan_hint = _label("", 15, _theme_muted())
+	fiscal_plan_hint.name = "FiscalSelectedCategoryHint"
+	fiscal_plan_hint.set_meta("l10n_skip", true)
+	fiscal_plan_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	fiscal_plan_surface.add_child(fiscal_plan_hint)
+	var plan_grid := GridContainer.new()
+	plan_grid.name = "FiscalPlanCardGrid"
+	plan_grid.columns = 3
+	plan_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	plan_grid.add_theme_constant_override("h_separation", 8)
+	fiscal_plan_surface.add_child(plan_grid)
+	var plan_specs: Array[Dictionary] = [
+		{"id": "current", "title": "現行設定", "help": "恢復此分類正式值"},
+		{"id": "reasonable", "title": "合理值建議", "help": "套用既有合理值"},
+		{"id": "custom", "title": "自訂方案", "help": "顯示滑桿與數字輸入"},
 	]
-	for family: Dictionary in category_families:
-		var subcategories := TabContainer.new()
-		subcategories.name = str(family["title"])
-		subcategories.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		subcategories.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		subcategories.add_theme_font_size_override("font_size", 17)
-		subcategories.set_meta("progressive_choice_group", true)
-		_style_tabs(subcategories)
-		for spec: Dictionary in family["specs"]:
-			var page := VBoxContainer.new()
-			page.name = str(spec["title"])
-			page.add_theme_constant_override("separation", 10)
-			var intro := _label(_fiscal_category_hint(str(spec["title"])), 15, _theme_muted())
-			intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-			page.add_child(intro)
-			var page_panel := _panel(_theme_panel_alt(), 9, 14)
-			page_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			page_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
-			var rows := VBoxContainer.new()
-			rows.add_theme_constant_override("separation", 10)
-			rows.set_meta("progressive_choice_group", true)
-			page_panel.add_child(rows)
-			for key: String in spec["keys"]:
-				match str(spec["kind"]):
-					"tax":
-						rows.add_child(_build_tax_row(key))
-					"utility":
-						rows.add_child(_build_utility_fee_row(key))
-					"service":
-						rows.add_child(_build_service_fee_row(key))
-			page.add_child(page_panel)
-			subcategories.add_child(page)
-		categories.add_child(subcategories)
-	categories.get_tab_bar().clip_tabs = true
+	for plan_spec: Dictionary in plan_specs:
+		var plan_button := _button(str(plan_spec["title"]))
+		plan_button.name = "FiscalPlanCard_%s" % str(plan_spec["id"])
+		plan_button.tooltip_text = str(plan_spec["help"])
+		plan_button.custom_minimum_size = Vector2(150, 86)
+		plan_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		plan_button.add_theme_font_size_override("font_size", 16)
+		plan_button.pressed.connect(Callable(self, "_select_fiscal_plan").bind(str(plan_spec["id"])))
+		plan_grid.add_child(plan_button)
+
+	fiscal_custom_editor = VBoxContainer.new()
+	fiscal_custom_editor.name = "FiscalCustomEditor"
+	fiscal_custom_editor.add_theme_constant_override("separation", 10)
+	fiscal_custom_editor.hide()
+	fiscal_plan_surface.add_child(fiscal_custom_editor)
+	for spec: Dictionary in FISCAL_CATEGORY_SPECS:
+		var page := VBoxContainer.new()
+		page.name = "FiscalCustomPage_%s" % str(spec["id"])
+		page.add_theme_constant_override("separation", 10)
+		page.hide()
+		for item: Dictionary in spec["items"]:
+			match str(item["kind"]):
+				"tax":
+					page.add_child(_build_tax_row(str(item["key"])))
+				"utility":
+					page.add_child(_build_utility_fee_row(str(item["key"])))
+				"service":
+					page.add_child(_build_service_fee_row(str(item["key"])))
+		fiscal_custom_pages[str(spec["id"])] = page
+		fiscal_custom_editor.add_child(page)
 
 	var summary_panel := _panel(_theme_panel_alt(), 9, 14)
-	summary_panel.name = "FiscalForecastPanel"
+	summary_panel.name = "FiscalDraftPreview"
+	fiscal_draft_preview = summary_panel
 	summary_panel.custom_minimum_size = Vector2(330, 0)
 	summary_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	summary_panel.size_flags_stretch_ratio = 0.65
 	summary_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	var summary_box := VBoxContainer.new()
 	summary_box.add_theme_constant_override("separation", 9)
 	summary_panel.add_child(summary_box)
-	var forecast_title := _section_title("即時財政預估")
+	var forecast_title := _section_title("整份草稿預覽")
 	forecast_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	forecast_title.max_lines_visible = 2
 	summary_box.add_child(forecast_title)
-	var forecast_help := _label("先調整多個項目、比較整體結果，再一次套用；離開前未套用的變更會放棄。", 15, _theme_muted())
+	var forecast_help := _label("這裡固定彙整六個分類；只有「套用全部」會寫入正式設定。", 15, _theme_muted())
 	forecast_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	summary_box.add_child(forecast_help)
 	fiscal_draft_status_label = _label("正式設定｜尚未變更", 16, _theme_muted())
@@ -1820,6 +1872,16 @@ func _build_fiscal_tab() -> ScrollContainer:
 	fiscal_draft_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	fiscal_draft_status_label.custom_minimum_size = Vector2(0, 48)
 	summary_box.add_child(fiscal_draft_status_label)
+	fiscal_draft_change_list = _label("", 14, _theme_text())
+	fiscal_draft_change_list.name = "FiscalDraftChangeList"
+	fiscal_draft_change_list.set_meta("l10n_skip", true)
+	fiscal_draft_change_list.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	summary_box.add_child(fiscal_draft_change_list)
+	fiscal_draft_risk_label = _label("", 15, _theme_muted())
+	fiscal_draft_risk_label.name = "FiscalDraftRisk"
+	fiscal_draft_risk_label.set_meta("l10n_skip", true)
+	fiscal_draft_risk_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	summary_box.add_child(fiscal_draft_risk_label)
 	var action_row := HBoxContainer.new()
 	action_row.name = "FiscalDraftActions"
 	action_row.add_theme_constant_override("separation", 8)
@@ -1844,7 +1906,9 @@ func _build_fiscal_tab() -> ScrollContainer:
 	operating_status.custom_minimum_size = Vector2(0, 82)
 	labels["fiscal_operating_status"] = operating_status
 	summary_box.add_child(operating_status)
-	body.add_child(summary_panel)
+	fiscal_responsive_layout.add_child(summary_panel)
+	scroll.resized.connect(Callable(self, "_layout_fiscal_surface").bind(scroll))
+	call_deferred("_layout_fiscal_surface", scroll)
 
 	return scroll
 
@@ -3484,6 +3548,125 @@ func _update_finance_visual(label_key: String, amount: int, scale: int, color: C
 
 
 
+func _fiscal_category_spec(category_id: String) -> Dictionary:
+	for spec: Dictionary in FISCAL_CATEGORY_SPECS:
+		if str(spec.get("id", "")) == category_id:
+			return spec
+	return {}
+
+
+func _layout_fiscal_surface(scroll: ScrollContainer) -> void:
+	if scroll == null or fiscal_responsive_layout == null:
+		return
+	var wide := scroll.size.x >= 1040.0
+	fiscal_responsive_layout.columns = 2 if wide else 1
+	if fiscal_category_grid != null:
+		fiscal_category_grid.columns = 2 if scroll.size.x >= 720.0 else 1
+
+
+func _show_fiscal_categories() -> void:
+	_selected_fiscal_category = ""
+	_selected_fiscal_plan = ""
+	if fiscal_category_surface != null:
+		fiscal_category_surface.show()
+	if fiscal_plan_surface != null:
+		fiscal_plan_surface.hide()
+	if fiscal_custom_editor != null:
+		fiscal_custom_editor.hide()
+	for page_variant in fiscal_custom_pages.values():
+		var page := page_variant as Control
+		if page != null:
+			page.hide()
+	_refresh_fiscal_draft_actions()
+
+
+func _select_fiscal_category(category_id: String) -> void:
+	var spec := _fiscal_category_spec(category_id)
+	if spec.is_empty():
+		return
+	_selected_fiscal_category = category_id
+	_selected_fiscal_plan = ""
+	if fiscal_category_surface != null:
+		fiscal_category_surface.hide()
+	if fiscal_plan_surface != null:
+		fiscal_plan_surface.show()
+	if fiscal_plan_title != null:
+		fiscal_plan_title.text = L10n.text("%s｜選擇方案") % L10n.text(str(spec["title"]))
+	if fiscal_plan_hint != null:
+		fiscal_plan_hint.text = L10n.text(_fiscal_category_hint(str(spec["title"])))
+	if fiscal_custom_editor != null:
+		fiscal_custom_editor.hide()
+	for page_variant in fiscal_custom_pages.values():
+		var page := page_variant as Control
+		if page != null:
+			page.hide()
+	_refresh_fiscal_draft_actions()
+
+
+func _select_fiscal_plan(plan_id: String) -> void:
+	if not plan_id in ["current", "reasonable", "custom"]:
+		return
+	var spec := _fiscal_category_spec(_selected_fiscal_category)
+	if spec.is_empty():
+		return
+	_selected_fiscal_plan = plan_id
+	var show_custom := plan_id == "custom"
+	if fiscal_custom_editor != null:
+		fiscal_custom_editor.visible = show_custom
+	for category_id_variant in fiscal_custom_pages.keys():
+		var category_id := str(category_id_variant)
+		var page := fiscal_custom_pages[category_id] as Control
+		if page != null:
+			page.visible = show_custom and category_id == _selected_fiscal_category
+	if show_custom:
+		_refresh_fiscal_draft_actions()
+		return
+	for item: Dictionary in spec["items"]:
+		var kind := str(item["kind"])
+		var key := str(item["key"])
+		var value := int(_fiscal_draft_base_dictionary(kind).get(key, _fiscal_value(kind, key)))
+		if plan_id == "reasonable":
+			value = int(_fiscal_definition(kind, key).get("reasonable", value))
+		_set_fiscal_draft_value(kind, key, value, false)
+	_refresh_fiscal_draft_actions()
+	_update_ui()
+
+
+func _fiscal_preview_value(kind: String, key: String, value: int) -> String:
+	var definition := _fiscal_definition(kind, key)
+	var unit := str(definition.get("unit", ""))
+	return "%d%s" % [value, "%" if kind == "tax" else " / %s" % unit]
+
+
+func _refresh_fiscal_draft_preview() -> void:
+	if fiscal_draft_change_list == null or fiscal_draft_risk_label == null:
+		return
+	var lines := PackedStringArray()
+	var elevated_count := 0
+	var pressure_total := 0
+	for spec: Dictionary in FISCAL_CATEGORY_SPECS:
+		var item_text := PackedStringArray()
+		for item: Dictionary in spec["items"]:
+			var kind := str(item["kind"])
+			var key := str(item["key"])
+			var definition := _fiscal_definition(kind, key)
+			var base := int(_fiscal_draft_base_dictionary(kind).get(key, _fiscal_value(kind, key)))
+			var draft := int(_fiscal_draft_dictionary(kind).get(key, base))
+			item_text.append(L10n.text("%s %s → %s") % [L10n.text(str(definition.get("name", key))), _fiscal_preview_value(kind, key, base), _fiscal_preview_value(kind, key, draft)])
+			var pressure := _fiscal_item_public_pressure(kind, draft, int(definition.get("reasonable", draft)))
+			pressure_total += pressure
+			if pressure > 0:
+				elevated_count += 1
+		lines.append(L10n.text("%s｜%s") % [L10n.text(str(spec["title"])), "；".join(item_text)])
+	fiscal_draft_change_list.text = "\n".join(lines)
+	if elevated_count == 0:
+		fiscal_draft_risk_label.text = L10n.text("民意／負擔風險｜目前草稿皆在合理負擔範圍。")
+		fiscal_draft_risk_label.add_theme_color_override("font_color", COLOR_SUCCESS)
+	else:
+		fiscal_draft_risk_label.text = L10n.text("民意／負擔風險｜%d 項高於合理範圍，預估壓力 +%d。") % [elevated_count, pressure_total]
+		fiscal_draft_risk_label.add_theme_color_override("font_color", COLOR_WARNING if elevated_count >= 3 else COLOR_CAUTION)
+
+
 func _begin_fiscal_draft() -> void:
 	_fiscal_draft_active = true
 	_fiscal_draft_base_tax_rates = tax_rates.duplicate(true)
@@ -3493,6 +3676,7 @@ func _begin_fiscal_draft() -> void:
 	_fiscal_draft_utility_fees = utility_fees.duplicate(true)
 	_fiscal_draft_service_fees = service_fees.duplicate(true)
 	_sync_fiscal_controls_from_draft()
+	_show_fiscal_categories()
 	_update_ui()
 
 
@@ -3541,7 +3725,7 @@ func _fiscal_display_value(kind: String, key: String, suffix: String) -> String:
 	return "%d%s → %d%s" % [base, suffix, value, suffix]
 
 
-func _set_fiscal_draft_value(kind: String, key: String, value: int) -> void:
+func _set_fiscal_draft_value(kind: String, key: String, value: int, do_refresh: bool = true) -> void:
 	if not _fiscal_draft_active:
 		_begin_fiscal_draft()
 	var definition := _fiscal_definition(kind, key)
@@ -3557,7 +3741,8 @@ func _set_fiscal_draft_value(kind: String, key: String, value: int) -> void:
 		"service":
 			service_sliders[key].set_value_no_signal(normalized)
 			_sync_number_input(service_inputs, key, normalized, true)
-	_update_ui()
+	if do_refresh:
+		_update_ui()
 
 
 func _sync_fiscal_controls_from_draft() -> void:
@@ -3587,6 +3772,7 @@ func _refresh_fiscal_draft_actions() -> void:
 		fiscal_apply_button.text = "套用全部（%d）" % changed if changed > 0 else "套用全部"
 	if fiscal_discard_button != null:
 		fiscal_discard_button.disabled = changed == 0
+	_refresh_fiscal_draft_preview()
 
 
 func _discard_fiscal_draft(explicit_action: bool = true, keep_active: bool = true) -> void:
@@ -3653,6 +3839,9 @@ func _fiscal_projection_snapshot(use_draft: bool) -> Dictionary:
 func debug_fiscal_draft_state() -> Dictionary:
 	var authoritative := _fiscal_projection_snapshot(false)
 	var projected := _fiscal_projection_snapshot(true)
+	var category_ids := PackedStringArray()
+	for spec: Dictionary in FISCAL_CATEGORY_SPECS:
+		category_ids.append(str(spec["id"]))
 	return {
 		"active": _fiscal_draft_active,
 		"dirty_count": _fiscal_dirty_count(),
@@ -3661,7 +3850,27 @@ func debug_fiscal_draft_state() -> Dictionary:
 		"service": _fiscal_draft_service_fees.duplicate(true),
 		"authoritative_net": int(authoritative["net"]),
 		"projected_net": int(projected["net"]),
+		"authoritative_income": int(authoritative["income"]),
+		"projected_income": int(projected["income"]),
+		"authoritative_expense": int(authoritative["expense"]),
+		"projected_expense": int(projected["expense"]),
+		"projected_safety_buffer": int(projected["safety_buffer"]),
 		"apply_generation": _fiscal_apply_generation,
+		"ui": {
+			"category_ids": Array(category_ids),
+			"category_count": category_ids.size(),
+			"plan_ids": ["current", "reasonable", "custom"],
+			"selected_category": _selected_fiscal_category,
+			"selected_plan": _selected_fiscal_plan,
+			"category_surface_visible": fiscal_category_surface != null and fiscal_category_surface.visible,
+			"plan_surface_visible": fiscal_plan_surface != null and fiscal_plan_surface.visible,
+			"custom_editor_visible": fiscal_custom_editor != null and fiscal_custom_editor.visible,
+			"preview_visible": fiscal_draft_preview != null and fiscal_draft_preview.visible,
+			"responsive_columns": fiscal_responsive_layout.columns if fiscal_responsive_layout != null else 0,
+			"preview_placement": "right" if fiscal_responsive_layout != null and fiscal_responsive_layout.columns == 2 else "below",
+			"preview_changes": fiscal_draft_change_list.text if fiscal_draft_change_list != null else "",
+			"risk_text": fiscal_draft_risk_label.text if fiscal_draft_risk_label != null else "",
+		},
 	}
 
 
@@ -3675,10 +3884,10 @@ func _fiscal_category_hint(category_title: String) -> String:
 			return "水費與電費；低價可補貼，但不能形成營運缺口。"
 		"環境能源":
 			return "瓦斯與垃圾處理費；依住戶與城市設施用量預估。"
-		"交通收費":
-			return "公車、捷運與停車收費；只在對應設施存在時產生收入。"
-		"社會服務":
-			return "醫療、學費與場館票價；過高會降低服務使用與居民滿意。"
+		"城市服務":
+			return "停車與醫療服務收費；過高會增加居民負擔並降低使用率。"
+		"教育休閒":
+			return "學費與場館票價；過高會降低服務使用與居民滿意。"
 	return "調整後會立即以其餘條件不變的方式重新估算。"
 
 func _fiscal_definition(kind: String, key: String) -> Dictionary:
@@ -6449,6 +6658,20 @@ func _rebuild_ui() -> void:
 	fiscal_apply_button = null
 	fiscal_discard_button = null
 	fiscal_draft_status_label = null
+	fiscal_category_surface = null
+	fiscal_category_grid = null
+	fiscal_plan_surface = null
+	fiscal_plan_title = null
+	fiscal_plan_hint = null
+	fiscal_custom_editor = null
+	fiscal_custom_pages.clear()
+	fiscal_draft_preview = null
+	fiscal_draft_change_list = null
+	fiscal_draft_risk_label = null
+	fiscal_responsive_layout = null
+	fiscal_page_scroll = null
+	_selected_fiscal_category = ""
+	_selected_fiscal_plan = ""
 	_fiscal_draft_active = false
 	bill_buttons.clear()
 	governance_status_tabs = null

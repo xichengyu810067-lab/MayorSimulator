@@ -2,13 +2,13 @@ extends SceneTree
 
 const OUTPUT_PREFIX := "--fiscal-draft-output-dir="
 const RESULT_FILENAME := "fiscal-draft-result.json"
-const CAPTURE_FILENAME := "fiscal-draft-actual-main-native.png"
 const SAVE_PATH := "user://mayor_simulator/tests/fiscal_draft_visible_acceptance.json"
 const TestCleanup := preload("res://tests/helpers/scene_tree_test_cleanup.gd")
 
 var output_dir := ""
 var failed := false
 var main
+var captures: Array[Dictionary] = []
 
 
 func _initialize() -> void:
@@ -36,7 +36,7 @@ func _run() -> void:
 	root.add_child(main)
 	await _settle(12)
 	main.start_screen.animation_duration = 0.04
-	main.start_screen.new_game_button.emit_signal("pressed")
+	main.start_screen.new_game_button.pressed.emit()
 	for _frame in range(180):
 		if main._game_started and not main.start_screen.visible:
 			break
@@ -45,41 +45,64 @@ func _run() -> void:
 		_fail("new game did not reach the actual Main map")
 		return
 	if main.tutorial_overlay != null and main.tutorial_overlay.is_open():
-		main.tutorial_overlay.skip_button.emit_signal("pressed")
+		main.tutorial_overlay.skip_button.pressed.emit()
 		await _settle(6)
-
-	main.municipal_button.emit_signal("pressed")
+	main.municipal_button.pressed.emit()
 	await _settle(4)
 	var finance_button := main.municipal_overlay.find_child("FinanceButton", true, false) as Button
 	if finance_button == null:
 		_fail("actual municipal hub has no finance destination")
 		return
-	finance_button.emit_signal("pressed")
+	finance_button.pressed.emit()
 	await _settle(8)
 	if main.municipal_overlay.current_page() != "finance":
 		_fail("actual municipal finance card did not open finance")
 		return
 
+	var categories_state := _validate_categories()
+	if categories_state.is_empty():
+		return
+	if not await _capture_native("fiscal-categories-native.png"):
+		return
+
 	var authority_tax := int(main.tax_rates["income"])
 	var authority_water := int(main.utility_fees["water"])
 	var authority_stadium := int(main.service_fees["stadium"])
-	main.call("_on_tax_changed", float(authority_tax + 3), "income")
-	main.call("_on_utility_fee_changed", float(authority_water + 7), "water")
-	main.call("_on_service_fee_changed", float(authority_stadium + 9), "stadium")
-	await _settle(10)
-	var state: Dictionary = main.call("debug_fiscal_draft_state")
-	var layout := _validate_draft_layout(state, authority_tax, authority_water, authority_stadium)
-	if layout.is_empty():
+	if not await _open_custom("resident_tax"):
 		return
-	main._set_hint("驗收：可連續調整多項、即時比較整組預估，再選擇一次套用或全部放棄。", false)
+	var income_slider := main.find_child("FiscalSlider_tax_income", true, false) as HSlider
+	if income_slider == null:
+		_fail("resident custom plan has no income slider")
+		return
+	income_slider.value = authority_tax + 3
+	await _settle(5)
+	if not await _capture_native("fiscal-custom-plan-native.png"):
+		return
+	if not await _open_custom("utilities"):
+		return
+	var water_slider := main.find_child("FiscalSlider_utility_water", true, false) as HSlider
+	if water_slider == null:
+		_fail("utility custom plan has no water slider")
+		return
+	water_slider.value = authority_water + 7
+	await _settle(4)
+	if not await _open_custom("education_leisure"):
+		return
+	var stadium_slider := main.find_child("FiscalSlider_service_stadium", true, false) as HSlider
+	if stadium_slider == null:
+		_fail("education custom plan has no stadium slider")
+		return
+	stadium_slider.value = authority_stadium + 9
 	await _settle(8)
-	var capture := _capture_native()
-	if capture.is_empty():
+	var draft_state := _validate_draft(authority_tax, authority_water, authority_stadium)
+	if draft_state.is_empty():
+		return
+	if not await _capture_native("fiscal-draft-preview-native.png"):
 		return
 
 	var autosaves_before := int(main._autosave_count)
-	main.fiscal_apply_button.emit_signal("pressed")
-	await _settle(6)
+	main.fiscal_apply_button.pressed.emit()
+	await _settle(8)
 	var applied: Dictionary = main.call("debug_fiscal_draft_state")
 	if (
 		int(main.tax_rates["income"]) != authority_tax + 3
@@ -90,12 +113,13 @@ func _run() -> void:
 	):
 		_fail("apply-all did not atomically commit the visible draft exactly once")
 		return
+	if not await _capture_native("fiscal-applied-native.png"):
+		return
 
 	var result := {
-		"schema_version": 1,
-		"suite": "mayor-simulator-fiscal-draft-actual-main-native-visible-acceptance",
+		"schema_version": 2,
+		"suite": "mayor-simulator-fiscal-card-draft-actual-main-native-visible-acceptance",
 		"status": "PASS",
-		"contract_validated": true,
 		"actual_main": true,
 		"scene": "res://scenes/Main.tscn",
 		"capture_surface_kind": "native_fullscreen_root",
@@ -108,9 +132,10 @@ func _run() -> void:
 			"status_sha256": OS.get_environment("MAYOR_ACCEPTANCE_STATUS_SHA256"),
 			"fingerprint": OS.get_environment("MAYOR_ACCEPTANCE_SOURCE_FINGERPRINT"),
 		},
-		"fiscal_draft": layout,
-		"apply_all": {"committed_count": 3, "autosave_count": 1, "dirty_after_apply": 0},
-		"captures": [capture],
+		"category_surface": categories_state,
+		"draft_preview": draft_state,
+		"apply_all": {"committed_count": 3, "autosave_delta": 1, "dirty_after_apply": 0},
+		"captures": captures,
 	}
 	var result_file := FileAccess.open(output_dir.path_join(RESULT_FILENAME), FileAccess.WRITE)
 	if result_file == null:
@@ -118,66 +143,91 @@ func _run() -> void:
 		return
 	result_file.store_string(JSON.stringify(result, "\t"))
 	result_file.close()
-	print("FISCAL_DRAFT_NATIVE_VISIBLE_ACCEPTANCE_PASSED captures=1 draft=3 apply_once=true actual_main=true")
+	print("FISCAL_DRAFT_NATIVE_VISIBLE_ACCEPTANCE_PASSED captures=4 categories=6 plans=3 draft=3 apply_once=true actual_main=true")
 	await TestCleanup.finish(self, [main], 0)
 
 
-func _validate_draft_layout(state: Dictionary, authority_tax: int, authority_water: int, authority_stadium: int) -> Dictionary:
-	var apply_button := main.find_child("FiscalApplyAllButton", true, false) as Button
-	var discard_button := main.find_child("FiscalDiscardButton", true, false) as Button
-	var status := main.find_child("FiscalDraftStatus", true, false) as Label
-	var forecast_panel := main.find_child("FiscalForecastPanel", true, false) as PanelContainer
-	var overlay_rect: Rect2 = main.municipal_overlay.get_global_rect()
-	if apply_button == null or discard_button == null or status == null or forecast_panel == null:
-		_fail("finance draft controls are incomplete")
+func _validate_categories() -> Dictionary:
+	var state: Dictionary = main.call("debug_fiscal_draft_state")
+	var ui: Dictionary = state.get("ui", {})
+	var cards := main.find_children("FiscalCategoryCard_*", "Button", true, false)
+	var preview := main.find_child("FiscalDraftPreview", true, false) as PanelContainer
+	if cards.size() != 6 or int(ui.get("category_count", 0)) != 6 or not bool(ui.get("category_surface_visible", false)):
+		_fail("finance does not show the six-card category surface")
 		return {}
-	var controls_visible := apply_button.is_visible_in_tree() and discard_button.is_visible_in_tree() and status.is_visible_in_tree()
-	var controls_inside := overlay_rect.encloses(apply_button.get_global_rect()) and overlay_rect.encloses(discard_button.get_global_rect())
+	if preview == null or not preview.is_visible_in_tree() or main.find_child("FiscalCategoryTabs", true, false) != null:
+		_fail("whole-draft preview is missing or legacy nested tabs remain")
+		return {}
+	return {"category_count": 6, "ids": ui.get("category_ids", []), "preview_visible": true, "legacy_tabs_absent": true, "responsive_columns": ui.get("responsive_columns", 0)}
+
+
+func _open_custom(category_id: String) -> bool:
+	var back := main.find_child("FiscalBackToCategories", true, false) as Button
+	var current_ui: Dictionary = Dictionary(main.call("debug_fiscal_draft_state")).get("ui", {})
+	if bool(current_ui.get("plan_surface_visible", false)) and back != null:
+		back.pressed.emit()
+		await _settle(3)
+	var category := main.find_child("FiscalCategoryCard_%s" % category_id, true, false) as Button
+	var custom := main.find_child("FiscalPlanCard_custom", true, false) as Button
+	if category == null or custom == null:
+		_fail("missing category or custom plan card for %s" % category_id)
+		return false
+	category.pressed.emit()
+	await _settle(3)
+	custom.pressed.emit()
+	await _settle(4)
+	var state: Dictionary = main.call("debug_fiscal_draft_state")
+	var ui: Dictionary = state.get("ui", {})
+	if str(ui.get("selected_category", "")) != category_id or str(ui.get("selected_plan", "")) != "custom" or not bool(ui.get("custom_editor_visible", false)):
+		_fail("custom plan did not become visible for %s" % category_id)
+		return false
+	return true
+
+
+func _validate_draft(authority_tax: int, authority_water: int, authority_stadium: int) -> Dictionary:
+	var state: Dictionary = main.call("debug_fiscal_draft_state")
+	var ui: Dictionary = state.get("ui", {})
+	var changes := main.find_child("FiscalDraftChangeList", true, false) as Label
+	var risk := main.find_child("FiscalDraftRisk", true, false) as Label
+	var apply_button := main.find_child("FiscalApplyAllButton", true, false) as Button
 	if (
 		int(state.get("dirty_count", -1)) != 3
 		or int(main.tax_rates["income"]) != authority_tax
 		or int(main.utility_fees["water"]) != authority_water
 		or int(main.service_fees["stadium"]) != authority_stadium
-		or not status.text.contains("3")
-		or not apply_button.text.contains("3")
-		or apply_button.disabled
-		or discard_button.disabled
-		or not controls_visible
-		or not controls_inside
+		or changes == null or not changes.text.contains("→")
+		or risk == null or risk.text.is_empty()
+		or apply_button == null or apply_button.disabled or not apply_button.text.contains("3")
 		or int(state.get("projected_net", 0)) == int(state.get("authoritative_net", 0))
 	):
-		_fail("visible finance draft contract failed")
+		_fail("visible whole-draft preview contract failed")
 		return {}
 	return {
 		"dirty_count": 3,
 		"authority_unchanged_before_apply": true,
-		"whole_draft_forecast_changed": true,
-		"status_text": status.text,
-		"apply_text": apply_button.text,
-		"actions_visible": controls_visible,
-		"actions_inside_overlay": controls_inside,
-		"forecast_panel_rect": str(forecast_panel.get_global_rect()),
+		"formal_to_draft_visible": true,
+		"risk_visible": true,
+		"income": state.get("projected_income", 0),
+		"expense": state.get("projected_expense", 0),
+		"net": state.get("projected_net", 0),
+		"safety_buffer": state.get("projected_safety_buffer", 0),
+		"preview_placement": ui.get("preview_placement", ""),
 	}
 
 
-func _capture_native() -> Dictionary:
+func _capture_native(filename: String) -> bool:
+	await _settle(3)
 	var image := root.get_texture().get_image()
 	if image.is_empty():
 		_fail("native root capture is empty")
-		return {}
-	var path := output_dir.path_join(CAPTURE_FILENAME)
+		return false
+	var path := output_dir.path_join(filename)
 	if image.save_png(path) != OK:
-		_fail("failed to save fiscal draft capture")
-		return {}
+		_fail("failed to save %s" % filename)
+		return false
 	var size := image.get_size()
-	return {
-		"filename": CAPTURE_FILENAME,
-		"surface_kind": "native_fullscreen_root",
-		"width": size.x,
-		"height": size.y,
-		"bytes": FileAccess.get_file_as_bytes(path).size(),
-		"sha256": FileAccess.get_sha256(path).to_lower(),
-	}
+	captures.append({"filename": filename, "surface_kind": "native_fullscreen_root", "width": size.x, "height": size.y, "bytes": FileAccess.get_file_as_bytes(path).size(), "sha256": FileAccess.get_sha256(path).to_lower()})
+	return true
 
 
 func _settle(frames: int) -> void:

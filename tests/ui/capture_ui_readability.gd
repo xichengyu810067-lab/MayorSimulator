@@ -290,11 +290,10 @@ func _capture_states() -> void:
 		overlay.call("open_page", page_id)
 		await _settle()
 		if page_id == "finance":
-			var fiscal_tabs := overlay.find_child("FiscalCategoryTabs", true, false) as TabContainer
 			var fiscal_scroll_contract: Dictionary = await FiscalScrollContract.validate(
 				self,
 				overlay,
-				fiscal_tabs,
+				null,
 				_expected_fiscal_slider_names
 			)
 			if not bool(fiscal_scroll_contract.get("ok", false)):
@@ -1298,14 +1297,18 @@ func _validate_visual_data(overlay, expected_page: String) -> bool:
 		if not has_status_chip:
 			push_error("Finance page has no visual low/recommended/high status chip.")
 			return false
-		var fiscal_tabs := overlay.find_child("FiscalCategoryTabs", true, false) as TabContainer
-		if fiscal_tabs == null or fiscal_tabs.get_tab_count() != 3:
-			push_error("Finance page must expose three broad categories.")
+		if overlay.find_child("FiscalCategoryTabs", true, false) != null:
+			push_error("Finance page must not retain the old nested fiscal TabContainer.")
 			return false
-		for fiscal_category_variant in fiscal_tabs.get_children():
-			var subcategories := fiscal_category_variant as TabContainer
-			if subcategories == null or subcategories.get_tab_count() != 2:
-				push_error("Each finance category must reveal two subcategories.")
+		var fiscal_state: Dictionary = scene.call("debug_fiscal_draft_state")
+		var fiscal_ui: Dictionary = fiscal_state.get("ui", {})
+		if Array(fiscal_ui.get("category_ids", [])).size() != 6 or Array(fiscal_ui.get("plan_ids", [])).size() != 3:
+			push_error("Finance page must expose six category cards and three plan cards per category.")
+			return false
+		for category_id_variant in Array(fiscal_ui.get("category_ids", [])):
+			var category_card := overlay.find_child("FiscalCategoryCard_%s" % str(category_id_variant), true, false) as Button
+			if category_card == null or category_card.custom_minimum_size.y < 44.0:
+				push_error("Finance category card '%s' is missing or below the 44px target." % str(category_id_variant))
 				return false
 		var fiscal_scroll := overlay.find_child("稅率與公共事業費", true, false) as ScrollContainer
 		if fiscal_scroll == null:

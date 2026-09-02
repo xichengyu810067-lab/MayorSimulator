@@ -108,17 +108,38 @@ func _run() -> void:
 
 	main.municipal_overlay.open_page("finance")
 	await _settle()
-	var fiscal_tabs := main.find_child("FiscalCategoryTabs", true, false) as TabContainer
-	_check(fiscal_tabs.get_tab_count() == 3, "finance has three broad categories")
-	var fiscal_leaf_count := 0
-	for category_variant in fiscal_tabs.get_children():
-		var subcategories := category_variant as TabContainer
-		_check(subcategories.get_tab_count() == 2, "finance category exposes two subcategories")
-		for subcategory_variant in subcategories.get_children():
-			var rows := (subcategory_variant as Control).find_children("FiscalRow_*", "VBoxContainer", true, false)
-			_check(rows.size() >= 2 and rows.size() <= 3, "finance leaf exposes two or three controls")
-			fiscal_leaf_count += 1
-	_check(fiscal_leaf_count == 6, "all six original finance groups remain reachable")
+	_check(main.find_child("FiscalCategoryTabs", true, false) == null, "finance removes the old nested fiscal TabContainer")
+	var fiscal_ui: Dictionary = Dictionary(main.call("debug_fiscal_draft_state")).get("ui", {})
+	var fiscal_categories: Array = fiscal_ui.get("category_ids", [])
+	_check(fiscal_categories.size() == 6, "finance has six focused category cards")
+	_check(Array(fiscal_ui.get("plan_ids", [])).size() == 3, "each finance category offers three plan cards")
+	var fiscal_control_count := 0
+	for category_id_variant in fiscal_categories:
+		var category_id := str(category_id_variant)
+		var category_card := main.find_child("FiscalCategoryCard_%s" % category_id, true, false) as Button
+		_check(category_card != null and category_card.custom_minimum_size.y >= 44.0, "fiscal category '%s' remains reachable" % category_id)
+		if category_card == null:
+			continue
+		category_card.pressed.emit()
+		await _settle()
+		var custom_plan := main.find_child("FiscalPlanCard_custom", true, false) as Button
+		_check(custom_plan != null and custom_plan.custom_minimum_size.y >= 44.0, "fiscal category '%s' exposes a reachable custom plan" % category_id)
+		if custom_plan == null:
+			continue
+		custom_plan.pressed.emit()
+		await _settle()
+		var visible_rows := 0
+		for row_variant in main.find_children("FiscalRow_*", "VBoxContainer", true, false):
+			if (row_variant as Control).is_visible_in_tree():
+				visible_rows += 1
+		_check(visible_rows == 2, "fiscal category '%s' custom plan exposes exactly two controls" % category_id)
+		fiscal_control_count += visible_rows
+		var back_button := main.find_child("FiscalBackToCategories", true, false) as Button
+		_check(back_button != null, "fiscal category '%s' exposes a back-to-categories action" % category_id)
+		if back_button != null:
+			back_button.pressed.emit()
+			await _settle()
+	_check(fiscal_control_count == 12, "all twelve fiscal controls remain reachable through category cards")
 
 	main.municipal_overlay.open_page("blueprint")
 	await _settle()

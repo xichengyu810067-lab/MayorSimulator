@@ -27,10 +27,19 @@ func _run() -> void:
 	main.tutorial_overlay._transition.custom_step(1.0)
 	await process_frame
 	main.municipal_overlay.open_page("finance")
-	var tabs := main.find_child("FiscalCategoryTabs", true, false) as TabContainer
-	tabs.current_tab = 2
-	var service_tabs := tabs.get_child(2) as TabContainer
-	service_tabs.current_tab = 1
+	var category_card := main.find_child("FiscalCategoryCard_education_leisure", true, false) as Button
+	if category_card == null:
+		push_error("education/leisure fiscal category card is missing")
+		await TestCleanup.finish(self, [main], 1)
+		return
+	category_card.pressed.emit()
+	await process_frame
+	var custom_plan := main.find_child("FiscalPlanCard_custom", true, false) as Button
+	if custom_plan == null:
+		push_error("custom fiscal plan card is missing")
+		await TestCleanup.finish(self, [main], 1)
+		return
+	custom_plan.pressed.emit()
 	await process_frame
 	await process_frame
 
