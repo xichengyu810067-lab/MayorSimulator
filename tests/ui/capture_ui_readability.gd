@@ -1202,6 +1202,15 @@ func _validate_visual_data(overlay, expected_page: String) -> bool:
 		if quote_card == null or quote_label == null or not quote_label.is_visible_in_tree() or quote_label.text.strip_edges().is_empty():
 			push_error("Blueprint live quote must remain visible beside the current design controls.")
 			return false
+		if not (quote_label.text.contains("總額 $") and quote_label.text.contains("工期") and quote_label.text.contains("占地")):
+			push_error("Blueprint live quote must expose total, duration, and footprint in the first-view summary: %s" % quote_label.text)
+			return false
+		var quote_clip := quote_card.get_parent()
+		while quote_clip != null and not quote_clip is ScrollContainer:
+			quote_clip = quote_clip.get_parent()
+		if quote_clip == null or not (quote_clip as ScrollContainer).get_global_rect().encloses(quote_card.get_global_rect()):
+			push_error("Blueprint live quote card must be fully visible before scrolling: card=%s clip=%s." % [quote_card.get_global_rect(), Rect2() if quote_clip == null else (quote_clip as ScrollContainer).get_global_rect()])
+			return false
 	if expected_page == "buildings":
 		if overlay.find_child("DemolishSelectedBuildingButton", true, false) != null:
 			push_error("Building page duplicates the map's contextual demolition action.")

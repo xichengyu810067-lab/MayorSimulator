@@ -238,9 +238,7 @@ func _build_content() -> void:
 	var quote_card := _visual_card(true)
 	quote_card.name = "BlueprintQuoteCard"
 	var quote_stack := VBoxContainer.new()
-	quote_stack.add_theme_constant_override("separation", 4)
 	quote_card.add_child(quote_stack)
-	quote_stack.add_child(_title("即時開工估價"))
 	_quote_label = _status_label("調整任何選項後，總價、工期與占地會立即更新。")
 	_quote_label.name = "BlueprintPlacementQuote"
 	_quote_label.set_meta("l10n_skip", true)
@@ -461,6 +459,8 @@ func _update_placement_quote(quote: Dictionary) -> void:
 		footprint_count, _format_money(base_cost), _format_money(labor_cost), _format_money(total_cost), duration_days
 	]
 	_quote_label.add_theme_color_override("font_color", _text_color())
+	# Keep the complete live estimate inside the first 1280x800 view. The quote
+	# text already names the card, so a second title only consumed the final row.
 	_quote_label.custom_minimum_size = Vector2(0, 64)
 	_quote_label.visible = true
 
