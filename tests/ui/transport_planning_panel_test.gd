@@ -207,7 +207,8 @@ func _run() -> void:
 	var sections_ready := station_section != null and infrastructure_section != null and operations_section != null and route_list_section != null
 	_check(sections_ready, "transport planning sections are missing")
 	_check(session_card != null and session_card.visible, "active planning session summary is not visible")
-	_check(session_status != null and session_status.text.contains("transport_plan_ui_1") and session_status.text.contains("2/3"), "session summary omits identity or phase")
+	_check(session_status != null and session_status.text.contains("火車站") and session_status.text.contains("2/3"), "session summary omits its player-facing station or phase")
+	_check(session_status != null and not session_status.text.contains("transport_plan_ui_1"), "session summary exposes an internal planning identity to the player")
 	_check(session_detail != null and _contains_all(session_detail.text, ["火車站", "站點 2", "完工 1", "路網工程 1"]), "session summary omits authoritative reference counts")
 	_check(session_continue != null and not session_continue.disabled and session_continue.text.contains("規劃路線"), "network session does not expose the explicit route-step CTA")
 	_check(session_close != null and not session_close.disabled, "active session does not expose explicit close")

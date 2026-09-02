@@ -552,13 +552,12 @@ func _render_planning_session() -> void:
 	_apply_session_focus_layout(state, visible)
 	if not visible:
 		return
-	var session_id := str(_planning_session.get("id", ""))
 	var station_name := str(_planning_session.get("station_blueprint_name", "交通站點"))
 	var station_count := _non_cancelled_reference_count(_planning_session.get("station_refs", []))
 	var completed_station_count := _completed_reference_count(_planning_session.get("station_refs", []))
 	var network_count := _non_cancelled_reference_count(_planning_session.get("network_refs", []))
 	var route_count := _array_size(_planning_session.get("route_refs", []))
-	_session_status_label.text = L10n.text("進行中規劃｜%s｜%s") % [session_id, _session_state_label(state)]
+	_session_status_label.text = L10n.text("進行中規劃｜%s｜%s") % [L10n.text(station_name), _session_state_label(state)]
 	_session_detail_label.text = L10n.text("%s｜站點 %d（完工 %d）｜路網工程 %d｜路線 %d") % [
 		L10n.text(station_name), station_count, completed_station_count, network_count, route_count,
 	]

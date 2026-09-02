@@ -4596,7 +4596,7 @@ func _sync_placement_banner() -> void:
 		var session := _transport_session_snapshot()
 		var session_prefix := ""
 		if _transport_session_is_active(session):
-			session_prefix = "%s｜" % str(session.get("id", ""))
+			session_prefix = "%s｜" % L10n.text(str(session.get("station_blueprint_name", "交通站點")))
 		if placement_confirm_button != null:
 			placement_confirm_button.visible = true
 		if map_action_mode == "transport_infrastructure":
@@ -4628,7 +4628,7 @@ func _sync_placement_banner() -> void:
 		var minimum_stops := 1 if mode == "air" else 2
 		var station_count := _transport_session_station_count(session)
 		placement_label.text = L10n.text("%s｜步驟 1/3 站點選址｜%s｜已放 %d/%d 站｜可繼續放置") % [
-			str(session.get("id", "")), L10n.text(placement_building_name), station_count, minimum_stops,
+			L10n.text(str(session.get("station_blueprint_name", "交通站點"))), L10n.text(placement_building_name), station_count, minimum_stops,
 		]
 		if placement_confirm_button != null:
 			placement_confirm_button.visible = true
