@@ -16,6 +16,12 @@ const CITY_CONTEXT := {
 	"education": 70,
 	"healthcare": 70,
 }
+const NATURAL_OBSTACLE_KINDS := ["trees", "river_lake", "hill_cliff"]
+const FOOTPRINT_SCENARIOS := [
+	{"size": "small", "display_name": "公園", "cell_count": 1},
+	{"size": "medium", "display_name": "學校", "cell_count": 2},
+	{"size": "large", "display_name": "體育館", "cell_count": 3},
+]
 
 var _failed := false
 var _checks := 0
@@ -23,6 +29,7 @@ var _checks := 0
 
 func _initialize() -> void:
 	_test_catalog_contract()
+	_test_natural_obstacle_feedback_for_every_footprint_cell()
 	_test_current_existing_registration_contract()
 	_test_atomic_placement_and_single_building_identity()
 	_test_save_load_and_secondary_cell_lifecycle()
@@ -59,6 +66,57 @@ func _test_catalog_contract() -> void:
 	_check(not bool(BuildingFootprintsScript.resolve_for_size("large", east_anchor, terrain).get("ok", false)), "large rejects an east-edge anchor")
 	var next_to_east_anchor := terrain.tile_id_for_coordinate(Vector2i(8, 4))
 	_check(not bool(BuildingFootprintsScript.resolve_for_size("large", next_to_east_anchor, terrain).get("ok", false)), "large rejects an anchor with only two eastward cells available")
+
+
+func _test_natural_obstacle_feedback_for_every_footprint_cell() -> void:
+	var layout_coordinator = VerticalSliceCoordinatorScript.new(20_260_909, 50_000_000)
+	var represented_kinds := {}
+	for tile_state: Dictionary in layout_coordinator.terrain_map.all_tile_states():
+		var base_kind := str(tile_state.get("base_kind", ""))
+		if base_kind in NATURAL_OBSTACLE_KINDS:
+			represented_kinds[base_kind] = true
+			_check(float(tile_state.get("backdrop_coverage", 0.0)) > 0.0, "%s layout obstacle has no backdrop coverage" % base_kind)
+			_check(not Array(tile_state.get("backdrop_feature_ids", [])).is_empty(), "%s layout obstacle has no backdrop feature identity" % base_kind)
+	for obstacle_kind: String in NATURAL_OBSTACLE_KINDS:
+		_check(represented_kinds.has(obstacle_kind), "default 10x10 layout omits %s obstacles" % obstacle_kind)
+
+	for scenario_variant: Variant in FOOTPRINT_SCENARIOS:
+		var scenario: Dictionary = scenario_variant
+		var cell_count := int(scenario["cell_count"])
+		for blocked_offset in cell_count:
+			for obstacle_kind: String in NATURAL_OBSTACLE_KINDS:
+				var coordinator = VerticalSliceCoordinatorScript.new(20_261_000 + cell_count * 100 + blocked_offset * 10, 50_000_000)
+				var available_run := _find_available_flat_run(coordinator, cell_count)
+				var label := "%s offset %d %s" % [str(scenario["size"]), blocked_offset, obstacle_kind]
+				_check(not available_run.is_empty(), "%s fixture cannot find a flat footprint" % label)
+				if available_run.is_empty():
+					continue
+				var occupied_tiles: Array = available_run["tiles"]
+				var blocked_tile_id := int(occupied_tiles[blocked_offset])
+				_check(coordinator.terrain_map.configure_tile(blocked_tile_id, obstacle_kind), "%s fixture cannot install its obstacle" % label)
+				var balance_before := int(coordinator.treasury_balance())
+				var jobs_before: int = coordinator.construction.active_jobs().size()
+				var buildings_before: int = coordinator.session.state.buildings.size()
+				var sequence_before := int(coordinator.next_building_sequence)
+				var rejected: Dictionary = coordinator.start_approved_building(
+					str(scenario["display_name"]),
+					int(available_run["anchor"]),
+					20
+				)
+				_check(not bool(rejected.get("ok", false)), "%s placement was not rejected" % label)
+				_check(str(rejected.get("error", "")) == "terrain_not_flat", "%s rejection reason is not terrain_not_flat" % label)
+				_check(int(rejected.get("blocked_tile_id", -1)) == blocked_tile_id, "%s does not identify the exact blocked footprint cell" % label)
+				var blocked_terrain: Dictionary = rejected.get("terrain", {})
+				_check(str(blocked_terrain.get("base_kind", "")) == obstacle_kind, "%s feedback lost the obstacle kind" % label)
+				_check(int(blocked_terrain.get("tile_id", -1)) == blocked_tile_id, "%s terrain feedback identifies the wrong tile" % label)
+				_assert_no_placement_mutation(
+					coordinator,
+					balance_before,
+					jobs_before,
+					buildings_before,
+					sequence_before,
+					label
+				)
 
 
 func _test_atomic_placement_and_single_building_identity() -> void:
