@@ -3558,7 +3558,9 @@ func _fiscal_category_spec(category_id: String) -> Dictionary:
 func _layout_fiscal_surface(scroll: ScrollContainer) -> void:
 	if scroll == null or fiscal_responsive_layout == null:
 		return
-	var wide := scroll.size.x >= 1040.0
+	var logical_wide := scroll.size.x >= 1040.0
+	var physical_wide := DisplayServer.window_get_size().x >= 1600
+	var wide := logical_wide or physical_wide
 	fiscal_responsive_layout.columns = 2 if wide else 1
 	if fiscal_category_grid != null:
 		fiscal_category_grid.columns = 2 if scroll.size.x >= 720.0 else 1
