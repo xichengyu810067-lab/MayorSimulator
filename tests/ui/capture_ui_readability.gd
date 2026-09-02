@@ -18,12 +18,14 @@ const RESULT_FILENAME := "capture-result.json"
 const NATIVE_RESULT_FILENAME := "native-result.json"
 const NATIVE_OUTPUTS := {
 	"start": "native-start-screen.png",
+	"tutorial": "native-tutorial-dialogue-strip.png",
 	"main": "native-main.png",
 	"settings": "native-settings.png",
 	"municipal_overlay": "native-municipal-overlay.png",
 }
 const NATIVE_LANDMARKS := {
 	"start": "start_actions",
+	"tutorial": "tutorial_dialogue_strip",
 	"main": "status_hud",
 	"settings": "settings_panel",
 	"municipal_overlay": "municipal_overlay",
@@ -652,6 +654,13 @@ func _capture_native_gui_states(scene) -> bool:
 	var tutorial = scene.get("tutorial_overlay")
 	if tutorial == null or not tutorial.is_open():
 		push_error("Native GUI new game did not expose the story tutorial.")
+		return false
+	await _settle_frames(24)
+	var tutorial_panel := tutorial.get("story_panel") as Control
+	if tutorial_panel == null or not tutorial_panel.is_visible_in_tree():
+		push_error("Native GUI tutorial dialogue strip is not visibly rendered after settling.")
+		return false
+	if not _save_native_capture(NATIVE_OUTPUTS["tutorial"], tutorial_panel):
 		return false
 	tutorial.skip_button.emit_signal("pressed")
 	await _settle_frames(24)
@@ -1774,7 +1783,7 @@ func _publish_native_capture_result() -> bool:
 	if publish_error != OK:
 		push_error("Could not atomically publish native UI capture result %s: %d" % [result_path, publish_error])
 		return false
-	print("Native GUI acceptance result published with four direct-root states.")
+	print("Native GUI acceptance result published with %d direct-root states." % NATIVE_OUTPUTS.size())
 	return true
 
 

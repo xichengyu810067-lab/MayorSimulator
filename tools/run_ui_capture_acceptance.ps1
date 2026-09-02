@@ -130,12 +130,13 @@ if ($expectedCaptures.Count -ne 33) {
 }
 $expectedNativeCaptures = [ordered]@{
     start = [ordered]@{ filename = 'native-start-screen.png'; landmark = 'start_actions' }
+    tutorial = [ordered]@{ filename = 'native-tutorial-dialogue-strip.png'; landmark = 'tutorial_dialogue_strip' }
     main = [ordered]@{ filename = 'native-main.png'; landmark = 'status_hud' }
     settings = [ordered]@{ filename = 'native-settings.png'; landmark = 'settings_panel' }
     municipal_overlay = [ordered]@{ filename = 'native-municipal-overlay.png'; landmark = 'municipal_overlay' }
 }
-if ($expectedNativeCaptures.Count -ne 4) {
-    throw "Internal native GUI capture contract must contain exactly 4 states; found $($expectedNativeCaptures.Count)."
+if ($expectedNativeCaptures.Count -ne 5) {
+    throw "Internal native GUI capture contract must contain exactly 5 states; found $($expectedNativeCaptures.Count)."
 }
 
 $preFingerprint = Get-MayorSourceFingerprint -ProjectRoot $projectRoot
@@ -253,7 +254,7 @@ foreach ($leakPattern in @('Leaked instance:', 'ObjectDB instances? (?:was|were)
 if ($diagnostics.Count -ne 0) {
     $failures.Add("Product diagnostics were found: $($diagnostics -join ' | ')")
 }
-$marker = 'UI_CAPTURE_CANONICAL_ACCEPTANCE_PASSED native_gui=PASS native_captures=4 offscreen_evidence=PASS offscreen_captures=33 physical=2880x1800 logical=1280x800'
+$marker = 'UI_CAPTURE_CANONICAL_ACCEPTANCE_PASSED native_gui=PASS native_captures=5 offscreen_evidence=PASS offscreen_captures=33 physical=2880x1800 logical=1280x800'
 $markerCount = [regex]::Matches($stdoutText, "(?m)^$([regex]::Escape($marker))\r?$").Count
 if ($markerCount -ne 1) {
     $failures.Add("Expected the success marker exactly once in stdout; found $markerCount.")
@@ -286,7 +287,7 @@ else {
         if ([string]$nativeResult.window_mode -cnotin @('fullscreen', 'exclusive_fullscreen')) {
             throw "Native GUI window mode is invalid: $($nativeResult.window_mode)"
         }
-        if ([int]$nativeResult.required_capture_count -ne 4 -or [int]$nativeResult.capture_count -ne 4 -or @($nativeResult.captures).Count -ne 4) {
+        if ([int]$nativeResult.required_capture_count -ne 5 -or [int]$nativeResult.capture_count -ne 5 -or @($nativeResult.captures).Count -ne 5) {
             throw 'Native GUI result does not contain the complete four-state contract.'
         }
         if (@($nativeResult.physical_size).Count -ne 2 -or @($nativeResult.logical_size).Count -ne 2 -or
@@ -510,11 +511,11 @@ $summary = [ordered]@{
     duration_seconds = [Math]::Round(($finishedAt - $startedAt).TotalSeconds, 3)
     godot_executable = [ordered]@{ path=$GodotExe; bytes=[long]$godotItem.Length; sha256=(Get-FileHash -LiteralPath $GodotExe -Algorithm SHA256).Hash.ToLowerInvariant() }
     process = [ordered]@{ completed=$completed; exit_code=$exitCode; timeout_seconds=$TimeoutSeconds; output_capture_complete=$outputCaptureComplete }
-    required_capture_count = 37
+    required_capture_count = 38
     capture_count = ($validatedNativeCaptures.Count + $validatedCaptures.Count)
     native_gui = [ordered]@{
         status = 'PASS'
-        required_capture_count = 4
+        required_capture_count = 5
         capture_count = $validatedNativeCaptures.Count
         capture_surface_kind = 'native_fullscreen_root'
         scene_parent = 'root_window'
@@ -554,5 +555,5 @@ $summary = [ordered]@{
 }
 [IO.File]::WriteAllText($summaryPartialPath, ($summary | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
 [IO.File]::Move($summaryPartialPath, $summaryPath)
-Write-Output "Canonical UI acceptance passed: native_gui=PASS captures=4 capture=${nativeWidth}x${nativeHeight} backing=${nativeBackingWidth}x${nativeBackingHeight} window=${nativeWindowWidth}x${nativeWindowHeight} logical=${nativeLogicalWidth}x${nativeLogicalHeight}; offscreen_evidence=PASS captures=33 physical=2880x1800 output=$OutputRoot"
+Write-Output "Canonical UI acceptance passed: native_gui=PASS captures=5 capture=${nativeWidth}x${nativeHeight} backing=${nativeBackingWidth}x${nativeBackingHeight} window=${nativeWindowWidth}x${nativeWindowHeight} logical=${nativeLogicalWidth}x${nativeLogicalHeight}; offscreen_evidence=PASS captures=33 physical=2880x1800 output=$OutputRoot"
 exit 0

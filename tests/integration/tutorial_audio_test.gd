@@ -44,6 +44,13 @@ func _run() -> void:
 	overlay.open(true)
 	await process_frame
 	_check(overlay.next_button.has_focus(), "tutorial gives keyboard focus to the next action")
+	var dialogue_rect: Rect2 = overlay.story_panel.get_global_rect()
+	_check(dialogue_rect.position.y >= 900.0 * 0.55, "tutorial uses a bottom dialogue strip instead of a tall side board")
+	_check(dialogue_rect.size.x >= 1440.0 * 0.88, "tutorial dialogue strip spans the readable safe width")
+	_check(dialogue_rect.size.y <= 900.0 * 0.38, "tutorial dialogue strip keeps most of the story artwork visible")
+	_check(overlay.story_panel.find_child("TutorialSpeakerBadge", true, false) != null, "tutorial presents each page as a friendly speaker badge")
+	_check(overlay.story_panel.find_child("TutorialDialogueFooter", true, false) != null, "tutorial keeps progress and actions in one compact footer")
+	_check(overlay.next_button.get_global_rect().end.y <= dialogue_rect.end.y + 0.5, "tutorial actions stay inside the dialogue strip")
 	var initial_left: float = overlay.background_picture.offset_left
 	overlay.call("_process", 8.0)
 	_check(not is_equal_approx(initial_left, overlay.background_picture.offset_left), "story background animates while visible")
