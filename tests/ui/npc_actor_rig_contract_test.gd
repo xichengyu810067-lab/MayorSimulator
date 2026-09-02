@@ -8,6 +8,7 @@ const EXPECTED_ATLAS_COUNT := 8
 const EXPECTED_TOTAL_SOURCE_FRAMES := 128
 const ALPHA_THRESHOLD := 0.02
 const MAX_FEET_ANCHOR_DRIFT_PX := 1.0
+const DRAW_FEET_OFFSET_PX := 6.333333333333333
 
 const ATLAS_SPECS := [
 	{"role": "一般居民", "variant": 0, "slug": "resident"},
@@ -104,6 +105,7 @@ func _validate_delivered_atlases() -> PackedStringArray:
 			_check(not _image_touches_edge(frame), "%s frame %d has opaque pixels touching its cell edge" % [slug, frame_index])
 			var opaque_bottom := _opaque_bottom(frame)
 			_check(opaque_bottom >= 0, "%s frame %d is empty" % [slug, frame_index])
+			_check(opaque_bottom + 1 == 173, "%s frame %d opaque bottom must bind to atlas feet baseline 173 (got %d)" % [slug, frame_index, opaque_bottom])
 			feet_bottoms.append(opaque_bottom)
 
 		if feet_bottoms.size() == EXPECTED_FRAMES_PER_ATLAS:
@@ -175,6 +177,11 @@ func _validate_runtime_contract(actor: Button, delivered_atlas_paths: PackedStri
 
 	var runtime_paths := _string_values(contract.get("atlas_paths", contract.get("atlases", {})))
 	_check(runtime_paths.size() == EXPECTED_ATLAS_COUNT, "runtime contract does not map all eight atlases: %s" % [runtime_paths])
+	var contract_draw_offset := float(contract.get("draw_feet_offset_y", 0.0))
+	_check(absf(contract_draw_offset - DRAW_FEET_OFFSET_PX) <= 0.01, "runtime draw offset is unstable: %.6f" % contract_draw_offset)
+	_check(is_equal_approx(float(contract.get("atlas_feet_source_y", 0.0)), 173.0), "runtime atlas feet source baseline is not 173px")
+	_check(is_equal_approx(float(contract.get("atlas_footer_px", 0.0)), 19.0), "runtime atlas transparent footer is not 19px")
+	_check(is_equal_approx(float(contract.get("atlas_to_draw_scale", 0.0)), 64.0 / 192.0), "runtime atlas to draw scale changed from 64/192")
 	for expected_path: String in delivered_atlas_paths:
 		_check(expected_path in runtime_paths, "runtime contract omits delivered atlas %s" % expected_path)
 
@@ -199,6 +206,15 @@ func _validate_runtime_contract(actor: Button, delivered_atlas_paths: PackedStri
 			seen_source_rects[str(sample.get("source_rect", ""))] = true
 			var anchor: Variant = _vector2_from_variant(sample.get("feet_anchor", null))
 			_check(anchor != null, "%s locomotion sample omits feet_anchor" % direction)
+			_check(is_equal_approx(float(sample.get("feet_draw_offset_y", 0.0)), contract_draw_offset), "%s sample feet offset did not match contract" % direction)
+			var painted_gap := float(sample.get("painted_feet_gap_px", 9999.0))
+			_check(painted_gap <= MAX_FEET_ANCHOR_DRIFT_PX, "%s painted feet gap is above 1px: %.4f" % [direction, painted_gap])
+			if anchor != null:
+				_check(
+					is_equal_approx(float(sample.get("painted_feet_y", 0.0)), (anchor as Vector2).y),
+					"%s painted feet does not align to logical feet" % direction
+				)
+			_check(is_equal_approx(painted_gap, 0.0), "%s painted feet gap is not near zero: %.4f" % [direction, painted_gap])
 			if anchor != null:
 				if reference_anchor == null:
 					reference_anchor = anchor
