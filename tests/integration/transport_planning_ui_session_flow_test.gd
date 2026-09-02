@@ -64,7 +64,7 @@ func _run() -> void:
 	_check(main.placement_mode_active and main.placement_building_name == "公車站", "first station incorrectly ends continuous placement")
 	_check(str(session.get("id", "")) == session_id and Array(session.get("station_refs", [])).size() == 1, "first station changed session identity or did not register")
 	_check(main.placement_banner.is_visible_in_tree() and main.placement_label.text.contains("1/3"), "first-station checkpoint lacks its visible placement banner")
-	_check(main.placement_label.text.contains("公車站") and not main.placement_label.text.contains("transport_planning_"), "station checkpoint exposes its internal session id instead of a player-facing plan name")
+	_check(main.placement_label.text.contains("公車路線") and main.placement_label.text.contains("公車站") and not main.placement_label.text.contains("transport_planning_"), "station checkpoint exposes its internal session id or lacks a player-facing route/station name")
 	await _capture_checkpoint("station-placement", "01-station-placement.png", capture_dir)
 	_place_station(main, second_tile)
 	session = main.vertical_slice.transport_planning_session_snapshot()
