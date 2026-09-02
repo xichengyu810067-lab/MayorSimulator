@@ -150,7 +150,7 @@ func _run() -> void:
 func _validate_categories() -> Dictionary:
 	var state: Dictionary = main.call("debug_fiscal_draft_state")
 	var ui: Dictionary = state.get("ui", {})
-	var cards := main.find_children("FiscalCategoryCard_*", "Button", true, false)
+	var cards: Array[Node] = main.find_children("FiscalCategoryCard_*", "Button", true, false)
 	var preview := main.find_child("FiscalDraftPreview", true, false) as PanelContainer
 	if cards.size() != 6 or int(ui.get("category_count", 0)) != 6 or not bool(ui.get("category_surface_visible", false)):
 		_fail("finance does not show the six-card category surface")
