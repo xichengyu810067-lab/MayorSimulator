@@ -73,6 +73,13 @@ func _run() -> void:
 	_check(main.city_backdrop != null and main.city_backdrop.bg_texture_rect != null, "city backdrop texture node exists")
 	if main.city_backdrop != null and main.city_backdrop.bg_texture_rect != null:
 		_check(main.city_backdrop.bg_texture_rect.texture.resource_path == BACKGROUND_PATH, "provided fantasy map is the active backdrop")
+		var terrain_projection: Dictionary = main.city_backdrop.debug_terrain_projection()
+		var backdrop_policy: Dictionary = terrain_projection.get("visual_policy", {})
+		_check(int(terrain_projection.get("tile_count", 0)) == 100, "city backdrop debug projection retains all 100 authoritative terrain cells")
+		_check(is_zero_approx(float(backdrop_policy.get("flat_grass_fill_alpha", -1.0))), "city backdrop adds a persistent flat-grass fill")
+		_check(is_zero_approx(float(backdrop_policy.get("non_flat_fill_max_alpha", -1.0))), "city backdrop adds a persistent non-flat terrain fill")
+		_check(not bool(backdrop_policy.get("persistent_terrain_overlay", true)), "city backdrop adds persistent per-cell terrain decoration")
+		_check(str(backdrop_policy.get("interactive_grid_owner", "")) == "CityTileButton", "city backdrop does not delegate interactive grid drawing to CityTileButton")
 
 	# The map-first shell must not instantiate the old permanent tab/sidebar or
 	# fixed top-bar UI. Only floating HUD surfaces may sit above the map.

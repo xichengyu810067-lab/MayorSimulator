@@ -202,8 +202,11 @@ func _validate_actual_main(prepared: Dictionary) -> bool:
 		or str(Dictionary(projection.get("tiles", {})).get(str(lake_tile), {}).get("terrain_kind", "")) != "river_lake"
 		or not bool(visual_policy.get("background_primary", false))
 		or not is_zero_approx(float(visual_policy.get("flat_grass_fill_alpha", -1.0)))
+		or not is_zero_approx(float(visual_policy.get("non_flat_fill_max_alpha", -1.0)))
+		or bool(visual_policy.get("persistent_terrain_overlay", true))
+		or str(visual_policy.get("interactive_grid_owner", "")) != "CityTileButton"
 	):
-		_fail("actual Main backdrop does not retain the natural map with authoritative terrain hints")
+		_fail("actual Main backdrop does not retain the natural map as the only persistent terrain art")
 		return false
 	for station_tile: int in [connected_station_tile, orphan_station_tile]:
 		var tile_button = main.grid_buttons[station_tile]
@@ -258,6 +261,9 @@ func _result(prepared: Dictionary, capture: Dictionary) -> Dictionary:
 			"lake_road_quote_issue": "terrain_not_flat",
 			"background_primary": true,
 			"flat_grass_fill_alpha": 0.0,
+			"non_flat_fill_max_alpha": 0.0,
+			"persistent_terrain_overlay": false,
+			"interactive_grid_owner": "CityTileButton",
 		},
 		"transport": {
 			"road_tile_id": int(prepared["road_tile_id"]),
