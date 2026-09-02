@@ -26,11 +26,30 @@ func _run() -> void:
 		main.tutorial_overlay.close_as_completed(false)
 	main._set_map_interaction_enabled(true)
 
-	main._select_building("公車站")
-	main.municipal_overlay.open_page("blueprint")
+	main.municipal_overlay.open_page("buildings")
+	main._select_building_group("economy")
 	await process_frame
+	var regular_building_card := main.municipal_overlay.find_child("BuildingCard_商店", true, false) as Button
+	_check(regular_building_card != null and regular_building_card.is_visible_in_tree(), "building page does not expose the regular shop card")
+	if regular_building_card != null:
+		regular_building_card.pressed.emit()
+	await process_frame
+	_check(main.municipal_overlay.current_page() == "blueprint" and main.selected_building == "商店", "regular building card did not open its blueprint directly")
+	main.municipal_overlay.open_page("buildings")
+	main._select_building_group("mobility")
+	await process_frame
+	_check(main.municipal_overlay.find_child("OpenBlueprintButton", true, false) == null, "building page still exposes the duplicate blueprint shortcut")
+	_check(main.municipal_overlay.find_child("OpenTransportPlanningButton", true, false) == null, "building page still exposes the duplicate transport shortcut")
+	var station_card := main.municipal_overlay.find_child("BuildingCard_公車站", true, false) as Button
+	_check(station_card != null and station_card.is_visible_in_tree(), "building page does not expose the bus-station card")
+	if station_card != null:
+		station_card.pressed.emit()
+	await process_frame
+	_check(main.municipal_overlay.current_page() == "blueprint" and main.selected_building == "公車站", "station building card did not open its blueprint directly")
 	var station_button := main.vertical_slice_panel.find_child("SubmitBlueprintButton", true, false) as Button
 	_check(station_button != null and not station_button.disabled and station_button.text.contains("連續站點"), "approved station blueprint does not expose the continuous-planning entry")
+	var funds_before_session := int(main.vertical_slice.treasury_balance())
+	var jobs_before_session := int(main.vertical_slice.construction.jobs.size())
 	if station_button != null:
 		station_button.pressed.emit()
 	await process_frame
@@ -38,18 +57,24 @@ func _run() -> void:
 	var session_id := str(session.get("id", ""))
 	_check(not session_id.is_empty() and str(session.get("state", "")) == "station_placement", "station-blueprint action did not begin one authoritative session")
 	_check(main.placement_mode_active and main.placement_building_name == "公車站", "station-blueprint action did not enter map placement")
+	_check(int(main.vertical_slice.treasury_balance()) == funds_before_session and main.vertical_slice.construction.jobs.size() == jobs_before_session, "starting a station session charged funds or created construction before confirmation")
 
 	main._cancel_building_placement(true)
 	session = main.vertical_slice.transport_planning_session_snapshot()
 	_check(str(session.get("state", "")) == "paused" and not main.placement_mode_active, "Esc/right-click semantics close map action without pausing the session")
 	main._open_transport_planning()
 	await process_frame
+	_check(not main.transport_planning_panel.has_signal("station_requested"), "transport page still exposes a second new-station session signal")
+	_check(main.transport_planning_panel.find_child("TransportStationPager", true, false) == null, "transport page still exposes a second station entry pager")
 	var continue_button := main.transport_planning_panel.find_child("TransportPlanningSessionContinue", true, false) as Button
 	_check(continue_button != null and not continue_button.disabled, "paused session is not recoverable from the transport page")
 	if continue_button != null:
 		continue_button.pressed.emit()
 	await process_frame
-	_check(main.placement_mode_active and str(main.vertical_slice.transport_planning_session_snapshot().get("state", "")) == "station_placement", "continue did not restore station placement")
+	session = main.vertical_slice.transport_planning_session_snapshot()
+	_check(main.placement_mode_active and str(session.get("state", "")) == "station_placement", "continue did not restore station placement")
+	_check(str(session.get("id", "")) == session_id, "continue recreated the authoritative planning session")
+	_check(int(main.vertical_slice.treasury_balance()) == funds_before_session and main.vertical_slice.construction.jobs.size() == jobs_before_session, "continue charged funds or created construction before confirmation")
 
 	var fixture := _find_bus_fixture(main)
 	_check(not fixture.is_empty(), "layout 3 has no flat connected bus-session fixture outside the HUD safe area")

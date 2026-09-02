@@ -5,7 +5,6 @@ const ProgressiveChoicePagerScript = preload("res://ui/components/progressive_ch
 const TransportPlanningSessionScript = preload("res://scripts/systems/city/transport_planning_session.gd")
 
 signal infrastructure_requested(kind: String, operation: String)
-signal station_requested(building_name: String)
 signal route_planning_requested(mode: String, fleet_size: int, headway_minutes: int, fare: int)
 signal route_toggle_requested(route_id: String, enabled: bool)
 signal route_delete_requested(route_id: String)
@@ -18,13 +17,6 @@ const TITLE_FONT_SIZE := 28
 const CONTROL_FONT_SIZE := 18
 const CONTROL_HEIGHT := 52.0
 const CONTENT_MINIMUM_WIDTH := 900.0
-
-const STATION_CHOICES: Array[Dictionary] = [
-	{"id": "bus_station", "building_name": "公車站", "hint": "作為公車路線端點或轉運站，仍須接入完整道路。"},
-	{"id": "metro_station", "building_name": "捷運站", "hint": "選址後必須以連續捷運軌道連接至少兩站。"},
-	{"id": "rail_station", "building_name": "火車站", "hint": "選址後必須連接重型鐵路、機廠與號誌。"},
-	{"id": "airport", "building_name": "機場", "hint": "航廈必須連接跑道與滑行道，完成後才能安排航線。"},
-]
 
 const INFRASTRUCTURE_CHOICES: Array[Dictionary] = [
 	{"id": "road", "label": "道路", "hint": "汽車、摩托車與公車共用的連續路網。", "add": "build", "remove": "demolish", "add_label": "興建", "remove_label": "拆除"},
@@ -64,7 +56,6 @@ var _network_summary: Label
 var _fleet_input: SpinBox
 var _headway_input: SpinBox
 var _fare_input: SpinBox
-var _station_pager: Control
 var _infrastructure_pager: Control
 var _route_mode_pager: Control
 var _route_pager: Control
@@ -74,7 +65,6 @@ var _session_status_label: Label
 var _session_detail_label: Label
 var _session_continue_button: Button
 var _session_close_button: Button
-var _station_section_card: Control
 var _infrastructure_section_card: Control
 var _operations_section_card: Control
 var _route_list_section_card: Control
@@ -95,7 +85,7 @@ func set_view_model(snapshot: Dictionary) -> void:
 	_planning_session = Dictionary(session_value).duplicate(true) if session_value is Dictionary else {"state": "inactive"}
 	_planning_unlocked = bool(snapshot.get("planning_unlocked", snapshot.get("unlocked", true)))
 	_unlock_label.text = (
-		L10n.text("交通規劃已解鎖｜可進行站點、路網與營運決策。")
+		L10n.text("交通規劃已解鎖｜可繼續既有站點規劃、路網與營運決策。")
 		if _planning_unlocked
 		else L10n.text("交通規劃尚未解鎖｜請先完成對應的城市交通決策。")
 	)
@@ -151,7 +141,6 @@ func debug_snapshot() -> Dictionary:
 		"route_count": _route_models.size(),
 		"routes": _route_models.duplicate(true),
 		"progressive_groups": progressive_groups,
-		"station_choices": STATION_CHOICES.duplicate(true),
 		"infrastructure_choices": INFRASTRUCTURE_CHOICES.duplicate(true),
 		"route_modes": ROUTE_MODES.duplicate(true),
 		"planning_session": _planning_session.duplicate(true),
@@ -181,7 +170,7 @@ func _build_content() -> void:
 	)
 	introduction.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hero_stack.add_child(introduction)
-	_unlock_label = _label("交通規劃已解鎖｜可進行站點、路網與營運決策。", BODY_FONT_SIZE)
+	_unlock_label = _label("交通規劃已解鎖｜可繼續既有站點規劃、路網與營運決策。", BODY_FONT_SIZE)
 	_unlock_label.name = "TransportPlanningUnlockStatus"
 	hero_stack.add_child(_unlock_label)
 	_content.add_child(hero)
@@ -208,22 +197,9 @@ func _build_content() -> void:
 	session_actions.add_child(_session_close_button)
 	_content.add_child(_session_card)
 
-	var station_section := _section_card(
-		"TransportStationSection",
-		"1. 站點選址",
-		"先選擇公車站、捷運站、火車站或機場；站點完成後再建立連接路網。"
-	)
-	_station_section_card = station_section.get_parent() as Control
-	_station_pager = ProgressiveChoicePagerScript.new(3, 3)
-	_station_pager.name = "TransportStationPager"
-	_register_pager(_station_pager)
-	station_section.add_child(_station_pager)
-	for choice: Dictionary in STATION_CHOICES:
-		_station_pager.call("add_choice", _station_choice(choice))
-
 	var infrastructure_section := _section_card(
 		"TransportInfrastructureSection",
-		"2. 路網與設施",
+		"1. 路網與設施",
 		"鋪設或拆除道路、捷運軌道、重型鐵路、跑道、滑行道；另可設置車庫、機廠與鐵路號誌。"
 	)
 	_infrastructure_section_card = infrastructure_section.get_parent() as Control
@@ -236,7 +212,7 @@ func _build_content() -> void:
 
 	var operations_section := _section_card(
 		"TransportOperationsSection",
-		"3. 路線與營運決策",
+		"2. 路線與營運決策",
 		"設定車隊規模、班距與票價，再選擇要規劃的交通模式。"
 	)
 	_operations_section_card = operations_section.get_parent() as Control
@@ -266,7 +242,7 @@ func _build_content() -> void:
 
 	var route_section := _section_card(
 		"TransportRouteListSection",
-		"4. 已規劃路線",
+		"3. 已規劃路線",
 		"檢視路線狀態、站點、路徑長度與營運設定；可啟停或刪除路線。"
 	)
 	_route_list_section_card = route_section.get_parent() as Control
@@ -277,7 +253,7 @@ func _build_content() -> void:
 	_route_pager.name = "TransportRoutePager"
 	_register_pager(_route_pager)
 	route_section.add_child(_route_pager)
-	_route_empty_label = _label("目前沒有路線。請先完成站點選址與基礎路網規劃。", BODY_FONT_SIZE)
+	_route_empty_label = _label("目前沒有路線。請先從建設與藍圖核准交通站點，再完成基礎路網規劃。", BODY_FONT_SIZE)
 	_route_empty_label.name = "TransportRouteEmpty"
 	_route_empty_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_route_empty_label.custom_minimum_size = Vector2(0, 88)
@@ -298,27 +274,6 @@ func _section_card(node_name: String, title_text: String, description_text: Stri
 	stack.add_child(description)
 	_content.add_child(card)
 	return stack
-
-
-func _station_choice(choice: Dictionary) -> PanelContainer:
-	var choice_id := str(choice.get("id", "station"))
-	var building_name := str(choice.get("building_name", "站點"))
-	var card := _card("TransportStationChoice_%s" % choice_id, true)
-	card.custom_minimum_size = Vector2(0, 154)
-	var stack := VBoxContainer.new()
-	stack.add_theme_constant_override("separation", 6)
-	card.add_child(stack)
-	stack.add_child(_label(building_name, SECTION_FONT_SIZE))
-	var hint := _label(str(choice.get("hint", "")), BODY_FONT_SIZE)
-	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	stack.add_child(hint)
-	var button := _button("StationAction_%s" % choice_id, "選址 %s" % building_name, "primary")
-	button.set_meta("transport_action", "station")
-	button.set_meta("transport_building_name", building_name)
-	button.pressed.connect(_on_station_pressed.bind(building_name))
-	_new_plan_buttons.append(button)
-	stack.add_child(button)
-	return card
 
 
 func _infrastructure_choice(choice: Dictionary) -> PanelContainer:
@@ -568,7 +523,7 @@ func _render_planning_session() -> void:
 
 
 func _apply_session_focus_layout(state: String, session_visible: bool) -> void:
-	for section in [_station_section_card, _infrastructure_section_card, _operations_section_card, _route_list_section_card]:
+	for section in [_infrastructure_section_card, _operations_section_card, _route_list_section_card]:
 		if section != null:
 			section.visible = not session_visible
 	if not session_visible:
@@ -592,15 +547,12 @@ func _refresh_new_plan_button_states() -> void:
 	var state := str(_planning_session.get("state", "inactive"))
 	var session_active := state not in ["inactive", "closed"]
 	var session_mode := str(_planning_session.get("mode", ""))
-	var session_station := str(_planning_session.get("station_blueprint_name", ""))
 	for button: Button in _new_plan_buttons:
 		if not is_instance_valid(button):
 			continue
 		var disabled := not _planning_unlocked
 		if session_active and not disabled:
 			match str(button.get_meta("transport_action", "")):
-				"station":
-					disabled = state != "station_placement" or str(button.get_meta("transport_building_name", "")) != session_station
 				"infrastructure_add":
 					disabled = state != "network_placement" or not TransportPlanningSessionScript.network_kind_matches_mode(
 						session_mode, str(button.get_meta("transport_kind", ""))
@@ -651,10 +603,6 @@ func _completed_reference_count(value: Variant) -> int:
 		if ref_value is Dictionary and str((ref_value as Dictionary).get("status", "")) == "completed":
 			result += 1
 	return result
-
-
-func _on_station_pressed(building_name: String) -> void:
-	station_requested.emit(building_name)
 
 
 func _on_infrastructure_pressed(kind: String, operation: String) -> void:

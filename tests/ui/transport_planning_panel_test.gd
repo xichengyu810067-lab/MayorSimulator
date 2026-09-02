@@ -24,16 +24,15 @@ func _run() -> void:
 	root.add_child(panel)
 	await process_frame
 
-	var station_events: Array[String] = []
 	var infrastructure_events: Array[Dictionary] = []
 	var route_events: Array[Dictionary] = []
 	var toggle_events: Array[Dictionary] = []
 	var delete_events: Array[String] = []
 	var session_continue_events: Array[String] = []
 	var session_close_events: Array[String] = []
-	panel.station_requested.connect(
-		func(building_name: String) -> void: station_events.append(building_name)
-	)
+	_check(not panel.has_signal("station_requested"), "transport panel still exposes a second new-station session signal")
+	_check(panel.find_child("TransportStationPager", true, false) == null, "transport panel still exposes a station pager")
+	_check(panel.find_child("TransportStationSection", true, false) == null, "transport panel still exposes a station creation section")
 	panel.infrastructure_requested.connect(
 		func(kind: String, operation: String) -> void:
 			infrastructure_events.append({"kind": kind, "operation": operation})
@@ -57,14 +56,9 @@ func _run() -> void:
 	panel.session_continue_requested.connect(func() -> void: session_continue_events.append("continue"))
 	panel.session_close_requested.connect(func() -> void: session_close_events.append("close"))
 
-	_check_station_controls(panel)
 	_check_infrastructure_controls(panel)
 	_check_route_mode_controls(panel)
 	_check_readability(panel)
-
-	_press(panel, "StationAction_bus_station")
-	_press(panel, "StationAction_airport")
-	_check(station_events == ["公車站", "機場"], "station actions emitted incorrect building names")
 
 	_press(panel, "InfrastructureAdd_road")
 	_press(panel, "InfrastructureRemove_metro_track")
@@ -162,6 +156,7 @@ func _run() -> void:
 	_check(snapshot.get("route_count", 0) == 2, "debug snapshot route count is incorrect")
 	_check(str(snapshot.get("live_summary", "")).contains("車輛只會") and str(snapshot.get("live_summary", "")).contains("任一條件未完成"), "live summary does not explain the no-random-vehicles rule")
 	_check(str(snapshot.get("live_summary", "")).contains("平交道或號誌") and str(snapshot.get("live_summary", "")).contains("車庫"), "live summary omits infrastructure prerequisites")
+	_check(not snapshot.has("station_choices"), "transport panel debug surface still exposes new-station choices")
 	_check_progressive_groups(snapshot)
 
 	var hero := panel.find_child("TransportPlanningHero", true, false) as PanelContainer
@@ -200,11 +195,10 @@ func _run() -> void:
 	var session_detail := panel.find_child("TransportPlanningSessionDetail", true, false) as Label
 	var session_continue := panel.find_child("TransportPlanningSessionContinue", true, false) as Button
 	var session_close := panel.find_child("TransportPlanningSessionClose", true, false) as Button
-	var station_section := panel.find_child("TransportStationSection", true, false) as PanelContainer
 	var infrastructure_section := panel.find_child("TransportInfrastructureSection", true, false) as PanelContainer
 	var operations_section := panel.find_child("TransportOperationsSection", true, false) as PanelContainer
 	var route_list_section := panel.find_child("TransportRouteListSection", true, false) as PanelContainer
-	var sections_ready := station_section != null and infrastructure_section != null and operations_section != null and route_list_section != null
+	var sections_ready := infrastructure_section != null and operations_section != null and route_list_section != null
 	_check(sections_ready, "transport planning sections are missing")
 	_check(session_card != null and session_card.visible, "active planning session summary is not visible")
 	_check(session_status != null and session_status.text.contains("火車站") and session_status.text.contains("2/3"), "session summary omits its player-facing station or phase")
@@ -213,7 +207,7 @@ func _run() -> void:
 	_check(session_continue != null and not session_continue.disabled and session_continue.text.contains("規劃路線"), "network session does not expose the explicit route-step CTA")
 	_check(session_close != null and not session_close.disabled, "active session does not expose explicit close")
 	_check(infrastructure_section != null and infrastructure_section.visible, "network phase hides its required infrastructure controls")
-	_check(station_section != null and not station_section.visible and operations_section != null and not operations_section.visible, "network phase still exposes unrelated station or route steps")
+	_check(operations_section != null and not operations_section.visible, "network phase still exposes the unrelated route step")
 	_check(route_list_section != null and not route_list_section.visible, "active network phase is diluted by the historical route list")
 	_press(panel, "TransportPlanningSessionContinue")
 	_press(panel, "TransportPlanningSessionClose")
@@ -260,34 +254,22 @@ func _run() -> void:
 	})
 	await process_frame
 	_check(session_continue.disabled and session_continue.text.contains("等待施工"), "waiting session exposes a premature continue command")
-	_check(sections_ready and not station_section.visible and not infrastructure_section.visible and not operations_section.visible and not route_list_section.visible, "waiting phase exposes controls the player cannot use")
+	_check(sections_ready and not infrastructure_section.visible and not operations_section.visible and not route_list_section.visible, "waiting phase exposes controls the player cannot use")
 
 	panel.set_view_model({"planning_unlocked": false, "routes": []})
 	await process_frame
-	var station_action := panel.find_child("StationAction_bus_station", true, false) as Button
 	var plan_action := panel.find_child("PlanRoute_bus", true, false) as Button
 	var empty_label := panel.find_child("TransportRouteEmpty", true, false) as Label
-	_check(station_action != null and station_action.disabled, "locked planning still allows station siting")
+	_check(panel.find_child("StationAction_bus_station", true, false) == null, "locked planning resurrected a station creation action")
 	_check(plan_action != null and plan_action.disabled, "locked planning still allows route creation")
 	_check(empty_label != null and empty_label.visible, "empty route state is not rendered")
-	_check(sections_ready and station_section.visible and infrastructure_section.visible and operations_section.visible and route_list_section.visible, "inactive planning does not restore the full start-new-plan surface")
+	_check(sections_ready and infrastructure_section.visible and operations_section.visible and route_list_section.visible, "inactive planning does not restore the network and route surfaces")
 	_check(int(panel.debug_snapshot().get("route_count", -1)) == 0, "route cards were not cleared with an empty snapshot")
 
 	var exit_code := 1 if _failed else 0
 	if not _failed:
 		print("Transport planning panel test passed. Checks=%d" % _checks)
 	await TestCleanup.finish(self, [panel], exit_code)
-
-
-func _check_station_controls(panel: Control) -> void:
-	for choice: Dictionary in [
-		{"id": "bus_station", "label": "公車站"},
-		{"id": "metro_station", "label": "捷運站"},
-		{"id": "rail_station", "label": "火車站"},
-		{"id": "airport", "label": "機場"},
-	]:
-		var button := panel.find_child("StationAction_%s" % choice["id"], true, false) as Button
-		_check(button != null and button.text.contains(str(choice["label"])), "missing semantic station action: %s" % choice["label"])
 
 
 func _check_infrastructure_controls(panel: Control) -> void:
@@ -333,8 +315,9 @@ func _check_progressive_groups(snapshot: Dictionary) -> void:
 	if not groups_variant is Dictionary:
 		return
 	var groups := groups_variant as Dictionary
-	for expected_name: String in ["TransportStationPager", "TransportInfrastructurePager", "TransportRouteModePager", "TransportRoutePager"]:
+	for expected_name: String in ["TransportInfrastructurePager", "TransportRouteModePager", "TransportRoutePager"]:
 		_check(groups.has(expected_name), "missing progressive group: %s" % expected_name)
+	_check(not groups.has("TransportStationPager"), "progressive groups still expose a station pager")
 	for group_name: Variant in groups:
 		var group_variant: Variant = groups[group_name]
 		if not group_variant is Dictionary:
@@ -342,7 +325,6 @@ func _check_progressive_groups(snapshot: Dictionary) -> void:
 			continue
 		var group := group_variant as Dictionary
 		_check(int(group.get("visible_choice_count", 0)) <= 3, "progressive group displays more than three choices: %s" % group_name)
-	_check(int((groups.get("TransportStationPager", {}) as Dictionary).get("choice_count", 0)) == 4, "station pager does not contain all four station choices")
 	_check(int((groups.get("TransportInfrastructurePager", {}) as Dictionary).get("choice_count", 0)) == 9, "infrastructure pager does not contain all nine choices")
 	_check(int((groups.get("TransportRouteModePager", {}) as Dictionary).get("choice_count", 0)) == 4, "route mode pager does not contain all four modes")
 	_check(int((groups.get("TransportRoutePager", {}) as Dictionary).get("choice_count", 0)) == 2, "route pager does not contain the supplied routes")

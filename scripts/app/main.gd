@@ -192,8 +192,6 @@ var building_group_pages: Dictionary = {}
 var building_card_pagers: Dictionary = {}
 var building_family_tabs: TabContainer
 var selected_building_group := "housing"
-var blueprint_shortcut_button: Button
-var transport_shortcut_button: Button
 var policy_checks: Dictionary = {}
 var labels: Dictionary = {}
 var bars: Dictionary = {}
@@ -1318,7 +1316,6 @@ func _build_transport_planning_tab() -> ScrollContainer:
 	transport_planning_panel = TransportPlanningPanelScript.new()
 	transport_planning_panel.set_dark_mode(is_dark_mode)
 	transport_planning_panel.infrastructure_requested.connect(Callable(self, "_on_transport_infrastructure_requested"))
-	transport_planning_panel.station_requested.connect(Callable(self, "_on_transport_station_requested"))
 	transport_planning_panel.route_planning_requested.connect(Callable(self, "_on_transport_route_planning_requested"))
 	transport_planning_panel.route_toggle_requested.connect(Callable(self, "_on_transport_route_toggle_requested"))
 	transport_planning_panel.route_delete_requested.connect(Callable(self, "_on_transport_route_delete_requested"))
@@ -1631,27 +1628,6 @@ func _build_building_tab() -> ScrollContainer:
 	selected_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	selected_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	selected_row.add_child(selected_label)
-	blueprint_shortcut_button = _button("設計藍圖", "primary")
-	blueprint_shortcut_button.name = "OpenBlueprintButton"
-	blueprint_shortcut_button.icon = _icon_texture("blueprint")
-	blueprint_shortcut_button.add_theme_constant_override("icon_max_width", 48)
-	blueprint_shortcut_button.expand_icon = true
-	blueprint_shortcut_button.custom_minimum_size = Vector2(190, 58)
-	blueprint_shortcut_button.add_theme_font_size_override("font_size", 18)
-	blueprint_shortcut_button.tooltip_text = L10n.text("用目前選取的建築直接開啟藍圖設計。")
-	blueprint_shortcut_button.pressed.connect(_open_selected_blueprint)
-	selected_row.add_child(blueprint_shortcut_button)
-	transport_shortcut_button = _button("交通路網", "primary")
-	transport_shortcut_button.name = "OpenTransportPlanningButton"
-	transport_shortcut_button.icon = _icon_texture("traffic")
-	transport_shortcut_button.add_theme_constant_override("icon_max_width", 42)
-	transport_shortcut_button.expand_icon = true
-	transport_shortcut_button.custom_minimum_size = Vector2(190, 58)
-	transport_shortcut_button.add_theme_font_size_override("font_size", 18)
-	transport_shortcut_button.tooltip_text = "只在交通站點藍圖核准後顯示；可連續放站、鋪路網並設定路線"
-	transport_shortcut_button.pressed.connect(Callable(self, "_open_transport_planning"))
-	transport_shortcut_button.visible = false
-	selected_row.add_child(transport_shortcut_button)
 	content.add_child(selected_card)
 
 	building_family_tabs = TabContainer.new()
@@ -3883,9 +3859,9 @@ func _select_building(building_name: String) -> void:
 	if vertical_slice_panel:
 		vertical_slice_panel.set_selected_building(selected_building)
 	if _has_approved_blueprint_for_selected():
-		_set_hint("已選擇「%s」；請開啟設計藍圖確認總價，再回到地圖放置。" % selected_building, false)
+		_set_hint("已選擇「%s」；請在藍圖頁確認總價後放置。" % selected_building, false)
 	else:
-		_set_hint("已選擇「%s」；按「設計藍圖」送審，核准後即可放置。" % selected_building, false)
+		_set_hint("已選擇「%s」；請在藍圖頁調整規格並送審，核准後即可放置。" % selected_building, false)
 	_update_ui()
 
 
@@ -3895,19 +3871,6 @@ func _select_building_from_catalog(building_name: String) -> void:
 		municipal_overlay.open_page("blueprint")
 	_set_hint("已進入「%s」設計；調整規格後，總價、工期與占地會立即更新。" % building_name, false)
 
-
-func _sync_building_flow_actions() -> void:
-	if blueprint_shortcut_button != null:
-		blueprint_shortcut_button.text = L10n.text("設計藍圖")
-		blueprint_shortcut_button.tooltip_text = L10n.text("用目前選取的建築直接開啟藍圖設計。")
-	if transport_shortcut_button == null:
-		return
-	var is_station := selected_building in TRANSPORT_SESSION_STATIONS
-	var has_approved := is_station and _has_approved_blueprint_for_selected()
-	transport_shortcut_button.visible = has_approved
-	transport_shortcut_button.disabled = not has_approved
-	transport_shortcut_button.text = L10n.text("開始交通規劃")
-	transport_shortcut_button.tooltip_text = L10n.text("在同一次規劃中連續放置多座站點，再接著鋪設路網與設定路線。")
 
 func _select_building_group(group_id: String) -> void:
 	if not building_group_pages.has(group_id):
@@ -3941,10 +3904,6 @@ func _building_group_definition(group_id: String) -> Dictionary:
 		if str(group["id"]) == group_id:
 			return group
 	return {}
-
-func _open_selected_blueprint() -> void:
-	if municipal_overlay != null:
-		municipal_overlay.open_page("blueprint")
 
 func _on_blueprint_submit_requested(payload: Dictionary) -> void:
 	if vertical_slice == null:
@@ -5779,7 +5738,7 @@ func _building_name_from_id(building_id: String) -> String:
 
 func _vertical_error_text(error_code: String) -> String:
 	var messages := {
-		"approved_blueprint_required": "尚無核准藍圖，請先到「市政中心 → 設計藍圖」送審並等待 2–7 天",
+		"approved_blueprint_required": "尚無核准藍圖，請先到「市政中心 → 建設與藍圖」選擇建築圖卡送審並等待 2–7 天",
 		"insufficient_treasury": "城市公庫不足",
 		"insufficient_workers": "工程隊人力不足，最多共用 20 人",
 		"tile_occupied": "該地格已有建築",
@@ -6232,7 +6191,6 @@ func _update_ui() -> void:
 		buildings[selected_building]["cost"],
 		_visual_effects(buildings[selected_building], 3)
 	]
-	_sync_building_flow_actions()
 	report_label.text = _current_month_major_event_summary()
 	if report_details_label != null:
 		report_details_label.text = last_report_details
