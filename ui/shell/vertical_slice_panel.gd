@@ -28,6 +28,7 @@ const BLUEPRINT_ICON_KEYS := {
 signal blueprint_submit_requested(payload: Dictionary)
 signal placement_requested(building_name: String)
 signal worker_count_changed(count: int)
+signal design_changed(payload: Dictionary)
 signal blueprint_library_selection_requested(building_name: String, library_id: String)
 
 var _building_name := "住宅"
@@ -54,6 +55,8 @@ var _action_variants: Dictionary = {}
 var _primary_action_mode := "submit"
 var _last_review_binding := ""
 var _library_signature := ""
+var _suppress_design_change := false
+var _active_review: Dictionary = {}
 
 func _init() -> void:
 	name = "設計藍圖"
@@ -81,6 +84,7 @@ func set_view_model(view_model: Dictionary) -> void:
 	)
 	var review_variant = view_model.get("blueprint_review", {})
 	var review: Dictionary = review_variant if review_variant is Dictionary else {}
+	_active_review = review.duplicate(true)
 	_sync_blueprint_from_review(review)
 	_apply_review_state(review)
 	var quote_variant = view_model.get("placement_quote", {})
@@ -110,7 +114,7 @@ func _build_content() -> void:
 	_selected_building_label = _status_label("正在設計：%s" % _building_name)
 	_selected_building_label.add_theme_font_size_override("font_size", UI_TITLE_FONT_SIZE)
 	hero_copy.add_child(_selected_building_label)
-	var guide := _status_label("先選設計分類；畫面一次只顯示最多 3 項參數。")
+	var guide := _status_label("五項設計會同頁顯示；每次調整都立即重算開工前估價。")
 	hero_copy.add_child(guide)
 	content.add_child(hero)
 
@@ -142,6 +146,7 @@ func _build_content() -> void:
 		{"id": "eco_composite", "name": "環保複材", "tooltip": "環境友善複合材料"}
 	])
 	_material_picker.name = "BlueprintMaterial"
+	_material_picker.choice_selected.connect(_on_design_control_changed)
 
 	_size_picker = _picker([
 		{"id": "small", "name": "小型"},
@@ -150,6 +155,7 @@ func _build_content() -> void:
 	])
 	_size_picker.select(1)
 	_size_picker.name = "BlueprintSize"
+	_size_picker.choice_selected.connect(_on_design_control_changed)
 
 	_floor_input = SpinBox.new()
 	_floor_input.min_value = 1
@@ -158,6 +164,7 @@ func _build_content() -> void:
 	_floor_input.custom_minimum_size = Vector2(112, UI_CONTROL_HEIGHT)
 	_style_control(_floor_input)
 	_floor_input.name = "BlueprintFloors"
+	_floor_input.value_changed.connect(func(_value: float) -> void: _on_design_control_changed())
 
 	_worker_input = SpinBox.new()
 	_worker_input.min_value = 1
@@ -174,33 +181,21 @@ func _build_content() -> void:
 		{"id": "window_trim", "name": "窗框"}
 	])
 	_decor_picker.name = "BlueprintDecoration"
+	_decor_picker.choice_selected.connect(_on_design_control_changed)
 
-	var parameter_groups := TabContainer.new()
-	parameter_groups.name = "BlueprintParameterGroups"
-	parameter_groups.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	parameter_groups.add_theme_font_size_override("font_size", UI_BODY_FONT_SIZE)
-	content.add_child(parameter_groups)
-	var structure_grid := GridContainer.new()
-	structure_grid.name = "結構與規模"
-	structure_grid.columns = 3
-	structure_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	structure_grid.add_theme_constant_override("h_separation", 10)
-	structure_grid.add_theme_constant_override("v_separation", 10)
-	structure_grid.set_meta("progressive_choice_group", true)
-	structure_grid.add_child(_parameter_card("material", "材質", _material_picker))
-	structure_grid.add_child(_parameter_card("size", "規模", _size_picker))
-	structure_grid.add_child(_parameter_card("floors", "樓層", _floor_input))
-	parameter_groups.add_child(structure_grid)
-	var finishing_grid := GridContainer.new()
-	finishing_grid.name = "施工與裝飾"
-	finishing_grid.columns = 2
-	finishing_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	finishing_grid.add_theme_constant_override("h_separation", 10)
-	finishing_grid.add_theme_constant_override("v_separation", 10)
-	finishing_grid.set_meta("progressive_choice_group", true)
-	finishing_grid.add_child(_parameter_card("workers", "人力", _worker_input))
-	finishing_grid.add_child(_parameter_card("decoration", "裝飾", _decor_picker))
-	parameter_groups.add_child(finishing_grid)
+	var design_grid := GridContainer.new()
+	design_grid.name = "BlueprintDesignSinglePage"
+	design_grid.columns = 3
+	design_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	design_grid.add_theme_constant_override("h_separation", 10)
+	design_grid.add_theme_constant_override("v_separation", 10)
+	design_grid.set_meta("single_page_design", true)
+	design_grid.add_child(_parameter_card("material", "材質", _material_picker))
+	design_grid.add_child(_parameter_card("size", "規模", _size_picker))
+	design_grid.add_child(_parameter_card("floors", "樓層", _floor_input))
+	design_grid.add_child(_parameter_card("workers", "人力", _worker_input))
+	design_grid.add_child(_parameter_card("decoration", "裝飾", _decor_picker))
+	content.add_child(design_grid)
 
 	_submit_button = _action_button("送審藍圖", true)
 	_submit_button.name = "SubmitBlueprintButton"
@@ -262,15 +257,24 @@ func _apply_review_state(review: Dictionary) -> void:
 		"approved":
 			var title := L10n.text(str(review.get("title", "核准藍圖")))
 			var usage_count := int(review.get("usage_count", 0))
-			if str(review.get("source", "")) == "default":
+			if _approved_design_is_dirty(review):
+				_review_label.text = L10n.text("目前草稿與已核准版不同｜請先送審這份自訂版，核准後才能開工。")
+				_submit_button.text = L10n.text("送審自訂版")
+				_submit_button.tooltip_text = L10n.text("草稿會改變核准藍圖的設計、價格或占地；請先送審。")
+				_primary_action_mode = "submit"
+			elif str(review.get("source", "")) == "default":
 				_review_label.text = L10n.text("✓ 已載入「%s」｜可直接放置；調整參數後可另送審自訂版。") % title
+				_submit_button.text = L10n.text("回到地圖放置")
+				_submit_button.tooltip_text = L10n.text("返回城市地圖，選擇空地開始施工。")
+				_primary_action_mode = "placement"
+				_custom_submit_button.visible = true
 			else:
 				_review_label.text = L10n.text("✓ 已載入「%s」｜永久保存，已套用 %d 次。") % [title, usage_count]
-			_review_label.add_theme_color_override("font_color", GOOD)
-			_submit_button.text = L10n.text("回到地圖放置")
-			_submit_button.tooltip_text = L10n.text("返回城市地圖，選擇空地開始施工。")
-			_primary_action_mode = "placement"
-			_custom_submit_button.visible = true
+				_submit_button.text = L10n.text("回到地圖放置")
+				_submit_button.tooltip_text = L10n.text("返回城市地圖，選擇空地開始施工。")
+				_primary_action_mode = "placement"
+				_custom_submit_button.visible = true
+			_review_label.add_theme_color_override("font_color", GOOD if _primary_action_mode == "placement" else CAUTION)
 		"rejected":
 			_review_label.text = L10n.text("! 審核未通過｜%s｜修改參數後可重新送審。") % L10n.text(_review_reason(str(review.get("decision_reason", ""))))
 			_review_label.add_theme_color_override("font_color", CAUTION)
@@ -302,11 +306,47 @@ func _sync_blueprint_from_review(review: Dictionary) -> void:
 	var blueprint: Dictionary = blueprint_variant
 	if blueprint.is_empty():
 		return
+	_suppress_design_change = true
 	_select_picker_id(_material_picker, str(blueprint.get("material_id", "")))
 	_select_picker_id(_size_picker, str(blueprint.get("size_tier", "")))
 	_floor_input.value = clampf(float(blueprint.get("floors", _floor_input.value)), _floor_input.min_value, _floor_input.max_value)
 	_worker_input.value = clampf(float(blueprint.get("requested_workers", blueprint.get("workers", _worker_input.value))), _worker_input.min_value, _worker_input.max_value)
 	_select_picker_id(_decor_picker, str(blueprint.get("decoration_id", blueprint.get("decor_id", ""))))
+	_suppress_design_change = false
+
+
+func active_design_state() -> Dictionary:
+	var has_active := str(_active_review.get("status", "")) == "approved"
+	var design_dirty := has_active and _approved_design_is_dirty(_active_review)
+	return {
+		"has_active_approved": has_active,
+		"design_dirty": design_dirty,
+		"matches_active_approved": has_active and not design_dirty,
+	}
+
+
+func _approved_design_is_dirty(review: Dictionary) -> bool:
+	var approved_variant = review.get("blueprint", {})
+	if not approved_variant is Dictionary:
+		return false
+	var approved: Dictionary = approved_variant
+	if approved.is_empty():
+		return false
+	var draft := current_design_payload()
+	# Roof/wall colors are persisted for compatibility but are not currently
+	# player-editable in this surface.  They therefore cannot make a visible
+	# design draft dirty, especially when restoring older approved blueprints.
+	for field_name: String in ["material_id", "size_tier", "decor_id"]:
+		var approved_field := "decoration_id" if field_name == "decor_id" else field_name
+		if str(draft.get(field_name, "")) != str(approved.get(approved_field, "")):
+			return true
+	# JSON persistence can restore whole-number floors as 4.0 while controls
+	# always expose an integer 4. Compare the semantic numeric value, not its
+	# serialized spelling, or a valid historical approved design stays dirty.
+	return (
+		int(draft.get("floors", 0)) != int(approved.get("floors", 0))
+		or int(approved.get("decoration_count", 1)) != 1
+	)
 
 
 func _apply_blueprint_library(entries_variant: Variant, active_id: String) -> void:
@@ -364,11 +404,11 @@ func _update_placement_quote(quote: Dictionary) -> void:
 	var labor_cost := int(quote.get("total_labor_cost", quote.get("labor_cost", estimate.get("total_labor_cost", 0))))
 	var total_cost := int(quote.get("total_cost", base_cost + labor_cost))
 	var duration_days := int(quote.get("duration_days", quote.get("days", estimate.get("duration_days", 0))))
-	_quote_label.text = L10n.text("開工前估價｜基礎 $%s ＋ 人工 $%s ＝ 總額 $%s｜預估工期 %d 日") % [
-		_format_money(base_cost),
-		_format_money(labor_cost),
-		_format_money(total_cost),
-		duration_days
+	var blueprint: Dictionary = quote.get("blueprint", {})
+	var footprint_count := int(quote.get("footprint_count", {"small": 1, "medium": 2, "large": 3}.get(str(blueprint.get("size_tier", "")), 0)))
+	_quote_label.text = L10n.text("草稿估價｜%s・%s・%d 樓・%s・%s｜占地 %d 格｜基礎／設計 $%s ＋ 人工 $%s ＝ 總額 $%s｜工期 %d 日") % [
+		_selected_text(_material_picker), _selected_text(_size_picker), int(blueprint.get("floors", 0)), _selected_text(_worker_input), _selected_text(_decor_picker),
+		footprint_count, _format_money(base_cost), _format_money(labor_cost), _format_money(total_cost), duration_days
 	]
 	_quote_label.add_theme_color_override("font_color", _text_color())
 	_quote_label.visible = true
@@ -397,6 +437,28 @@ func _on_primary_action_pressed() -> void:
 
 func _on_worker_count_changed(value: float) -> void:
 	worker_count_changed.emit(int(value))
+	_on_design_control_changed()
+
+
+func current_design_payload() -> Dictionary:
+	return {
+		"building_name": _building_name,
+		"material_id": _selected_id(_material_picker),
+		"size_tier": _selected_id(_size_picker),
+		"floors": int(_floor_input.value),
+		"workers": int(_worker_input.value),
+		"decor_id": _selected_id(_decor_picker),
+		"roof_color": "blue",
+		"wall_color": "cream",
+	}
+
+
+func _on_design_control_changed(_unused: Variant = null) -> void:
+	if _suppress_design_change:
+		return
+	if str(_active_review.get("status", "")) == "approved":
+		_apply_review_state(_active_review)
+	design_changed.emit(current_design_payload())
 
 
 func _on_library_choice_selected(library_id: String) -> void:
@@ -411,21 +473,28 @@ func _review_reason(reason: String) -> String:
 		_: return "請調整設計條件"
 
 func _emit_blueprint() -> void:
-	blueprint_submit_requested.emit({
-		"building_name": _building_name,
-		"material_id": _selected_id(_material_picker),
-		"size_tier": _selected_id(_size_picker),
-		"floors": int(_floor_input.value),
-		"workers": int(_worker_input.value),
-		"decor_id": _selected_id(_decor_picker),
-		"roof_color": "blue",
-		"wall_color": "cream"
-	})
+	blueprint_submit_requested.emit(current_design_payload())
 
 func _selected_id(picker: OptionButton) -> String:
 	if picker.has_method("selected_choice_id"):
 		return str(picker.call("selected_choice_id"))
 	return str(picker.get_item_metadata(picker.selected))
+
+
+func _selected_text(control: Control) -> String:
+	if control is OptionButton:
+		var option_id := _selected_id(control as OptionButton)
+		match control.name:
+			"BlueprintMaterial":
+				return L10n.text({"wood": "木造", "brick": "磚造", "steel": "鋼構", "eco_composite": "環保複材"}.get(option_id, option_id))
+			"BlueprintSize":
+				return L10n.text({"small": "小型", "medium": "中型", "large": "大型"}.get(option_id, option_id))
+			"BlueprintDecoration":
+				return L10n.text({"flowers": "花草", "flags": "旗幟", "window_trim": "窗框"}.get(option_id, option_id))
+		return option_id
+	if control is SpinBox:
+		return L10n.text("%d 人") % int((control as SpinBox).value)
+	return ""
 
 func _picker(items: Array[Dictionary]) -> OptionButton:
 	var picker := ProgressiveOptionButtonScript.new() as OptionButton

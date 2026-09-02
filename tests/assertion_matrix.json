@@ -49,6 +49,8 @@
     { "id": "blueprint_library_service_self", "script": "res://tests/unit/app/blueprint_library_service_self_test.gd", "success_pattern": "Blueprint library service self-test passed." },
     { "id": "city_report_history_service_self", "script": "res://tests/unit/app/city_report_history_service_self_test.gd", "success_pattern": "City report history service self-test passed.", "timeout_seconds": 120 },
     { "id": "vertical_slice_panel_state", "script": "res://tests/ui/vertical_slice_panel_state_test.gd", "success_pattern": "Vertical slice panel state test passed." },
+    { "id": "blueprint_draft_quote_flow", "script": "res://tests/integration/blueprint_draft_quote_flow_test.gd", "success_pattern": "Blueprint draft quote flow test passed." },
+    { "id": "blueprint_legacy_main_load_flow", "script": "res://tests/integration/blueprint_legacy_main_load_flow_test.gd", "success_pattern": "Blueprint legacy Main load flow test passed.", "timeout_seconds": 240 },
     { "id": "vertical_slice", "script": "res://tests/integration/vertical_slice_test.gd", "success_pattern": "Mayor Simulator vertical slice test passed." },
     { "id": "multiseed_long_soak", "script": "res://tests/integration/multiseed_long_soak_test.gd", "success_pattern": "Mayor Simulator multi-seed long-soak test passed.", "timeout_seconds": 180 },
     { "id": "visual_safety", "script": "res://tests/ui/visual_safety_regression_test.gd", "success_pattern": "Visual safety regression test passed." },

@@ -273,6 +273,40 @@ func placement_quote(display_name: String, worker_count: int = -1) -> Dictionary
 	}
 
 
+func draft_placement_quote(display_name: String, payload: Dictionary) -> Dictionary:
+	## A pre-submission quote has no library identity by design: it is derived
+	## from the live draft, then submit_blueprint() invokes the same blueprint
+	## service helper to prevent a quote/blueprint drift.
+	var definition = _definition_for_name(display_name)
+	if definition == null:
+		return {"ok": false, "error": "building_definition_not_found"}
+	var draft_payload := payload.duplicate(true)
+	draft_payload["building_name"] = display_name
+	var blueprint: Dictionary = blueprint_library_service.preview_submission_blueprint(draft_payload, definition)
+	var workers := int(blueprint.get("requested_workers", 5))
+	var estimate: Dictionary = construction.estimate_job(blueprint, "build", workers)
+	var base_cost := int(blueprint.get("base_cost", 0))
+	var labor_cost := int(estimate.get("total_labor_cost", 0))
+	var size_tier := str(blueprint.get("size_tier", "medium"))
+	var footprint_count: int = int({"small": 1, "medium": 2, "large": 3}.get(size_tier, 0))
+	return {
+		"ok": true,
+		"draft": true,
+		"building_name": display_name,
+		"worker_count": workers,
+		"available_workers": construction.available_workers(),
+		"duration_days": int(estimate.get("duration_days", 0)),
+		"daily_labor_cost": int(estimate.get("daily_labor_cost", 0)),
+		"base_cost": base_cost,
+		"labor_cost": labor_cost,
+		"total_labor_cost": labor_cost,
+		"total_cost": base_cost + labor_cost,
+		"can_afford": treasury_balance() >= base_cost + labor_cost,
+		"footprint_count": footprint_count,
+		"blueprint": blueprint.duplicate(true),
+	}
+
+
 func placement_footprint_quote(
 	display_name: String,
 	anchor_tile_id: int,

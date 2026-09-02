@@ -1541,6 +1541,7 @@ func _build_vertical_slice_tab() -> ScrollContainer:
 	vertical_slice_panel.blueprint_submit_requested.connect(Callable(self, "_on_blueprint_submit_requested"))
 	vertical_slice_panel.placement_requested.connect(Callable(self, "_on_blueprint_placement_requested"))
 	vertical_slice_panel.worker_count_changed.connect(Callable(self, "_on_blueprint_worker_count_changed"))
+	vertical_slice_panel.design_changed.connect(Callable(self, "_on_blueprint_design_changed"))
 	vertical_slice_panel.blueprint_library_selection_requested.connect(Callable(self, "_on_blueprint_library_selection_requested"))
 	return vertical_slice_panel
 
@@ -3640,6 +3641,12 @@ func _on_blueprint_worker_count_changed(_count: int) -> void:
 	_update_scoped_municipal_pages(vertical_slice.get_view_model(selected_cell_index))
 
 
+func _on_blueprint_design_changed(_payload: Dictionary) -> void:
+	if vertical_slice == null:
+		return
+	_update_scoped_municipal_pages(vertical_slice.get_view_model(selected_cell_index))
+
+
 func _on_blueprint_library_selection_requested(building_name: String, library_id: String) -> void:
 	if vertical_slice == null:
 		return
@@ -5114,9 +5121,16 @@ func _update_scoped_municipal_pages(view_model: Dictionary) -> void:
 		blueprint_view_model["blueprint_review"] = vertical_slice.blueprint_review_status(selected_building)
 		blueprint_view_model["blueprint_library"] = vertical_slice.approved_blueprints(selected_building)
 		blueprint_view_model["active_blueprint_id"] = str(vertical_slice.active_blueprint_status(selected_building).get("library_id", ""))
-		var placement_quote: Dictionary = vertical_slice.placement_quote(
-			selected_building,
-			vertical_slice_panel.selected_worker_count()
+		# Let an incoming approved/library selection bind the UI draft first.  The
+		# second lightweight view update below then quotes those exact controls,
+		# instead of accidentally pricing the controls from the previously selected
+		# building for one frame.
+		vertical_slice_panel.set_view_model(blueprint_view_model)
+		var design_state: Dictionary = vertical_slice_panel.active_design_state()
+		var placement_quote: Dictionary = (
+			vertical_slice.placement_quote(selected_building, vertical_slice_panel.selected_worker_count())
+			if bool(design_state.get("matches_active_approved", false))
+			else vertical_slice.draft_placement_quote(selected_building, vertical_slice_panel.current_design_payload())
 		)
 		blueprint_view_model["placement_quote"] = placement_quote if bool(placement_quote.get("ok", false)) else {}
 		vertical_slice_panel.set_view_model(blueprint_view_model)
