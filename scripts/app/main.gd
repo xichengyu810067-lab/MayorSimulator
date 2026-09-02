@@ -1227,11 +1227,11 @@ func _begin_graceful_application_quit() -> void:
 
 func _shutdown_audio_and_quit() -> void:
 	if is_instance_valid(audio_director):
-		audio_director.stop_all()
-	await get_tree().process_frame
-	if is_instance_valid(audio_director):
-		audio_director.detach_streams()
-	await get_tree().process_frame
+		await audio_director.settle_for_shutdown(get_tree())
+		audio_director.free()
+		audio_director = null
+	for _frame in range(AudioDirectorScript.SHUTDOWN_FREE_SETTLE_FRAMES):
+		await get_tree().process_frame
 	if _qa_release_smoke_active:
 		print("QA_RELEASE_SMOKE_COMPLETED")
 	get_tree().call_deferred("quit")
