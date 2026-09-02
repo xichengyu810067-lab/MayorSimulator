@@ -1183,9 +1183,15 @@ func _validate_visual_data(overlay, expected_page: String) -> bool:
 		if visual_controls.size() < 4:
 			push_error("Picture-first blueprint must expose its hero and current parameter illustrations; found %d." % visual_controls.size())
 			return false
-		var parameter_cards: Array[Node] = overlay.find_children("BlueprintCard_*", "PanelContainer", true, false)
-		if parameter_cards.size() != 5:
-			push_error("Blueprint must expose exactly five illustrated parameter cards; found %d." % parameter_cards.size())
+		var workspace := overlay.find_child("BlueprintDesignWorkspace", true, false) as HBoxContainer
+		var parameter_groups: Array[Node] = overlay.find_children("BlueprintGroup_*", "PanelContainer", true, false)
+		if workspace == null or parameter_groups.size() != 2 or int(workspace.get_meta("design_control_count", 0)) != 5:
+			push_error("Blueprint must combine exactly five controls into two task-oriented groups; groups=%d controls=%d." % [parameter_groups.size(), 0 if workspace == null else int(workspace.get_meta("design_control_count", 0))])
+			return false
+		var quote_card := overlay.find_child("BlueprintQuoteCard", true, false) as PanelContainer
+		var quote_label := overlay.find_child("BlueprintPlacementQuote", true, false) as Label
+		if quote_card == null or quote_label == null or not quote_label.is_visible_in_tree() or quote_label.text.strip_edges().is_empty():
+			push_error("Blueprint live quote must remain visible beside the current design controls.")
 			return false
 	if expected_page == "buildings":
 		if overlay.find_child("DemolishSelectedBuildingButton", true, false) != null:

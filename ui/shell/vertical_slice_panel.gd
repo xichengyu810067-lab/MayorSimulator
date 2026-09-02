@@ -57,6 +57,8 @@ var _last_review_binding := ""
 var _library_signature := ""
 var _suppress_design_change := false
 var _active_review: Dictionary = {}
+var _last_view_model: Dictionary = {}
+var _transport_station_mode := false
 
 func _init() -> void:
 	name = "設計藍圖"
@@ -74,6 +76,8 @@ func set_dark_mode(enabled: bool) -> void:
 	_refresh_palette()
 
 func set_view_model(view_model: Dictionary) -> void:
+	_last_view_model = view_model.duplicate(true)
+	_transport_station_mode = bool(view_model.get("transport_station_mode", false))
 	var available_workers := int(view_model.get("available_workers", 20))
 	_construction_label.text = "⌂  " + str(view_model.get("construction_text", L10n.text("目前沒有施工或送審案件。")))
 	_workers_label.text = L10n.text("工  工程隊 %d / 20 可用  •  %d%%") % [available_workers, available_workers * 5]
@@ -88,6 +92,25 @@ func set_view_model(view_model: Dictionary) -> void:
 	_sync_blueprint_from_review(review)
 	_apply_review_state(review)
 	var quote_variant = view_model.get("placement_quote", {})
+	_update_placement_quote(quote_variant if quote_variant is Dictionary else {})
+
+
+func refresh_localization() -> void:
+	# Static labels keep their original source metadata. Dynamic values below are
+	# rebuilt from authority after the locale changes so they never retain a
+	# previous language merely because their content signature did not change.
+	L10n.localize_tree(self)
+	for picker in [_material_picker, _size_picker, _decor_picker, _library_picker]:
+		if picker != null and picker.has_method("refresh_localization"):
+			picker.call("refresh_localization")
+	_library_signature = ""
+	_apply_blueprint_library(
+		_last_view_model.get("blueprint_library", []),
+		str(_last_view_model.get("active_blueprint_id", ""))
+	)
+	set_selected_building(_building_name)
+	_apply_review_state(_active_review)
+	var quote_variant = _last_view_model.get("placement_quote", {})
 	_update_placement_quote(quote_variant if quote_variant is Dictionary else {})
 
 func selected_worker_count() -> int:
@@ -112,6 +135,7 @@ func _build_content() -> void:
 	hero_row.add_child(hero_copy)
 	hero_copy.add_child(_title("設計藍圖"))
 	_selected_building_label = _status_label("正在設計：%s" % _building_name)
+	_selected_building_label.set_meta("l10n_skip", true)
 	_selected_building_label.add_theme_font_size_override("font_size", UI_TITLE_FONT_SIZE)
 	hero_copy.add_child(_selected_building_label)
 	var guide := _status_label("五項設計會同頁顯示；每次調整都立即重算開工前估價。")
@@ -130,6 +154,7 @@ func _build_content() -> void:
 	library_row.add_child(library_copy)
 	_library_label = _status_label("永久藍圖庫｜載入中")
 	_library_label.name = "BlueprintLibraryStatus"
+	_library_label.set_meta("l10n_skip", true)
 	_library_label.set_meta("readability_muted", false)
 	library_copy.add_child(_library_label)
 	_library_picker = _picker([{"id": "loading", "name": "載入核准藍圖中"}])
@@ -183,19 +208,45 @@ func _build_content() -> void:
 	_decor_picker.name = "BlueprintDecoration"
 	_decor_picker.choice_selected.connect(_on_design_control_changed)
 
-	var design_grid := GridContainer.new()
-	design_grid.name = "BlueprintDesignSinglePage"
-	design_grid.columns = 3
-	design_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	design_grid.add_theme_constant_override("h_separation", 10)
-	design_grid.add_theme_constant_override("v_separation", 10)
-	design_grid.set_meta("single_page_design", true)
-	design_grid.add_child(_parameter_card("material", "材質", _material_picker))
-	design_grid.add_child(_parameter_card("size", "規模", _size_picker))
-	design_grid.add_child(_parameter_card("floors", "樓層", _floor_input))
-	design_grid.add_child(_parameter_card("workers", "人力", _worker_input))
-	design_grid.add_child(_parameter_card("decoration", "裝飾", _decor_picker))
-	content.add_child(design_grid)
+	var design_workspace := HBoxContainer.new()
+	design_workspace.name = "BlueprintDesignWorkspace"
+	design_workspace.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	design_workspace.add_theme_constant_override("separation", 12)
+	design_workspace.set_meta("single_page_design", true)
+	design_workspace.set_meta("design_control_count", 5)
+	design_workspace.add_child(_design_group_card(
+		"size",
+		"建築規格",
+		"材質、規模與樓層",
+		[
+			{"label": "材質", "control": _material_picker},
+			{"label": "規模", "control": _size_picker},
+			{"label": "樓層", "control": _floor_input},
+		]
+	))
+	design_workspace.add_child(_design_group_card(
+		"workers",
+		"施工配置",
+		"人力與裝飾",
+		[
+			{"label": "人力", "control": _worker_input},
+			{"label": "裝飾", "control": _decor_picker},
+		]
+	))
+	content.add_child(design_workspace)
+
+	var quote_card := _visual_card(true)
+	quote_card.name = "BlueprintQuoteCard"
+	var quote_stack := VBoxContainer.new()
+	quote_stack.add_theme_constant_override("separation", 4)
+	quote_card.add_child(quote_stack)
+	quote_stack.add_child(_title("即時開工估價"))
+	_quote_label = _status_label("調整任何選項後，總價、工期與占地會立即更新。")
+	_quote_label.name = "BlueprintPlacementQuote"
+	_quote_label.set_meta("l10n_skip", true)
+	_quote_label.set_meta("readability_muted", false)
+	quote_stack.add_child(_quote_label)
+	content.add_child(quote_card)
 
 	_submit_button = _action_button("送審藍圖", true)
 	_submit_button.name = "SubmitBlueprintButton"
@@ -220,16 +271,13 @@ func _build_content() -> void:
 	status_card.add_child(status_stack)
 	_review_label = _status_label("尚未送審｜完成設計後按上方按鈕。")
 	_review_label.name = "BlueprintReviewStatus"
+	_review_label.set_meta("l10n_skip", true)
 	_review_label.set_meta("readability_muted", false)
-	_quote_label = _status_label("")
-	_quote_label.name = "BlueprintPlacementQuote"
-	_quote_label.set_meta("readability_muted", false)
-	_quote_label.visible = false
 	_construction_label = _status_label("目前沒有施工或送審案件。")
 	_construction_label.set_meta("l10n_skip", true)
 	_workers_label = _status_label("工程隊：20 / 20 人可用")
+	_workers_label.set_meta("l10n_skip", true)
 	status_stack.add_child(_review_label)
-	status_stack.add_child(_quote_label)
 	status_stack.add_child(_construction_label)
 	status_stack.add_child(_workers_label)
 	_workers_bar = _visual_bar(20, GOOD)
@@ -264,14 +312,14 @@ func _apply_review_state(review: Dictionary) -> void:
 				_primary_action_mode = "submit"
 			elif str(review.get("source", "")) == "default":
 				_review_label.text = L10n.text("✓ 已載入「%s」｜可直接放置；調整參數後可另送審自訂版。") % title
-				_submit_button.text = L10n.text("回到地圖放置")
-				_submit_button.tooltip_text = L10n.text("返回城市地圖，選擇空地開始施工。")
+				_submit_button.text = L10n.text("開始連續站點規劃") if _transport_station_mode else L10n.text("回到地圖放置")
+				_submit_button.tooltip_text = L10n.text("在同一次規劃中連續放置多座站點，再接著鋪設路網與設定路線。") if _transport_station_mode else L10n.text("返回城市地圖，選擇空地開始施工。")
 				_primary_action_mode = "placement"
 				_custom_submit_button.visible = true
 			else:
 				_review_label.text = L10n.text("✓ 已載入「%s」｜永久保存，已套用 %d 次。") % [title, usage_count]
-				_submit_button.text = L10n.text("回到地圖放置")
-				_submit_button.tooltip_text = L10n.text("返回城市地圖，選擇空地開始施工。")
+				_submit_button.text = L10n.text("開始連續站點規劃") if _transport_station_mode else L10n.text("回到地圖放置")
+				_submit_button.tooltip_text = L10n.text("在同一次規劃中連續放置多座站點，再接著鋪設路網與設定路線。") if _transport_station_mode else L10n.text("返回城市地圖，選擇空地開始施工。")
 				_primary_action_mode = "placement"
 				_custom_submit_button.visible = true
 			_review_label.add_theme_color_override("font_color", GOOD if _primary_action_mode == "placement" else CAUTION)
@@ -358,12 +406,13 @@ func _apply_blueprint_library(entries_variant: Variant, active_id: String) -> vo
 			if not entry_variant is Dictionary:
 				continue
 			var entry: Dictionary = entry_variant
-			var source_label := "官方" if str(entry.get("source", "")) == "default" else "玩家"
+			var source_label := L10n.text("官方" if str(entry.get("source", "")) == "default" else "玩家")
 			var usage_count := int(entry.get("usage_count", 0))
+			var entry_title := L10n.text(str(entry.get("title", "核准藍圖")))
 			choices.append({
 				"id": str(entry.get("id", "")),
-				"name": "%s｜%s｜已用 %d 次" % [str(entry.get("title", "核准藍圖")), source_label, usage_count],
-				"tooltip": "%s｜核准後永久保存，可反覆套用。" % str(entry.get("title", "核准藍圖")),
+				"name": L10n.text("%s｜%s｜已用 %d 次") % [entry_title, source_label, usage_count],
+				"tooltip": L10n.text("%s｜核准後永久保存，可反覆套用。") % entry_title,
 			})
 	var signature := JSON.stringify([choices, active_id])
 	if signature == _library_signature:
@@ -395,8 +444,9 @@ func _update_placement_quote(quote: Dictionary) -> void:
 	if _quote_label == null:
 		return
 	if quote.is_empty() or not bool(quote.get("available", true)):
-		_quote_label.visible = false
-		_quote_label.text = ""
+		_quote_label.visible = true
+		_quote_label.text = L10n.text("調整任何選項後，總價、工期與占地會立即更新。")
+		_quote_label.add_theme_color_override("font_color", _muted_color())
 		return
 	var estimate_variant = quote.get("estimate", {})
 	var estimate: Dictionary = estimate_variant if estimate_variant is Dictionary else {}
@@ -411,6 +461,7 @@ func _update_placement_quote(quote: Dictionary) -> void:
 		footprint_count, _format_money(base_cost), _format_money(labor_cost), _format_money(total_cost), duration_days
 	]
 	_quote_label.add_theme_color_override("font_color", _text_color())
+	_quote_label.custom_minimum_size = Vector2(0, 64)
 	_quote_label.visible = true
 
 func _format_money(amount: int) -> String:
@@ -548,6 +599,34 @@ func _visual_card(padded_content: bool = false) -> PanelContainer:
 	_visual_cards.append(panel)
 	_apply_visual_card_palette(panel)
 	return panel
+
+func _design_group_card(icon_key: String, title_text: String, detail_text: String, fields: Array) -> PanelContainer:
+	var card := _visual_card(true)
+	card.name = "BlueprintGroup_%s" % icon_key.capitalize()
+	card.custom_minimum_size = Vector2(0, 258)
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	card.size_flags_stretch_ratio = 1.0
+	var stack := VBoxContainer.new()
+	stack.add_theme_constant_override("separation", 8)
+	card.add_child(stack)
+	var heading_row := HBoxContainer.new()
+	heading_row.add_theme_constant_override("separation", 10)
+	heading_row.add_child(_icon_rect(str(BLUEPRINT_ICON_KEYS.get(icon_key, "hero")), Vector2(56, 56)))
+	var heading_copy := VBoxContainer.new()
+	heading_copy.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	heading_copy.add_child(_title(title_text))
+	heading_copy.add_child(_status_label(detail_text))
+	heading_row.add_child(heading_copy)
+	stack.add_child(heading_row)
+	for field_variant in fields:
+		if not field_variant is Dictionary:
+			continue
+		var field: Dictionary = field_variant
+		var control := field.get("control") as Control
+		if control == null:
+			continue
+		stack.add_child(_labeled_control(str(field.get("label", "")), control))
+	return card
 
 func _parameter_card(icon_key: String, title_text: String, control: Control) -> PanelContainer:
 	var card := _visual_card()

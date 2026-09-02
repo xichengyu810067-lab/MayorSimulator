@@ -49,7 +49,9 @@ func _run() -> void:
 			"total_labor_cost": 50000,
 			"total_cost": 51000,
 			"duration_days": 5
-		}
+		},
+		"blueprint_library": [{"id": "official_entry", "source": "default", "title": "官方入門版", "usage_count": 0}],
+		"active_blueprint_id": "official_entry",
 	})
 
 	var material := panel.find_child("BlueprintMaterial", true, false) as OptionButton
@@ -60,7 +62,8 @@ func _run() -> void:
 	var quote := panel.find_child("BlueprintPlacementQuote", true, false) as Label
 	var action := panel.find_child("SubmitBlueprintButton", true, false) as Button
 	var status_card := panel.find_child("BlueprintStatus", true, false) as PanelContainer
-	var design_grid := panel.find_child("BlueprintDesignSinglePage", true, false) as GridContainer
+	var design_workspace := panel.find_child("BlueprintDesignWorkspace", true, false) as HBoxContainer
+	var quote_card := panel.find_child("BlueprintQuoteCard", true, false) as PanelContainer
 	_check(material != null and str(material.get_item_metadata(material.selected)) == "brick", "approved review did not restore material")
 	_check(size != null and str(size.get_item_metadata(size.selected)) == "medium", "approved review did not restore size")
 	_check(floors != null and int(floors.value) == 2, "approved review did not restore floors")
@@ -68,7 +71,10 @@ func _run() -> void:
 	_check(decoration != null and str(decoration.get_item_metadata(decoration.selected)) == "flowers", "approved review did not restore decoration")
 	_check(quote != null and quote.visible and quote.text.contains("1,000") and quote.text.contains("50,000") and quote.text.contains("51,000") and quote.text.contains("5"), "placement quote is incomplete")
 	_check(action != null and not action.disabled, "approved review placement action is disabled")
-	_check(design_grid != null and design_grid.get_child_count() == 5, "five building design controls are not presented on one page")
+	_check(design_workspace != null and design_workspace.get_child_count() == 2, "five building design controls are not combined into two task-oriented groups")
+	_check(design_workspace != null and int(design_workspace.get_meta("design_control_count", 0)) == 5, "grouped blueprint workspace lost a design control")
+	_check(panel.find_child("BlueprintGroup_Size", true, false) != null and panel.find_child("BlueprintGroup_Workers", true, false) != null, "blueprint task groups are missing")
+	_check(quote_card != null and status_card != null and quote_card.get_index() < status_card.get_index(), "live quote is not positioned before review and construction status")
 	_check(panel.find_child("BlueprintParameterGroups", true, false) == null, "building design still depends on a TabContainer switch")
 	_check(_has_style_states(material, ["normal", "hover", "pressed", "hover_pressed", "focus", "disabled"]), "blueprint option buttons still use incomplete default styles")
 	_check(material.get_theme_constant("modulate_arrow") == 1, "blueprint option arrow does not follow the readable text color")
@@ -93,7 +99,7 @@ func _run() -> void:
 	var original_locale := str(l10n.current_locale) if l10n != null else "zh_TW"
 	if l10n != null:
 		l10n.set_locale("en", false)
-		l10n.localize_tree(panel)
+		panel.refresh_localization()
 		panel.call("_select_picker_id", material, "eco_composite")
 		_check(material.get_item_text(material.selected) == "Eco composite", "English eco-composite selection is not concise")
 		_check(material.tooltip_text == "Environmentally friendly composite material", "localized picker tooltip does not preserve the full selected value")
@@ -106,9 +112,13 @@ func _run() -> void:
 			_check(l10n.text("草稿估價｜%s・%s・%d 樓・%s・%s｜占地 %d 格｜基礎／設計 $%s ＋ 人工 $%s ＝ 總額 $%s｜工期 %d 日") != "草稿估價｜%s・%s・%d 樓・%s・%s｜占地 %d 格｜基礎／設計 $%s ＋ 人工 $%s ＝ 總額 $%s｜工期 %d 日", "%s draft quote copy is missing" % locale)
 			_check(l10n.text("%d 人") == str(worker_summary_by_locale[locale]), "%s worker summary is missing" % locale)
 		l10n.set_locale("zh_TW", false)
-		l10n.localize_tree(panel)
+		panel.refresh_localization()
 		panel.call("_select_picker_id", material, "brick")
 		panel.set_view_model({"blueprint_review": review})
+		panel.refresh_localization()
+		_check(material.get_item_text(material.selected) == "磚造", "locale round-trip left the material caption in English")
+		var library_status := panel.find_child("BlueprintLibraryStatus", true, false) as Label
+		_check(library_status != null and not library_status.text.contains("Permanent"), "locale round-trip left the blueprint library status in English")
 
 	action.pressed.emit()
 	_check(placement_requests == ["住宅"], "placement action did not emit the selected building")
@@ -145,6 +155,15 @@ func _run() -> void:
 	_check(action.text == "回到地圖放置", "reverting all design fields to the approved version must restore placement")
 	action.pressed.emit()
 	_check(placement_requests == ["住宅", "住宅"], "reverted approved design did not restore placement action")
+	var station_review := review.duplicate(true)
+	station_review["building_name"] = "火車站"
+	station_review["blueprint"]["building_name"] = "火車站"
+	panel.set_selected_building("火車站")
+	panel.set_view_model({"transport_station_mode": true, "blueprint_review": station_review})
+	_check(action.text == "開始連續站點規劃", "approved station blueprint does not replace generic placement with continuous planning")
+	action.pressed.emit()
+	_check(placement_requests == ["住宅", "住宅", "火車站"], "continuous station action did not emit the selected station")
+	panel.set_selected_building("住宅")
 
 	var next_review := review.duplicate(true)
 	next_review["id"] = "review_000002"
@@ -166,7 +185,7 @@ func _run() -> void:
 	_check(bool(legacy_state.get("matches_active_approved", false)), "non-editable legacy roof/wall values cannot make an otherwise matching approved design dirty")
 	_check(action.text == "回到地圖放置" and quote.text.contains("777") and quote.text.contains("50,000"), "matching legacy approved design must show its stored active quote and placement CTA")
 	action.pressed.emit()
-	_check(placement_requests == ["住宅", "住宅", "住宅"], "matching legacy approved design still enters placement")
+	_check(placement_requests == ["住宅", "住宅", "火車站", "住宅"], "matching legacy approved design does not restore placement")
 
 	panel.queue_free()
 	if l10n != null:

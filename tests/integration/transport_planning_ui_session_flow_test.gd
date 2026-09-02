@@ -26,17 +26,18 @@ func _run() -> void:
 		main.tutorial_overlay.close_as_completed(false)
 	main._set_map_interaction_enabled(true)
 
-	main._open_transport_planning()
+	main._select_building("公車站")
+	main.municipal_overlay.open_page("blueprint")
 	await process_frame
-	var station_button := main.transport_planning_panel.find_child("StationAction_bus_station", true, false) as Button
-	_check(station_button != null and not station_button.disabled, "transport panel does not offer the approved bus-station blueprint")
+	var station_button := main.vertical_slice_panel.find_child("SubmitBlueprintButton", true, false) as Button
+	_check(station_button != null and not station_button.disabled and station_button.text.contains("連續站點"), "approved station blueprint does not expose the continuous-planning entry")
 	if station_button != null:
 		station_button.pressed.emit()
 	await process_frame
 	var session: Dictionary = main.vertical_slice.transport_planning_session_snapshot()
 	var session_id := str(session.get("id", ""))
-	_check(not session_id.is_empty() and str(session.get("state", "")) == "station_placement", "panel station request did not begin one authoritative session")
-	_check(main.placement_mode_active and main.placement_building_name == "公車站", "station request did not enter map placement")
+	_check(not session_id.is_empty() and str(session.get("state", "")) == "station_placement", "station-blueprint action did not begin one authoritative session")
+	_check(main.placement_mode_active and main.placement_building_name == "公車站", "station-blueprint action did not enter map placement")
 
 	main._cancel_building_placement(true)
 	session = main.vertical_slice.transport_planning_session_snapshot()

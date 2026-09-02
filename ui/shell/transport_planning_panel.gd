@@ -74,6 +74,10 @@ var _session_status_label: Label
 var _session_detail_label: Label
 var _session_continue_button: Button
 var _session_close_button: Button
+var _station_section_card: Control
+var _infrastructure_section_card: Control
+var _operations_section_card: Control
+var _route_list_section_card: Control
 
 
 func _init() -> void:
@@ -119,6 +123,11 @@ func set_view_model(snapshot: Dictionary) -> void:
 func set_dark_mode(enabled: bool) -> void:
 	_dark_mode = enabled
 	_refresh_palette()
+
+
+func refresh_localization() -> void:
+	L10n.localize_tree(self)
+	set_view_model(_view_model)
 
 
 func debug_snapshot() -> Dictionary:
@@ -204,6 +213,7 @@ func _build_content() -> void:
 		"1. 站點選址",
 		"先選擇公車站、捷運站、火車站或機場；站點完成後再建立連接路網。"
 	)
+	_station_section_card = station_section.get_parent() as Control
 	_station_pager = ProgressiveChoicePagerScript.new(3, 3)
 	_station_pager.name = "TransportStationPager"
 	_register_pager(_station_pager)
@@ -216,6 +226,7 @@ func _build_content() -> void:
 		"2. 路網與設施",
 		"鋪設或拆除道路、捷運軌道、重型鐵路、跑道、滑行道；另可設置車庫、機廠與鐵路號誌。"
 	)
+	_infrastructure_section_card = infrastructure_section.get_parent() as Control
 	_infrastructure_pager = ProgressiveChoicePagerScript.new(3, 3)
 	_infrastructure_pager.name = "TransportInfrastructurePager"
 	_register_pager(_infrastructure_pager)
@@ -228,6 +239,7 @@ func _build_content() -> void:
 		"3. 路線與營運決策",
 		"設定車隊規模、班距與票價，再選擇要規劃的交通模式。"
 	)
+	_operations_section_card = operations_section.get_parent() as Control
 	var settings := GridContainer.new()
 	settings.name = "TransportRouteSettings"
 	settings.columns = 3
@@ -257,6 +269,7 @@ func _build_content() -> void:
 		"4. 已規劃路線",
 		"檢視路線狀態、站點、路徑長度與營運設定；可啟停或刪除路線。"
 	)
+	_route_list_section_card = route_section.get_parent() as Control
 	_network_summary = _label("路線總覽｜0 條規劃｜0 條營運中", BODY_FONT_SIZE)
 	_network_summary.name = "TransportNetworkSummary"
 	route_section.add_child(_network_summary)
@@ -536,6 +549,7 @@ func _render_planning_session() -> void:
 	var state := str(_planning_session.get("state", "inactive"))
 	var visible := state not in ["inactive", "closed"]
 	_session_card.visible = visible
+	_apply_session_focus_layout(state, visible)
 	if not visible:
 		return
 	var session_id := str(_planning_session.get("id", ""))
@@ -552,6 +566,27 @@ func _render_planning_session() -> void:
 	_session_continue_button.disabled = state == "waiting_construction"
 	_session_continue_button.text = L10n.text(_session_continue_label(state))
 	_session_close_button.text = L10n.text("結束規劃")
+
+
+func _apply_session_focus_layout(state: String, session_visible: bool) -> void:
+	for section in [_station_section_card, _infrastructure_section_card, _operations_section_card, _route_list_section_card]:
+		if section != null:
+			section.visible = not session_visible
+	if not session_visible:
+		return
+	var focused_state := state
+	if state == "paused":
+		focused_state = str(_planning_session.get("resume_state", "station_placement"))
+	match focused_state:
+		"network_placement":
+			if _infrastructure_section_card != null:
+				_infrastructure_section_card.visible = true
+		"route_edit":
+			if _operations_section_card != null:
+				_operations_section_card.visible = true
+		"materialized":
+			if _route_list_section_card != null:
+				_route_list_section_card.visible = true
 
 
 func _refresh_new_plan_button_states() -> void:

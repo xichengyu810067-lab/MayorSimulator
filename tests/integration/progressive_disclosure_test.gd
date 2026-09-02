@@ -64,6 +64,16 @@ func _run() -> void:
 	_check(main.building_buttons.size() > 3, "building selector preserves the full catalog")
 	for pager_variant in main.building_card_pagers.values():
 		_validate_pager(pager_variant, "building catalog")
+	var residential_card := main.find_child("BuildingCard_住宅", true, false) as Button
+	_check(residential_card != null, "residential building card is reachable")
+	if residential_card != null:
+		residential_card.emit_signal("pressed")
+		await _settle()
+		_check(main.municipal_overlay.current_page() == "blueprint", "building-card selection does not enter blueprint design directly")
+		_check(main.selected_building == "住宅", "direct blueprint entry lost the selected building authority")
+		_check(not main.transport_shortcut_button.visible, "non-transport building exposes an irrelevant transport shortcut")
+	main.municipal_overlay.open_page("buildings")
+	await _settle()
 
 	main.municipal_overlay.open_page("governance")
 	await _settle()
@@ -88,11 +98,14 @@ func _run() -> void:
 
 	main.municipal_overlay.open_page("blueprint")
 	await _settle()
-	var parameter_page := main.find_child("BlueprintDesignSinglePage", true, false) as GridContainer
+	var parameter_page := main.find_child("BlueprintDesignWorkspace", true, false) as HBoxContainer
 	_check(parameter_page != null, "blueprint design parameters are presented on one page")
 	if parameter_page != null:
 		_check(parameter_page.get_meta("single_page_design", false) == true, "blueprint design single-page meta flag is set")
-		_check(parameter_page.get_child_count() == 5, "blueprint exposes five design controls on one page")
+		_check(parameter_page.get_child_count() == 2, "blueprint does not combine its five controls into two task-oriented groups")
+		_check(int(parameter_page.get_meta("design_control_count", 0)) == 5, "blueprint workspace lost one of the five design controls")
+		_check(main.find_child("BlueprintGroup_Size", true, false) != null, "material, size, and floors are not grouped as building specifications")
+		_check(main.find_child("BlueprintGroup_Workers", true, false) != null, "workers and decoration are not grouped as construction setup")
 	var material_picker = main.find_child("BlueprintMaterial", true, false)
 	_check(material_picker != null, "blueprint material picker is reachable")
 	if material_picker != null:

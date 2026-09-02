@@ -43,6 +43,12 @@ func shows_all_choices() -> bool:
 	return _show_all_choices
 
 
+func refresh_localization() -> void:
+	# Rebuild from the stable source choices so a locale round-trip cannot leave
+	# the button caption or popup entries in the previously selected language.
+	_rebuild_items()
+
+
 func select_choice(choice_id: String) -> bool:
 	if _index_for_choice(choice_id) < 0:
 		return false

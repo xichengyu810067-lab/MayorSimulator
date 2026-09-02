@@ -200,11 +200,20 @@ func _run() -> void:
 	var session_detail := panel.find_child("TransportPlanningSessionDetail", true, false) as Label
 	var session_continue := panel.find_child("TransportPlanningSessionContinue", true, false) as Button
 	var session_close := panel.find_child("TransportPlanningSessionClose", true, false) as Button
+	var station_section := panel.find_child("TransportStationSection", true, false) as PanelContainer
+	var infrastructure_section := panel.find_child("TransportInfrastructureSection", true, false) as PanelContainer
+	var operations_section := panel.find_child("TransportOperationsSection", true, false) as PanelContainer
+	var route_list_section := panel.find_child("TransportRouteListSection", true, false) as PanelContainer
+	var sections_ready := station_section != null and infrastructure_section != null and operations_section != null and route_list_section != null
+	_check(sections_ready, "transport planning sections are missing")
 	_check(session_card != null and session_card.visible, "active planning session summary is not visible")
 	_check(session_status != null and session_status.text.contains("transport_plan_ui_1") and session_status.text.contains("2/3"), "session summary omits identity or phase")
 	_check(session_detail != null and _contains_all(session_detail.text, ["火車站", "站點 2", "完工 1", "路網工程 1"]), "session summary omits authoritative reference counts")
 	_check(session_continue != null and not session_continue.disabled and session_continue.text.contains("規劃路線"), "network session does not expose the explicit route-step CTA")
 	_check(session_close != null and not session_close.disabled, "active session does not expose explicit close")
+	_check(infrastructure_section != null and infrastructure_section.visible, "network phase hides its required infrastructure controls")
+	_check(station_section != null and not station_section.visible and operations_section != null and not operations_section.visible, "network phase still exposes unrelated station or route steps")
+	_check(route_list_section != null and not route_list_section.visible, "active network phase is diluted by the historical route list")
 	_press(panel, "TransportPlanningSessionContinue")
 	_press(panel, "TransportPlanningSessionClose")
 	_check(session_continue_events == ["continue"] and session_close_events == ["close"], "session CTAs did not emit their explicit commands")
@@ -250,6 +259,7 @@ func _run() -> void:
 	})
 	await process_frame
 	_check(session_continue.disabled and session_continue.text.contains("等待施工"), "waiting session exposes a premature continue command")
+	_check(sections_ready and not station_section.visible and not infrastructure_section.visible and not operations_section.visible and not route_list_section.visible, "waiting phase exposes controls the player cannot use")
 
 	panel.set_view_model({"planning_unlocked": false, "routes": []})
 	await process_frame
@@ -259,6 +269,7 @@ func _run() -> void:
 	_check(station_action != null and station_action.disabled, "locked planning still allows station siting")
 	_check(plan_action != null and plan_action.disabled, "locked planning still allows route creation")
 	_check(empty_label != null and empty_label.visible, "empty route state is not rendered")
+	_check(sections_ready and station_section.visible and infrastructure_section.visible and operations_section.visible and route_list_section.visible, "inactive planning does not restore the full start-new-plan surface")
 	_check(int(panel.debug_snapshot().get("route_count", -1)) == 0, "route cards were not cleared with an empty snapshot")
 
 	var exit_code := 1 if _failed else 0
