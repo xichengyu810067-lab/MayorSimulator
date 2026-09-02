@@ -195,6 +195,14 @@ func _validate_municipal_surface(overlay: Control, page_id: String, resolution: 
 	_validate_required_surface(page_host, window.get_global_rect() if window != null else viewport_rect, "%s page host" % label)
 	_validate_controls_inside(window, [header_title, back_button, close_button], "%s header" % label)
 	_validate_non_overlapping_controls([header_title, back_button, close_button], "%s header" % label)
+	if page_id == "hub":
+		var hub_debug: Dictionary = overlay.debug_hub_layout_state()
+		_check(int(hub_debug.get("direct_card_count", 0)) == 7, "%s has seven direct destination cards" % label)
+		_check(int(hub_debug.get("unique_destination_count", 0)) == 7, "%s destinations are unique" % label)
+		_check(int(hub_debug.get("filler_count", -1)) == 0, "%s has no filler card" % label)
+		_check(int(hub_debug.get("secondary_columns", 0)) == 2 and int(hub_debug.get("secondary_rows", 0)) == 3, "%s keeps its six-card 2x3 grid" % label)
+		_check(float(hub_debug.get("minimum_target_extent", 0.0)) >= MIN_INTERACTIVE_EXTENT, "%s cards retain 44px targets" % label)
+		_check(str(hub_debug.get("layout_mode", "")) == ("narrow" if resolution.x < 1400 else "wide"), "%s uses its expected responsive structure" % label)
 
 	var visible_page_count := 0
 	if page_host != null:

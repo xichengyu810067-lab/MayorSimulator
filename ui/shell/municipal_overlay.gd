@@ -10,17 +10,34 @@ const HUB_PAGE_ID := "hub"
 const MENU_FONT_SIZE := 22
 const HEADER_FONT_SIZE := 28
 const ACTION_FONT_SIZE := 20
-const MENU_BUTTON_HEIGHT := 200
 const ACTION_BUTTON_HEIGHT := 50
 const COMPANION_SAFE_RIGHT_MARGIN := 150.0
 const MIN_MUNICIPAL_WINDOW_WIDTH := 960.0
+const HUB_NARROW_VIEWPORT_WIDTH := 1400.0
+const HUB_GAP := 14.0
+const HUB_TOOLTIP_HEIGHT := 58.0
+const HUB_MIN_TARGET_EXTENT := 44.0
+const HUB_DIRECT_DESTINATIONS: Array[String] = [
+	"buildings",
+	"governance",
+	"judicial",
+	"oversight",
+	"finance",
+	"public_affairs",
+	"city_data",
+]
+const HUB_CONTEXT_PARENTS := {
+	"blueprint": "buildings",
+	"transport_planning": "buildings",
+	"report": "city_data",
+}
 
 const HUB_ENTRIES: Array[Dictionary] = [
 	{
 		"id": "buildings",
-		"title": "選擇建築",
-		"hint": "規劃 · 放置",
-		"description": "挑選住宅、公共服務與產業建築，並進入地圖放置流程。"
+		"title": "建設與藍圖",
+		"hint": "建築 · 藍圖",
+		"description": "挑選建築並進入藍圖、交通規劃與地圖放置流程。"
 	},
 	{
 		"id": "governance",
@@ -41,12 +58,6 @@ const HUB_ENTRIES: Array[Dictionary] = [
 		"description": "玩家接受監察委員質詢，並在彈劾程序中提出答辯。"
 	},
 	{
-		"id": "blueprint",
-		"title": "設計藍圖",
-		"hint": "設計 · 送審",
-		"description": "調整建材、規模、樓層與裝飾，再將藍圖送交審核。"
-	},
-	{
 		"id": "finance",
 		"title": "稅率與公共事業費",
 		"hint": "稅率 · 公共費",
@@ -63,39 +74,7 @@ const HUB_ENTRIES: Array[Dictionary] = [
 		"title": "城市數據",
 		"hint": "數據",
 		"description": "查看完整城市數據"
-	},
-	{
-		"id": "report",
-		"title": "月度報告",
-		"hint": "月報",
-		"description": "查看月度報告"
 	}
-]
-const HUB_GROUPS: Array[Dictionary] = [
-	{
-		"id": "development",
-		"title": "建設與發展",
-		"hint": "建築 · 藍圖 · 財政",
-		"description": "從城市建設、設計審核與財政配置開始。",
-		"icon": "buildings",
-		"entries": ["buildings", "blueprint", "finance"],
-	},
-	{
-		"id": "governance",
-		"title": "治理與法務",
-		"hint": "政策 · 法院 · 監察",
-		"description": "處理政策法案、司法案件與監察程序。",
-		"icon": "governance",
-		"entries": ["governance", "judicial", "oversight"],
-	},
-	{
-		"id": "community",
-		"title": "居民與資訊",
-		"hint": "民情 · 數據 · 月報",
-		"description": "查看居民需求、城市指標與月度結果。",
-		"icon": "public_affairs",
-		"entries": ["public_affairs", "city_data", "report"],
-	},
 ]
 var _dark_mode := false
 var _current_page_id := ""
@@ -103,9 +82,6 @@ var _pages: Dictionary = {}
 var _page_titles: Dictionary = {}
 var _hub_children: Dictionary = {}
 var _menu_buttons: Dictionary = {}
-var _hub_group_pages: Dictionary = {}
-var _page_groups: Dictionary = {}
-var _current_hub_group := ""
 
 var _backdrop: ColorRect
 var _panel: PanelContainer
@@ -117,6 +93,11 @@ var _content_panel: PanelContainer
 var _page_host: Control
 var _hub_page: Control
 var _hub_root: Control
+var _hub_cards_host: Control
+var _hub_safe_tooltip: Label
+var _hub_featured_button: Button
+var _hub_secondary_buttons: Array[Button] = []
+var _hub_layout_mode := ""
 
 
 func _init() -> void:
@@ -131,7 +112,9 @@ func _init() -> void:
 	_build_shell()
 	_apply_palette()
 	resized.connect(_layout_companion_safe_area)
+	resized.connect(_layout_hub)
 	call_deferred("_layout_companion_safe_area")
+	call_deferred("_layout_hub")
 	hide()
 
 
@@ -162,7 +145,6 @@ func register_page(page_id: String, title: String, control: Control, hub_child: 
 	_pages[normalized_id] = control
 	_page_titles[normalized_id] = title
 	_hub_children[normalized_id] = hub_child
-	_page_groups[normalized_id] = _hub_group_for_page(normalized_id)
 
 	if control.has_method("set_dark_mode"):
 		control.call("set_dark_mode", _dark_mode)
@@ -173,11 +155,10 @@ func register_page(page_id: String, title: String, control: Control, hub_child: 
 
 func open_hub() -> void:
 	_show_only(_hub_page)
-	_show_hub_child(_hub_root)
 	_current_page_id = HUB_PAGE_ID
-	_current_hub_group = ""
 	_header_title.text = "市政服務中心"
 	_back_button.visible = false
+	_layout_hub()
 	L10n.localize_tree(self)
 	show()
 	_close_button.grab_focus()
@@ -196,9 +177,8 @@ func open_page(page_id: String) -> void:
 
 	_show_only(page)
 	_current_page_id = normalized_id
-	_current_hub_group = str(_page_groups.get(normalized_id, ""))
 	_header_title.text = str(_page_titles.get(normalized_id, normalized_id))
-	_back_button.visible = bool(_hub_children.get(normalized_id, true))
+	_back_button.visible = bool(_hub_children.get(normalized_id, true)) or HUB_CONTEXT_PARENTS.has(normalized_id)
 	L10n.localize_tree(self)
 	show()
 	if _back_button.visible:
@@ -237,13 +217,8 @@ func set_dark_mode(enabled: bool) -> void:
 func _unhandled_key_input(event: InputEvent) -> void:
 	if not visible or not event.is_action_pressed("ui_cancel"):
 		return
-	if _current_page_id.begins_with("hub:"):
-		open_hub()
-	elif _current_page_id != HUB_PAGE_ID and bool(_hub_children.get(_current_page_id, false)):
-		if not _current_hub_group.is_empty():
-			_open_hub_group(_current_hub_group)
-		else:
-			open_hub()
+	if _current_page_id != HUB_PAGE_ID and (bool(_hub_children.get(_current_page_id, false)) or HUB_CONTEXT_PARENTS.has(_current_page_id)):
+		_handle_back()
 	else:
 		close_overlay()
 	get_viewport().set_input_as_handled()
@@ -335,78 +310,50 @@ func _build_shell() -> void:
 
 func _build_hub_page() -> Control:
 	var hub := Control.new()
-	hub.set_meta("progressive_menu", true)
-	_hub_root = _hub_menu_page("請先選擇工作類別；每一層最多顯示 3 個選項。")
+	hub.set_meta("municipal_direct_hub", true)
+	_hub_root = Control.new()
 	_hub_root.name = "MunicipalHubRoot"
-	var category_grid := _hub_root.find_child("MenuChoices", true, false) as GridContainer
-	for group in HUB_GROUPS:
-		var group_id := str(group["id"])
-		var button := _menu_card_button(
-			"MunicipalCategory_%s" % group_id,
-			str(group["title"]),
-			str(group["hint"]),
-			str(group["description"]),
-			str(group["icon"])
-		)
-		button.pressed.connect(_open_hub_group.bind(group_id))
-		_bind_safe_tooltip(button, _hub_root, "%s：%s" % [str(group["title"]), str(group["description"])])
-		_menu_buttons["category:%s" % group_id] = button
-		category_grid.add_child(button)
 	hub.add_child(_hub_root)
 	_hub_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
-	for group in HUB_GROUPS:
-		var group_id := str(group["id"])
-		var page := _hub_menu_page("%s｜選擇一項工作" % str(group["title"]))
-		page.name = "MunicipalHubGroup_%s" % group_id
-		page.visible = false
-		var menu_grid := page.find_child("MenuChoices", true, false) as GridContainer
-		for page_id_variant in group["entries"]:
-			var page_id := str(page_id_variant)
-			var entry := _hub_entry(page_id)
-			if entry.is_empty():
-				continue
-			var button := _menu_card_button(
-				"%sButton" % page_id.capitalize(),
-				str(entry["title"]),
-				str(entry["hint"]),
-				str(entry["description"]),
-				page_id
-			)
-			button.disabled = true
-			button.pressed.connect(open_page.bind(page_id))
-			_bind_safe_tooltip(button, page, "%s：%s" % [str(entry["title"]), str(entry["description"])])
-			_menu_buttons[page_id] = button
-			menu_grid.add_child(button)
-		_hub_group_pages[group_id] = page
-		hub.add_child(page)
-		page.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_hub_safe_tooltip = Label.new()
+	_hub_safe_tooltip.name = "HubSafeTooltip"
+	_hub_safe_tooltip.text = "選擇市政工作；七項服務皆可直接開啟。"
+	_hub_safe_tooltip.set_meta("default_source", _hub_safe_tooltip.text)
+	_hub_safe_tooltip.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_hub_safe_tooltip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_hub_safe_tooltip.max_lines_visible = 2
+	_hub_safe_tooltip.add_theme_font_size_override("font_size", 20)
+	_hub_root.add_child(_hub_safe_tooltip)
+
+	_hub_cards_host = Control.new()
+	_hub_cards_host.name = "MunicipalDirectDestinations"
+	_hub_root.add_child(_hub_cards_host)
+	for page_id in HUB_DIRECT_DESTINATIONS:
+		var entry := _hub_entry(page_id)
+		if entry.is_empty():
+			continue
+		var button := _menu_card_button(
+			"%sButton" % page_id.capitalize(),
+			str(entry["title"]),
+			str(entry["hint"]),
+			str(entry["description"]),
+			page_id
+		)
+		button.disabled = true
+		button.set_meta("destination_id", page_id)
+		button.set_meta("filler", false)
+		button.set_meta("featured", page_id == "buildings")
+		button.pressed.connect(open_page.bind(page_id))
+		_bind_safe_tooltip(button, _hub_root, "%s：%s" % [str(entry["title"]), str(entry["description"])])
+		_menu_buttons[page_id] = button
+		_hub_cards_host.add_child(button)
+		if page_id == "buildings":
+			_hub_featured_button = button
+		else:
+			_hub_secondary_buttons.append(button)
+	_hub_root.resized.connect(_layout_hub)
 	return hub
-
-
-func _hub_menu_page(introduction_text: String) -> VBoxContainer:
-	var page := VBoxContainer.new()
-	page.add_theme_constant_override("separation", 18)
-	var introduction := Label.new()
-	introduction.name = "HubSafeTooltip"
-	introduction.text = introduction_text
-	introduction.set_meta("default_source", introduction_text)
-	introduction.custom_minimum_size = Vector2(0, 58)
-	introduction.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	introduction.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	introduction.max_lines_visible = 2
-	introduction.add_theme_font_size_override("font_size", 22)
-	page.add_child(introduction)
-	var grid := GridContainer.new()
-	grid.name = "MenuChoices"
-	grid.columns = 3
-	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	grid.add_theme_constant_override("h_separation", 14)
-	grid.add_theme_constant_override("v_separation", 14)
-	grid.set_meta("progressive_choice_group", true)
-	page.add_child(grid)
-	return page
 
 
 func _menu_card_button(node_name: String, title: String, hint: String, description: String, icon_key: String) -> Button:
@@ -415,11 +362,10 @@ func _menu_card_button(node_name: String, title: String, hint: String, descripti
 	button.text = ""
 	button.set_meta("semantic_label", title)
 	button.set_meta("semantic_description", "%s：%s" % [title, description])
-	button.set_meta("progressive_choice", true)
 	# A cursor-following engine tooltip covered the neighbouring card captions.
 	# The same description is exposed in the page's fixed safe hint row instead.
 	button.tooltip_text = ""
-	button.custom_minimum_size = Vector2(250, MENU_BUTTON_HEIGHT)
+	button.custom_minimum_size = Vector2(HUB_MIN_TARGET_EXTENT, HUB_MIN_TARGET_EXTENT)
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	button.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	button.add_theme_constant_override("outline_size", 1)
@@ -434,6 +380,7 @@ func _menu_card_button(node_name: String, title: String, hint: String, descripti
 	content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	button.add_child(content)
 	var picture := TextureRect.new()
+	picture.name = "CardIcon"
 	picture.texture = UiIconCatalog.texture(icon_key)
 	picture.custom_minimum_size = Vector2(82, 82)
 	picture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
@@ -441,6 +388,7 @@ func _menu_card_button(node_name: String, title: String, hint: String, descripti
 	picture.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(picture)
 	var title_label := Label.new()
+	title_label.name = "CardTitle"
 	title_label.text = title
 	title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -452,6 +400,7 @@ func _menu_card_button(node_name: String, title: String, hint: String, descripti
 	title_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(title_label)
 	var hint_label := Label.new()
+	hint_label.name = "CardHint"
 	hint_label.text = hint
 	hint_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -492,6 +441,80 @@ func _layout_companion_safe_area() -> void:
 	# than its established 960 px minimum.
 	var affordable_margin := maxf(0.0, size.x * 0.90 - MIN_MUNICIPAL_WINDOW_WIDTH)
 	_panel.offset_right = -minf(COMPANION_SAFE_RIGHT_MARGIN, affordable_margin)
+	call_deferred("_layout_hub")
+
+
+func _layout_hub() -> void:
+	if not is_instance_valid(_hub_root) or not is_instance_valid(_hub_cards_host):
+		return
+	var root_size := _hub_root.size
+	if root_size.x <= 0.0 or root_size.y <= 0.0:
+		return
+	_hub_safe_tooltip.position = Vector2.ZERO
+	_hub_safe_tooltip.size = Vector2(root_size.x, HUB_TOOLTIP_HEIGHT)
+	_hub_cards_host.position = Vector2(0.0, HUB_TOOLTIP_HEIGHT + HUB_GAP)
+	_hub_cards_host.size = Vector2(root_size.x, maxf(0.0, root_size.y - HUB_TOOLTIP_HEIGHT - HUB_GAP))
+	var host_size := _hub_cards_host.size
+	if host_size.x <= 0.0 or host_size.y <= 0.0:
+		return
+
+	_hub_layout_mode = "narrow" if size.x < HUB_NARROW_VIEWPORT_WIDTH else "wide"
+	if _hub_layout_mode == "wide":
+		var featured_width := floorf((host_size.x - HUB_GAP) * 0.34)
+		_hub_featured_button.position = Vector2.ZERO
+		_hub_featured_button.size = Vector2(featured_width, host_size.y)
+		var grid_origin := Vector2(featured_width + HUB_GAP, 0.0)
+		var grid_size := Vector2(host_size.x - grid_origin.x, host_size.y)
+		_layout_secondary_grid(grid_origin, grid_size)
+	else:
+		var minimum_secondary_height := HUB_MIN_TARGET_EXTENT * 3.0 + HUB_GAP * 2.0
+		var maximum_featured_height := maxf(HUB_MIN_TARGET_EXTENT, host_size.y - minimum_secondary_height - HUB_GAP)
+		var featured_height := minf(maxf(HUB_MIN_TARGET_EXTENT, floorf(host_size.y * 0.26)), maximum_featured_height)
+		_hub_featured_button.position = Vector2.ZERO
+		_hub_featured_button.size = Vector2(host_size.x, featured_height)
+		var grid_origin := Vector2(0.0, featured_height + HUB_GAP)
+		var grid_size := Vector2(host_size.x, maxf(0.0, host_size.y - grid_origin.y))
+		_layout_secondary_grid(grid_origin, grid_size)
+
+	_set_card_density(_hub_featured_button, true, _hub_layout_mode == "narrow")
+	for secondary_button in _hub_secondary_buttons:
+		_set_card_density(secondary_button, false, _hub_layout_mode == "narrow")
+
+
+func _layout_secondary_grid(origin: Vector2, grid_size: Vector2) -> void:
+	var card_width := maxf(0.0, (grid_size.x - HUB_GAP) / 2.0)
+	var card_height := maxf(0.0, (grid_size.y - HUB_GAP * 2.0) / 3.0)
+	for index in _hub_secondary_buttons.size():
+		var button := _hub_secondary_buttons[index]
+		var column := index % 2
+		var row := int(index / 2.0)
+		button.position = origin + Vector2(column * (card_width + HUB_GAP), row * (card_height + HUB_GAP))
+		button.size = Vector2(card_width, card_height)
+
+
+func _set_card_density(button: Button, featured: bool, narrow: bool) -> void:
+	if not is_instance_valid(button):
+		return
+	var content := button.get_child(0) as VBoxContainer
+	var picture := button.find_child("CardIcon", true, false) as TextureRect
+	var title_label := button.find_child("CardTitle", true, false) as Label
+	var hint_label := button.find_child("CardHint", true, false) as Label
+	if content != null:
+		content.offset_left = 10.0
+		content.offset_top = 6.0
+		content.offset_right = -10.0
+		content.offset_bottom = -6.0
+		content.add_theme_constant_override("separation", 2 if narrow else 4)
+	if picture != null:
+		var icon_extent := 54.0 if featured and narrow else (92.0 if featured else (34.0 if narrow else 48.0))
+		picture.custom_minimum_size = Vector2(icon_extent, icon_extent)
+	if title_label != null:
+		title_label.custom_minimum_size = Vector2(0.0, 34.0 if narrow else 42.0)
+		title_label.add_theme_font_size_override("font_size", 22 if featured else (18 if narrow else 20))
+	if hint_label != null:
+		hint_label.visible = featured or not narrow
+		hint_label.custom_minimum_size = Vector2(0.0, 28.0)
+		hint_label.add_theme_font_size_override("font_size", 18)
 
 
 func _hub_entry(page_id: String) -> Dictionary:
@@ -501,48 +524,66 @@ func _hub_entry(page_id: String) -> Dictionary:
 	return {}
 
 
-func _hub_group_for_page(page_id: String) -> String:
-	for group in HUB_GROUPS:
-		if page_id in group["entries"]:
-			return str(group["id"])
-	return ""
-
-
-func _open_hub_group(group_id: String) -> void:
-	if not _hub_group_pages.has(group_id):
-		open_hub()
-		return
-	_show_only(_hub_page)
-	_show_hub_child(_hub_group_pages[group_id] as Control)
-	_current_hub_group = group_id
-	_current_page_id = "hub:%s" % group_id
-	for group in HUB_GROUPS:
-		if str(group["id"]) == group_id:
-			_header_title.text = str(group["title"])
-			break
-	_back_button.visible = true
-	L10n.localize_tree(self)
-	show()
-	_back_button.grab_focus()
-	page_opened.emit(_current_page_id)
-
-
-func _show_hub_child(active_control: Control) -> void:
-	if is_instance_valid(_hub_root):
-		_hub_root.visible = _hub_root == active_control
-	for page_variant in _hub_group_pages.values():
-		var page := page_variant as Control
-		if is_instance_valid(page):
-			page.visible = page == active_control
-
-
 func _handle_back() -> void:
-	if _current_page_id.begins_with("hub:"):
-		open_hub()
-	elif not _current_hub_group.is_empty():
-		_open_hub_group(_current_hub_group)
+	var contextual_parent := str(HUB_CONTEXT_PARENTS.get(_current_page_id, ""))
+	if not contextual_parent.is_empty() and _pages.has(contextual_parent):
+		open_page(contextual_parent)
 	else:
 		open_hub()
+
+
+func debug_hub_layout_state() -> Dictionary:
+	_layout_hub()
+	var destinations: Array[String] = []
+	var unique_destinations := {}
+	var filler_count := 0
+	var minimum_target_extent := INF
+	var featured_rect := Rect2()
+	var secondary_rects: Array[Rect2] = []
+	for page_id in HUB_DIRECT_DESTINATIONS:
+		var button := _menu_buttons.get(page_id) as Button
+		if not is_instance_valid(button):
+			continue
+		var destination := str(button.get_meta("destination_id", ""))
+		destinations.append(destination)
+		unique_destinations[destination] = true
+		if bool(button.get_meta("filler", false)):
+			filler_count += 1
+		minimum_target_extent = minf(minimum_target_extent, minf(button.size.x, button.size.y))
+		if bool(button.get_meta("featured", false)):
+			featured_rect = button.get_rect()
+		else:
+			secondary_rects.append(button.get_rect())
+	var host_rect := _hub_cards_host.get_rect() if is_instance_valid(_hub_cards_host) else Rect2()
+	var first_secondary_y := INF
+	var equal_secondary_heights := true
+	var reference_height := secondary_rects[0].size.y if not secondary_rects.is_empty() else 0.0
+	for secondary_rect in secondary_rects:
+		first_secondary_y = minf(first_secondary_y, secondary_rect.position.y)
+		if absf(secondary_rect.size.y - reference_height) > 1.0:
+			equal_secondary_heights = false
+	if minimum_target_extent == INF:
+		minimum_target_extent = 0.0
+	return {
+		"direct_card_count": destinations.size(),
+		"destinations": destinations,
+		"unique_destination_count": unique_destinations.size(),
+		"filler_count": filler_count,
+		"intermediate_page_count": 0,
+		"layout_mode": _hub_layout_mode,
+		"host_rect": host_rect,
+		"featured_rect": featured_rect,
+		"featured_destination": "buildings",
+		"featured_width_ratio": featured_rect.size.x / host_rect.size.x if host_rect.size.x > 0.0 else 0.0,
+		"featured_spans_full_height": absf(featured_rect.size.y - host_rect.size.y) <= 1.0,
+		"featured_precedes_secondary": featured_rect.end.y <= first_secondary_y + 1.0,
+		"secondary_rects": secondary_rects,
+		"secondary_columns": 2,
+		"secondary_rows": 3,
+		"secondary_equal_heights": equal_secondary_heights,
+		"minimum_target_extent": minimum_target_extent,
+		"contextual_parents": HUB_CONTEXT_PARENTS.duplicate(true),
+	}
 
 
 func _header_button(text: String) -> Button:

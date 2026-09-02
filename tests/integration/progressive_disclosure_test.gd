@@ -36,26 +36,49 @@ func _run() -> void:
 	main.municipal_overlay.open_hub()
 	await _settle()
 	var hub_root := main.municipal_overlay.find_child("MunicipalHubRoot", true, false) as Control
-	var hub_choices := hub_root.find_child("MenuChoices", true, false) as GridContainer
-	_check(hub_choices.get_child_count() == 3, "municipal root exposes three categories")
+	var wide_debug: Dictionary = main.municipal_overlay.debug_hub_layout_state()
+	_check(hub_root != null, "municipal direct hub root exists")
+	_check(int(wide_debug.get("direct_card_count", 0)) == 7, "municipal root exposes seven direct destinations")
+	_check(int(wide_debug.get("unique_destination_count", 0)) == 7, "municipal root exposes no duplicate destination")
+	_check(int(wide_debug.get("filler_count", -1)) == 0, "municipal root exposes no filler card")
+	_check(int(wide_debug.get("intermediate_page_count", -1)) == 0, "municipal root exposes no category intermediate page")
+	_check(wide_debug.get("destinations", []) == ["buildings", "governance", "judicial", "oversight", "finance", "public_affairs", "city_data"], "municipal root exposes the required seven destinations in visual order")
+	_check(str(wide_debug.get("featured_destination", "")) == "buildings", "buildings owns the featured card")
+	_check(str(wide_debug.get("layout_mode", "")) == "wide", "1920px hub uses featured-left layout")
+	_check(int(wide_debug.get("secondary_columns", 0)) == 2 and int(wide_debug.get("secondary_rows", 0)) == 3, "wide hub secondary destinations use 2x3")
+	_check(bool(wide_debug.get("secondary_equal_heights", false)), "wide hub secondary destinations are equal height")
+	_check(bool(wide_debug.get("featured_spans_full_height", false)), "wide featured card spans all three rows")
+	_check(float(wide_debug.get("featured_width_ratio", 0.0)) >= 0.30 and float(wide_debug.get("featured_width_ratio", 0.0)) <= 0.38, "wide featured card occupies approximately one third of the hub")
+	_check(float(wide_debug.get("minimum_target_extent", 0.0)) >= 44.0, "wide hub cards retain 44px targets")
+	var contextual_parents: Dictionary = wide_debug.get("contextual_parents", {})
+	_check(contextual_parents.get("blueprint", "") == "buildings" and contextual_parents.get("transport_planning", "") == "buildings" and contextual_parents.get("report", "") == "city_data", "contextual municipal children expose their required back destinations")
 	var reached_destinations := {}
-	for group_id in ["development", "governance", "community"]:
-		var category_button := main.municipal_overlay.find_child("MunicipalCategory_%s" % group_id, true, false) as Button
-		category_button.emit_signal("pressed")
-		await _settle()
-		var group_page := main.municipal_overlay.find_child("MunicipalHubGroup_%s" % group_id, true, false) as Control
-		var group_choices := group_page.find_child("MenuChoices", true, false) as GridContainer
-		_check(group_choices.get_child_count() == 3, "municipal category '%s' exposes three destinations" % group_id)
-		for destination_variant in group_choices.get_children():
-			var destination := destination_variant as Button
+	for page_id_variant in wide_debug.get("destinations", []):
+		var page_id := str(page_id_variant)
+		var destination := main.municipal_overlay.find_child("%sButton" % page_id.capitalize(), true, false) as Button
+		_check(destination != null, "direct municipal destination '%s' exists" % page_id)
+		if destination != null:
 			destination.emit_signal("pressed")
 			await _settle()
 			reached_destinations[main.municipal_overlay.current_page()] = true
-			main.municipal_overlay.call("_open_hub_group", group_id)
-			await _settle()
 		main.municipal_overlay.open_hub()
 		await _settle()
-	_check(reached_destinations.size() == 9, "all nine municipal destinations remain reachable")
+	_check(reached_destinations.size() == 7, "all seven direct municipal destinations remain reachable")
+	root.content_scale_size = Vector2i(1280, 720)
+	root.size = Vector2i(1280, 720)
+	await _settle(4)
+	var narrow_debug: Dictionary = main.municipal_overlay.debug_hub_layout_state()
+	_check(str(narrow_debug.get("layout_mode", "")) == "narrow", "1280px hub places the featured card above the secondary grid")
+	_check(bool(narrow_debug.get("featured_precedes_secondary", false)), "narrow featured card is above all six secondary cards")
+	_check(int(narrow_debug.get("secondary_columns", 0)) == 2 and int(narrow_debug.get("secondary_rows", 0)) == 3, "narrow secondary destinations remain 2x3")
+	_check(bool(narrow_debug.get("secondary_equal_heights", false)), "narrow secondary destinations remain equal height")
+	var narrow_host_rect: Rect2 = narrow_debug.get("host_rect", Rect2())
+	var narrow_featured_rect: Rect2 = narrow_debug.get("featured_rect", Rect2())
+	_check(absf(narrow_featured_rect.size.x - narrow_host_rect.size.x) <= 1.0, "narrow featured card spans the top row width")
+	_check(float(narrow_debug.get("minimum_target_extent", 0.0)) >= 44.0, "narrow hub cards retain 44px targets")
+	root.content_scale_size = Vector2i(1920, 1080)
+	root.size = Vector2i(1920, 1080)
+	await _settle(4)
 
 	main.municipal_overlay.open_page("buildings")
 	await _settle()
@@ -136,7 +159,7 @@ func _run() -> void:
 	_validate_all_marked_groups(main)
 	var exit_code := 1 if _failed else 0
 	if not _failed:
-		print("Progressive disclosure test passed. Destinations=9 Buildings=%d Governance=12 FiscalLeaves=6" % main.building_buttons.size())
+		print("Progressive disclosure test passed. Destinations=7 Buildings=%d Governance=12 FiscalLeaves=6" % main.building_buttons.size())
 	await TestCleanup.finish(self, [main], exit_code)
 
 

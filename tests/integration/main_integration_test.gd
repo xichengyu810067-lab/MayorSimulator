@@ -202,11 +202,15 @@ func _run() -> void:
 	_check(main.get_visible_npc_actors().all(func(button: Button) -> bool: return button.tooltip_text.is_empty() and button.mouse_filter == Control.MOUSE_FILTER_IGNORE), "modal opening disables resident hover tooltips and pointer input")
 	_check(main.grid_buttons.all(func(button: Button) -> bool: return button.tooltip_text.is_empty() and button.mouse_filter == Control.MOUSE_FILTER_IGNORE), "modal opening disables tile hover tooltips and pointer input")
 	var municipal_root := main.municipal_overlay.find_child("MunicipalHubRoot", true, false) as Control
-	var municipal_menu := municipal_root.find_child("MenuChoices", true, false) as GridContainer if municipal_root != null else null
+	var municipal_menu := municipal_root.find_child("MunicipalDirectDestinations", true, false) as Control if municipal_root != null else null
 	var hub_window := main.municipal_overlay.find_child("MunicipalWindow", true, false) as Control
-	_check(municipal_menu != null and municipal_menu.columns == 3, "municipal hub exposes exactly three broad categories")
+	var hub_debug: Dictionary = main.municipal_overlay.debug_hub_layout_state()
+	_check(municipal_menu != null, "municipal hub exposes a direct destination surface")
+	_check(int(hub_debug.get("direct_card_count", 0)) == 7 and int(hub_debug.get("unique_destination_count", 0)) == 7, "municipal hub exposes seven unique direct destinations")
+	_check(int(hub_debug.get("filler_count", -1)) == 0 and int(hub_debug.get("intermediate_page_count", -1)) == 0, "municipal hub uses neither filler cards nor category pages")
+	_check(int(hub_debug.get("secondary_columns", 0)) == 2 and int(hub_debug.get("secondary_rows", 0)) == 3, "municipal hub balances six secondary destinations as 2x3")
 	if municipal_menu != null:
-		_check(municipal_menu.get_child_count() == 3, "municipal hub keeps only three choices visible")
+		_check(municipal_menu.get_child_count() == 7, "municipal hub keeps all seven destinations visible")
 		for menu_child in municipal_menu.get_children():
 			_check(_rect_inside_viewport((menu_child as Control).get_global_rect(), viewport_size), "municipal hub destination remains inside the viewport")
 			_check(hub_window != null and hub_window.get_global_rect().encloses((menu_child as Control).get_global_rect()), "municipal hub destination stays inside the modal window")
@@ -216,23 +220,14 @@ func _run() -> void:
 	for npc_button in main.get_visible_npc_actors():
 		highest_npc_z = maxi(highest_npc_z, npc_button.z_index)
 	_check(main.municipal_overlay.z_index > highest_npc_z, "municipal overlay renders above every map resident")
-	for group_id in ["development", "governance", "community"]:
-		var category_button := main.municipal_overlay.find_child("MunicipalCategory_%s" % group_id, true, false) as Button
-		_check(category_button != null and not category_button.disabled, "municipal hub exposes '%s' category" % group_id)
-		if category_button == null:
-			continue
-		category_button.emit_signal("pressed")
-		await process_frame
-		var category_page := main.municipal_overlay.find_child("MunicipalHubGroup_%s" % group_id, true, false) as Control
-		var category_choices := category_page.find_child("MenuChoices", true, false) as GridContainer if category_page != null else null
-		_check(main.municipal_overlay.current_page() == "hub:%s" % group_id, "municipal category '%s' opens" % group_id)
-		_check(category_choices != null and category_choices.get_child_count() == 3, "municipal category '%s' contains exactly three destinations" % group_id)
-		main.municipal_overlay.open_hub()
-		await process_frame
+	var direct_hub_pages := ["buildings", "governance", "judicial", "oversight", "finance", "public_affairs", "city_data"]
 	for page_id in ["buildings", "governance", "judicial", "oversight", "blueprint", "finance", "public_affairs", "city_data", "report"]:
 		var hub_button := main.municipal_overlay.find_child("%sButton" % page_id.capitalize(), true, false) as Button
-		_check(hub_button != null and not hub_button.disabled, "categorized hub preserves enabled '%s' destination" % page_id)
-		if hub_button != null and not hub_button.disabled:
+		if page_id in direct_hub_pages:
+			_check(hub_button != null and not hub_button.disabled, "direct hub preserves enabled '%s' destination" % page_id)
+		else:
+			_check(hub_button == null, "contextual page '%s' does not consume a direct hub card" % page_id)
+		if page_id in direct_hub_pages or page_id in ["blueprint", "report"]:
 			main.municipal_overlay.open_page(page_id)
 			await process_frame
 			await process_frame
@@ -333,6 +328,17 @@ func _run() -> void:
 					_check((building_button_variant as Button).get_theme_font_size("font_size") >= 18, "building cards use at least 18px text")
 			main.municipal_overlay.open_hub()
 			await process_frame
+	var municipal_back := main.municipal_overlay.find_child("BackButton", true, false) as Button
+	for child_parent in [["blueprint", "buildings"], ["transport_planning", "buildings"], ["report", "city_data"]]:
+		main.municipal_overlay.open_page(str(child_parent[0]))
+		await process_frame
+		_check(municipal_back != null and municipal_back.visible, "contextual page '%s' exposes back navigation" % child_parent[0])
+		if municipal_back != null:
+			municipal_back.emit_signal("pressed")
+			await process_frame
+			_check(main.municipal_overlay.current_page() == str(child_parent[1]), "contextual page '%s' returns to '%s'" % [child_parent[0], child_parent[1]])
+	main.municipal_overlay.open_hub()
+	await process_frame
 
 	var overlay_close_button := main.municipal_overlay.find_child("CloseButton", true, false) as Button
 	_check(overlay_close_button != null, "municipal overlay exposes a mouse-clickable close button")

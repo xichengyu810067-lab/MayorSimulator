@@ -195,7 +195,8 @@ func _run() -> void:
 		main.municipal_overlay.call("open_hub")
 		await process_frame
 		_check_visible_translation(main, locale, "市政服務中心", "municipal hub")
-		_check_visible_translation(main, locale, "請先選擇工作類別；每一層最多顯示 3 個選項。", "municipal hub")
+		_check_visible_translation(main, locale, "選擇市政工作；七項服務皆可直接開啟。", "municipal hub")
+		_check_visible_translation(main, locale, "建設與藍圖", "municipal hub")
 		var municipal_window := main.municipal_overlay.get_node_or_null("MunicipalWindow") as Control
 		_check(municipal_window != null, "municipal window exists for layout checks")
 		if municipal_window != null:

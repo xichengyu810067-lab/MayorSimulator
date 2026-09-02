@@ -45,7 +45,7 @@ func _validate_fixed_municipal_tooltip(main) -> void:
 	await process_frame
 	var hub := main.municipal_overlay.find_child("MunicipalHubRoot", true, false) as Control
 	var safe_label := hub.find_child("HubSafeTooltip", true, false) as Label if hub != null else null
-	var button := main.municipal_overlay.find_child("MunicipalCategory_governance", true, false) as Button
+	var button := main.municipal_overlay.find_child("GovernanceButton", true, false) as Button
 	_check(safe_label != null and button != null, "municipal safe tooltip controls exist")
 	if safe_label == null or button == null:
 		return
