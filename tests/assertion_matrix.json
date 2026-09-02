@@ -6,6 +6,7 @@
     { "id": "audio_settings_integration", "script": "res://tests/integration/audio_settings_integration_test.gd", "success_pattern": "Audio settings integration test passed." },
     { "id": "map_zoom_terrain_integration", "script": "res://tests/integration/map_zoom_terrain_integration_test.gd", "success_pattern": "Map zoom and terrain integration test passed.", "timeout_seconds": 240 },
     { "id": "map_zoom_all_layers_acceptance", "script": "res://tests/integration/map_zoom_all_layers_acceptance_test.gd", "success_pattern": "Map zoom all-layers acceptance test passed.", "timeout_seconds": 240 },
+    { "id": "building_footprint_visual_navigation", "script": "res://tests/integration/building_footprint_visual_navigation_test.gd", "success_pattern": "Building footprint visual/navigation test passed." },
     { "id": "terrain_flatten_lifecycle", "script": "res://tests/integration/terrain_flatten_lifecycle_test.gd", "success_pattern": "Terrain flatten lifecycle integration test passed." },
     { "id": "public_service_lifecycle", "script": "res://tests/integration/public_service_lifecycle_test.gd", "success_pattern": "Public service lifecycle integration test passed." },
     { "id": "transport_coordinator_integration", "script": "res://tests/integration/transport_coordinator_integration_test.gd", "success_pattern": "Transport coordinator integration test passed." },

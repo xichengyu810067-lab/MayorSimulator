@@ -333,12 +333,76 @@ func placement_footprint_quote(
 	return quote
 
 
+func placement_footprint_preview(
+	display_name: String,
+	anchor_tile_id: int,
+	worker_count: int = -1
+) -> Dictionary:
+	# Preview geometry is derived from the same size catalog as placement, while
+	# keeping invalid east-edge anchors visible as an all-red group in the map UI.
+	var quote := placement_quote(display_name, worker_count)
+	if not bool(quote.get("ok", false)):
+		return quote
+	var blueprint: Dictionary = quote.get("blueprint", {})
+	var footprint_id := BuildingFootprintsScript.footprint_id_for_size(
+		str(blueprint.get("size_tier", ""))
+	)
+	var offsets := BuildingFootprintsScript.offsets_for_footprint(footprint_id)
+	if footprint_id.is_empty() or offsets.is_empty():
+		return {"ok": false, "error": "unsupported_building_size"}
+	var preview := {
+		"ok": true,
+		"can_place": false,
+		"anchor_tile_id": anchor_tile_id,
+		"footprint_id": footprint_id,
+		"footprint_count": offsets.size(),
+		"occupied_tile_ids": [],
+		"error": "invalid_anchor_tile_id",
+	}
+	var resolved := BuildingFootprintsScript.resolve_for_footprint(
+		footprint_id,
+		anchor_tile_id,
+		terrain_map
+	)
+	if not bool(resolved.get("ok", false)):
+		preview["error"] = str(resolved.get("error", "invalid_footprint"))
+		return preview
+	var placement := placement_footprint_quote(display_name, anchor_tile_id, worker_count)
+	preview["occupied_tile_ids"] = Array(resolved.get("occupied_tile_ids", [])).duplicate()
+	preview["can_place"] = bool(placement.get("ok", false))
+	preview["error"] = "" if bool(preview["can_place"]) else str(placement.get("error", "invalid_footprint"))
+	return preview
+
+
 func active_construction_for_tile(tile_index: int) -> Dictionary:
 	for job_variant in construction.active_jobs():
 		var job: Dictionary = job_variant
 		if _construction_job_tile_indices(job).has(tile_index):
 			return job.duplicate(true)
 	return {}
+
+
+func footprint_cell_view(tile_index: int) -> Dictionary:
+	var building := get_building_by_tile(tile_index)
+	if not building.is_empty():
+		return _footprint_cell_view(
+			"building",
+			building,
+			_building_record_occupied_tile_ids_canonical(building),
+			tile_index
+		)
+	var job := active_construction_for_tile(tile_index)
+	if job.is_empty() or str(job.get("operation", "")) != "build":
+		return {}
+	var metadata: Dictionary = job.get("metadata", {})
+	if str(metadata.get("footprint_id", "")).is_empty():
+		return {}
+	return _footprint_cell_view(
+		"construction",
+		job,
+		_construction_job_tile_indices_canonical(job),
+		tile_index
+	)
 
 
 func terrain_state_for_tile(tile_index: int) -> Dictionary:
@@ -2035,6 +2099,12 @@ func _transport_construction_tile_ids() -> Array[int]:
 
 
 func _construction_job_tile_indices(job_variant: Variant) -> Array[int]:
+	var result := _construction_job_tile_indices_canonical(job_variant)
+	result.sort()
+	return result
+
+
+func _construction_job_tile_indices_canonical(job_variant: Variant) -> Array[int]:
 	if not job_variant is Dictionary:
 		return []
 	var metadata: Dictionary = Dictionary(job_variant).get("metadata", {})
@@ -2048,14 +2118,19 @@ func _construction_job_tile_indices(job_variant: Variant) -> Array[int]:
 	var single := int(metadata.get("tile_index", -1))
 	if single >= 0 and not result.has(single):
 		result.append(single)
-	result.sort()
 	return result
 
 
 func _building_record_occupied_tile_ids(building: Dictionary) -> Array[int]:
+	var result := _building_record_occupied_tile_ids_canonical(building)
+	result.sort()
+	return result
+
+
+func _building_record_occupied_tile_ids_canonical(building: Dictionary) -> Array[int]:
 	var result: Array[int] = []
 	var occupied_value: Variant = building.get("occupied_tile_ids", null)
-	if occupied_value is Array:
+	if occupied_value is Array or occupied_value is PackedInt32Array or occupied_value is PackedInt64Array:
 		for tile_variant: Variant in occupied_value:
 			var tile_id := int(tile_variant)
 			if tile_id >= 0 and not result.has(tile_id):
@@ -2064,8 +2139,48 @@ func _building_record_occupied_tile_ids(building: Dictionary) -> Array[int]:
 		var tile_id := int(building.get("tile_index", -1))
 		if tile_id >= 0:
 			result.append(tile_id)
-	result.sort()
 	return result
+
+
+func _footprint_cell_view(
+	kind: String,
+	owner: Dictionary,
+	occupied_tile_ids: Array[int],
+	tile_index: int
+) -> Dictionary:
+	var footprint_index := occupied_tile_ids.find(tile_index)
+	if footprint_index < 0:
+		return {}
+	var metadata: Dictionary = owner.get("metadata", {}) if kind == "construction" else {}
+	var anchor_tile_id := int(
+		metadata.get("anchor_tile_id", metadata.get("tile_index", -1))
+		if kind == "construction"
+		else owner.get("anchor_tile_id", owner.get("tile_index", -1))
+	)
+	var footprint_id := str(
+		metadata.get("footprint_id", "")
+		if kind == "construction"
+		else owner.get("footprint_id", "")
+	)
+	var building_name := str(
+		metadata.get("building_name", "")
+		if kind == "construction"
+		else owner.get("building_name", "")
+	)
+	return {
+		"kind": kind,
+		"tile_id": tile_index,
+		"anchor_tile_id": anchor_tile_id,
+		"owner_anchor_tile_id": anchor_tile_id,
+		"footprint_id": footprint_id,
+		"occupied_tile_ids": occupied_tile_ids.duplicate(),
+		"footprint_index": footprint_index,
+		"footprint_count": occupied_tile_ids.size(),
+		"role": "anchor" if tile_index == anchor_tile_id else "secondary",
+		"building_name": building_name,
+		"owner_id": str(owner.get("building_id", owner.get("id", ""))),
+		"owner": owner.duplicate(true),
+	}
 
 
 func _transport_public_quote_error(model_result: Dictionary) -> Dictionary:

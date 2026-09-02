@@ -92,6 +92,12 @@ var selected := false
 var is_building_mode := false
 var placement_allowed := true
 var construction_job: Dictionary = {}
+var footprint_role := "none"
+var footprint_index := 0
+var footprint_count := 1
+var footprint_id := ""
+var owner_anchor_tile_id := -1
+var placement_preview: Dictionary = {}
 var transport_activity_profile: Dictionary = {}
 var ambient_animation_profile: Dictionary = {}
 var _animation_time := 0.0
@@ -150,13 +156,20 @@ func set_tile(data: Dictionary) -> void:
 	is_building_mode = bool(data.get("is_building_mode", false))
 	placement_allowed = bool(data.get("placement_allowed", true))
 	construction_job = Dictionary(data.get("construction", {})).duplicate(true)
+	footprint_role = str(data.get("footprint_role", "none"))
+	footprint_index = int(data.get("footprint_index", 0))
+	footprint_count = maxi(1, int(data.get("footprint_count", 1)))
+	footprint_id = str(data.get("footprint_id", ""))
+	owner_anchor_tile_id = int(data.get("owner_anchor_tile_id", tile_index))
+	placement_preview = Dictionary(data.get("placement_preview", {})).duplicate(true)
 	_refresh_animation_profiles()
 	text = ""
 	if not construction_job.is_empty():
 		var job_name := str(construction_job.get("metadata", {}).get("building_name", "工程"))
-		tooltip_text = L10n.text("%s｜施工中｜約 %d 天") % [
+		tooltip_text = L10n.text("%s｜施工中｜約 %d 天%s") % [
 			L10n.text(job_name),
-			int(construction_job.get("projected_remaining_days", 0))
+			int(construction_job.get("projected_remaining_days", 0)),
+			_footprint_tooltip_suffix(),
 		]
 	elif building_name == "":
 		if not terrain_buildable:
@@ -165,10 +178,11 @@ func set_tile(data: Dictionary) -> void:
 			tooltip_text = L10n.text("空地") if not is_building_mode or placement_allowed else L10n.text("頂部資訊列安全區｜不可施工")
 	else:
 		var material_label := _material_label(custom_material)
-		tooltip_text = "%s - %s%s" % [
+		tooltip_text = "%s - %s%s%s" % [
 			L10n.text(building_name),
 			L10n.text(visual_shape),
-			" - %s" % L10n.text(material_label) if not material_label.is_empty() else ""
+			" - %s" % L10n.text(material_label) if not material_label.is_empty() else "",
+			_footprint_tooltip_suffix(),
 		]
 	set_process(_has_active_visual_animation())
 	queue_redraw()
@@ -212,6 +226,23 @@ func get_visual_animation_contract() -> Dictionary:
 		"flattened_ground_patch_only": true,
 		"construction_animation_supported": true,
 		"construction_replaces_portrait_until_complete": true,
+	}
+
+
+func get_footprint_visual_snapshot() -> Dictionary:
+	return {
+		"tile_id": tile_index,
+		"role": footprint_role,
+		"footprint_index": footprint_index,
+		"footprint_count": footprint_count,
+		"footprint_id": footprint_id,
+		"owner_anchor_tile_id": owner_anchor_tile_id,
+		"draws_shared_base": footprint_count > 1 and (building_name != "" or not construction_job.is_empty()),
+		"draws_primary_body": _is_primary_footprint_cell() and (building_name != "" or not construction_job.is_empty()),
+		"connects_west": footprint_count > 1 and footprint_index > 0,
+		"connects_east": footprint_count > 1 and footprint_index < footprint_count - 1,
+		"placement_preview_count": int(placement_preview.get("footprint_count", 0)),
+		"placement_preview_valid": bool(placement_preview.get("can_place", false)),
 	}
 
 
@@ -279,8 +310,11 @@ func _ambient_profile_for_building(target_building_name: String) -> Dictionary:
 
 func _has_active_visual_animation() -> bool:
 	return (
-		not construction_job.is_empty()
-		or not ambient_animation_profile.is_empty()
+		_is_primary_footprint_cell()
+		and (
+			not construction_job.is_empty()
+			or not ambient_animation_profile.is_empty()
+		)
 	)
 
 func _draw() -> void:
@@ -288,17 +322,27 @@ func _draw() -> void:
 	var should_draw_grid = is_hovered() or has_focus() or selected
 	if should_draw_grid:
 		_draw_terrain_overlay()
-	if not transport_activity_profile.is_empty() and construction_job.is_empty():
+	if (
+		not transport_activity_profile.is_empty()
+		and construction_job.is_empty()
+		and (building_name.is_empty() or _is_primary_footprint_cell())
+	):
 		_draw_transport_activity_ground()
 
 	if not construction_job.is_empty():
-		_draw_construction_site()
+		_draw_footprint_base(true)
+		if _is_primary_footprint_cell():
+			_draw_construction_site()
 	elif building_name != "":
-		_draw_building_shadow()
-		_draw_building()
-		_draw_ambient_animation_overlay()
+		_draw_footprint_base(false)
+		if _is_primary_footprint_cell():
+			_draw_building_shadow()
+			_draw_building()
+			_draw_ambient_animation_overlay()
 
-	if is_building_mode and is_hovered() and building_name == "" and construction_job.is_empty():
+	if is_building_mode and not placement_preview.is_empty():
+		_draw_group_placement_preview()
+	elif is_building_mode and is_hovered() and building_name == "" and construction_job.is_empty():
 		if placement_allowed:
 			_draw_placement_indicator()
 		else:
@@ -306,6 +350,63 @@ func _draw() -> void:
 
 	if is_hovered() or selected:
 		_draw_selection()
+
+
+func _is_primary_footprint_cell() -> bool:
+	return footprint_role != "secondary"
+
+
+func _footprint_tooltip_suffix() -> String:
+	if footprint_count <= 1:
+		return ""
+	return L10n.text("｜占地 %d/%d｜主地格 %d") % [
+		footprint_index + 1,
+		footprint_count,
+		owner_anchor_tile_id,
+	]
+
+
+func _draw_footprint_base(is_construction: bool) -> void:
+	if footprint_count <= 1:
+		return
+	var connects_west := footprint_index > 0
+	var connects_east := footprint_index < footprint_count - 1
+	var left := 0.0 if connects_west else 4.0
+	var right := size.x if connects_east else size.x - 4.0
+	var base_rect := Rect2(Vector2(left, size.y * 0.54), Vector2(right - left, size.y * 0.31))
+	var fill := Color(0.43, 0.34, 0.23, 0.88) if is_construction else Color(0.17, 0.36, 0.49, 0.76)
+	var edge := Color(0.96, 0.72, 0.24, 0.96) if is_construction else Color(0.48, 0.86, 0.96, 0.94)
+	draw_rect(base_rect, fill)
+	draw_line(base_rect.position, base_rect.position + Vector2(base_rect.size.x, 0), edge, 2.0)
+	draw_line(base_rect.end - Vector2(base_rect.size.x, 0), base_rect.end, edge, 2.0)
+	if not connects_west:
+		draw_line(base_rect.position, base_rect.position + Vector2(0, base_rect.size.y), edge, 2.0)
+	if not connects_east:
+		draw_line(base_rect.end - Vector2(0, base_rect.size.y), base_rect.end, edge, 2.0)
+	if footprint_role == "secondary":
+		var link_center := Vector2(size.x * 0.50, size.y * 0.69)
+		draw_circle(link_center, 6.0, Color(edge, 0.92))
+		draw_line(link_center - Vector2(13, 0), link_center + Vector2(13, 0), Color(edge, 0.92), 3.0, true)
+
+
+func _draw_group_placement_preview() -> void:
+	var count := maxi(1, int(placement_preview.get("footprint_count", 1)))
+	var can_place := bool(placement_preview.get("can_place", false))
+	var fill := Color(0.12, 0.80, 0.43, 0.24) if can_place else Color(0.94, 0.19, 0.16, 0.28)
+	var edge := Color(0.20, 0.96, 0.54, 0.98) if can_place else Color(1.00, 0.31, 0.25, 0.98)
+	var group_rect := Rect2(Vector2(3, 3), Vector2(size.x * count - 6, size.y - 6))
+	draw_rect(group_rect, fill)
+	draw_rect(group_rect, edge, false, 3.0)
+	for separator_index in range(1, count):
+		var separator_x := size.x * separator_index
+		draw_line(Vector2(separator_x, 5), Vector2(separator_x, size.y - 5), Color(edge, 0.82), 2.0)
+	var center := Vector2(size.x * count * 0.5, size.y * 0.5)
+	if can_place:
+		draw_line(center + Vector2(-7, 0), center + Vector2(7, 0), edge, 3.0, true)
+		draw_line(center + Vector2(0, -7), center + Vector2(0, 7), edge, 3.0, true)
+	else:
+		draw_line(center + Vector2(-7, -7), center + Vector2(7, 7), edge, 3.0, true)
+		draw_line(center + Vector2(7, -7), center + Vector2(-7, 7), edge, 3.0, true)
 
 
 func _terrain_label() -> String:

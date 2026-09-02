@@ -287,6 +287,8 @@ var _autosave_count := 0
 var _last_autosave_reason := ""
 var placement_mode_active := false
 var placement_building_name := ""
+var _placement_preview_anchor := -1
+var _placement_preview: Dictionary = {}
 var _pending_construction_tile := -1
 var _pending_construction_workers := 5
 var _pending_terrain_tile := -1
@@ -750,6 +752,8 @@ func _initialize_fresh_game() -> void:
 	selected_building_group = "housing"
 	placement_mode_active = false
 	placement_building_name = ""
+	_placement_preview_anchor = -1
+	_placement_preview.clear()
 	_pending_construction_tile = -1
 	_pending_terrain_tile = -1
 	map_action_mode = "inspect"
@@ -2107,6 +2111,8 @@ func _build_map_panel() -> Control:
 			# naturally disappears behind a building whose base is farther south.
 			cell.z_index = int(_iso_tile_center(index).y)
 			cell.pressed.connect(Callable(self, "_on_grid_pressed").bind(index))
+			cell.mouse_entered.connect(Callable(self, "_refresh_placement_preview").bind(index))
+			cell.focus_entered.connect(Callable(self, "_refresh_placement_preview").bind(index))
 			grid_buttons[index] = cell
 			tile_layer.add_child(cell)
 
@@ -2301,7 +2307,10 @@ func _npc_map_snapshot() -> Dictionary:
 				crossing_tile_id < 0
 				or crossing_tile_id >= city_grid.size()
 				or str(crossing.get("status", "completed")) != "completed"
-				or city_grid[crossing_tile_id] != ""
+				or (
+					vertical_slice != null
+					and not vertical_slice.get_building_by_tile(crossing_tile_id).is_empty()
+				)
 				or (terrain != null and not terrain.is_walkable(crossing_tile_id))
 				or not vertical_slice.active_construction_for_tile(crossing_tile_id).is_empty()
 			):
@@ -2341,7 +2350,7 @@ func _npc_map_snapshot() -> Dictionary:
 				"kind": "transport_network",
 			}
 			blocked_tiles[tile_index] = true
-		if city_grid[tile_index] != "":
+		if vertical_slice != null and not vertical_slice.get_building_by_tile(tile_index).is_empty():
 			building_centers[tile_index] = center
 			blocked_tiles[tile_index] = true
 		if vertical_slice != null and not vertical_slice.active_construction_for_tile(tile_index).is_empty():
@@ -4061,14 +4070,20 @@ func _on_grid_pressed(index: int) -> void:
 		_set_hint("此地格位於頂部資訊列安全區內，請選擇下方空地。", true)
 		return
 	var active_job: Dictionary = vertical_slice.active_construction_for_tile(index) if vertical_slice != null else {}
-	if placement_mode_active and (city_grid[index] != "" or not active_job.is_empty()):
+	var building_record: Dictionary = vertical_slice.get_building_by_tile(index) if vertical_slice != null else {}
+	if placement_mode_active and (not building_record.is_empty() or not active_job.is_empty()):
 		_set_hint("此地格已有建築或工程，請選擇其他空地。", true)
 		return
-	if city_grid[index] != "":
+	if not building_record.is_empty():
 		_select_built_cell(index)
 		return
 	if not active_job.is_empty():
-		selected_cell_index = index
+		var footprint_view: Dictionary = vertical_slice.footprint_cell_view(index) if vertical_slice != null else {}
+		selected_cell_index = (
+			int(footprint_view.get("owner_anchor_tile_id", index))
+			if str(footprint_view.get("kind", "")) == "construction"
+			else index
+		)
 		_hide_npc_dialogue()
 		_set_hint("%s施工中，預計尚需 %d 個遊戲日。" % [
 			str(active_job.get("metadata", {}).get("building_name", "工程")),
@@ -4148,6 +4163,8 @@ func _enter_building_placement(building_name: String) -> void:
 		return
 	placement_mode_active = true
 	placement_building_name = building_name
+	_placement_preview_anchor = -1
+	_placement_preview.clear()
 	_pending_construction_tile = -1
 	_pending_terrain_tile = -1
 	_hide_npc_dialogue()
@@ -4171,6 +4188,8 @@ func _cancel_building_placement(show_feedback: bool) -> void:
 	var was_active := placement_mode_active
 	placement_mode_active = false
 	placement_building_name = ""
+	_placement_preview_anchor = -1
+	_placement_preview.clear()
 	_pending_construction_tile = -1
 	_pending_terrain_tile = -1
 	if construction_confirmation != null and construction_confirmation.is_open():
@@ -4181,6 +4200,39 @@ func _cancel_building_placement(show_feedback: bool) -> void:
 			_update_tile_visual(index, city_grid[index])
 	if show_feedback and was_active:
 		_set_hint("已取消建築放置；沒有扣除任何費用。", false)
+
+
+func _refresh_placement_preview(index: int) -> void:
+	if not placement_mode_active or vertical_slice == null:
+		return
+	if index < 0 or index >= city_grid.size():
+		return
+	var workers: int = int(vertical_slice_panel.selected_worker_count()) if vertical_slice_panel else 5
+	var preview: Dictionary = vertical_slice.placement_footprint_preview(
+		placement_building_name,
+		index,
+		workers
+	)
+	var all_inside_hud_safe_area := true
+	for tile_variant: Variant in preview.get("occupied_tile_ids", []):
+		if not _is_tile_inside_hud_safe_area(int(tile_variant)):
+			all_inside_hud_safe_area = false
+			break
+	if not _is_tile_inside_hud_safe_area(index):
+		all_inside_hud_safe_area = false
+	preview["can_place"] = bool(preview.get("can_place", false)) and all_inside_hud_safe_area
+	if not all_inside_hud_safe_area:
+		preview["error"] = "hud_safe_area"
+	var previous_anchor := _placement_preview_anchor
+	_placement_preview_anchor = index
+	_placement_preview = preview
+	if previous_anchor >= 0 and previous_anchor < grid_buttons.size():
+		_update_tile_visual(previous_anchor, city_grid[previous_anchor])
+	_update_tile_visual(index, city_grid[index])
+
+
+func get_placement_preview_snapshot() -> Dictionary:
+	return _placement_preview.duplicate(true)
 
 
 func _sync_placement_banner() -> void:
@@ -4279,6 +4331,8 @@ func _confirm_pending_construction(tile_index: int) -> void:
 	selected_cell_index = tile_index
 	placement_mode_active = false
 	placement_building_name = ""
+	_placement_preview_anchor = -1
+	_placement_preview.clear()
 	_pending_construction_tile = -1
 	_sync_placement_banner()
 	_set_hint("「%s」已開工，分配 %d 名工程人員，預付總造價 $%d。" % [building_name, _pending_construction_workers, int(result.get("total_cost", 0))], false)
@@ -4297,10 +4351,14 @@ func _on_construction_confirmation_cancelled() -> void:
 	_set_hint("已返回選地；尚未扣除任何費用。", false)
 
 func _select_built_cell(index: int) -> void:
-	selected_cell_index = index
-	var building_name := city_grid[index]
-	if _is_customizable_building(building_name) and not building_customizations.has(index):
-		building_customizations[index] = {"variant": 0, "roof": 0, "wall": 0}
+	var record: Dictionary = vertical_slice.get_building_by_tile(index) if vertical_slice != null else {}
+	var anchor_tile_id := int(record.get("anchor_tile_id", record.get("tile_index", index)))
+	if anchor_tile_id < 0 or anchor_tile_id >= city_grid.size():
+		return
+	selected_cell_index = anchor_tile_id
+	var building_name := str(record.get("building_name", city_grid[anchor_tile_id]))
+	if _is_customizable_building(building_name) and not building_customizations.has(anchor_tile_id):
+		building_customizations[anchor_tile_id] = {"variant": 0, "roof": 0, "wall": 0}
 	_set_hint("已選取「%s」。建築功能已顯示在地塊旁。" % building_name, false)
 	_update_scoped_municipal_pages(vertical_slice.get_view_model(selected_cell_index))
 	if judicial_panel:
@@ -4312,7 +4370,7 @@ func _select_built_cell(index: int) -> void:
 	_sync_map_interaction_for_ui()
 	_sync_placement_banner()
 	_refresh_building_context()
-	_open_building_context(index)
+	_open_building_context(anchor_tile_id)
 
 func _is_customizable_building(building_name: String) -> bool:
 	return CUSTOMIZABLE_BUILDINGS.has(building_name)
@@ -6108,24 +6166,50 @@ func _update_tile_visual(index: int, building_name: String) -> void:
 	cell.z_index = int(_iso_tile_center(index).y)
 	if cell.has_method("set_tile"):
 		var active_construction: Dictionary = vertical_slice.active_construction_for_tile(index) if vertical_slice != null else {}
+		var footprint_view: Dictionary = vertical_slice.footprint_cell_view(index) if vertical_slice != null else {}
+		var visual_building_name := building_name
+		var owner_anchor_tile_id := index
+		var footprint_role := "none"
+		var footprint_index := 0
+		var footprint_count := 1
+		var footprint_id := ""
+		if not footprint_view.is_empty():
+			owner_anchor_tile_id = int(footprint_view.get("owner_anchor_tile_id", index))
+			footprint_role = str(footprint_view.get("role", "none"))
+			footprint_index = int(footprint_view.get("footprint_index", 0))
+			footprint_count = int(footprint_view.get("footprint_count", 1))
+			footprint_id = str(footprint_view.get("footprint_id", ""))
+			if str(footprint_view.get("kind", "")) == "building":
+				visual_building_name = str(footprint_view.get("building_name", building_name))
+		elif not active_construction.is_empty():
+			footprint_role = "anchor"
 		var terrain_state: Dictionary = vertical_slice.terrain_state_for_tile(index) if vertical_slice != null else {}
 		var terrain_buildable := bool(terrain_state.get("buildable", true))
+		var preview := {}
+		if placement_mode_active and index == _placement_preview_anchor:
+			preview = _placement_preview.duplicate(true)
 		cell.call("set_tile", {
 			"index": index,
-			"building_name": building_name,
-			"building_color": _building_color(building_name),
-			"terrain_kind": _terrain_kind_for_cell(index, building_name),
+			"building_name": visual_building_name,
+			"building_color": _building_color(visual_building_name),
+			"terrain_kind": _terrain_kind_for_cell(index, visual_building_name),
 			"terrain_type": str(terrain_state.get("effective_kind", "flat_grass")),
 			"terrain_buildable": terrain_buildable,
 			"terrain_flattenable": bool(terrain_state.get("flattenable", false)),
 			"terrain_flattened": bool(terrain_state.get("flattened", false)),
-			"visual": BUILDING_VISUALS.get(building_name, {}),
-			"customization": building_customizations.get(index, {}),
+			"visual": BUILDING_VISUALS.get(visual_building_name, {}),
+			"customization": building_customizations.get(owner_anchor_tile_id, {}),
 			"dark_mode": is_dark_mode,
-			"selected": selected_cell_index == index,
+			"selected": selected_cell_index == owner_anchor_tile_id,
 			"is_building_mode": placement_mode_active,
 			"placement_allowed": _is_tile_inside_hud_safe_area(index) and terrain_buildable,
-			"construction": active_construction
+			"construction": active_construction,
+			"footprint_role": footprint_role,
+			"footprint_index": footprint_index,
+			"footprint_count": footprint_count,
+			"footprint_id": footprint_id,
+			"owner_anchor_tile_id": owner_anchor_tile_id,
+			"placement_preview": preview,
 		})
 	else:
 		cell.text = _tile_text(building_name, index)
