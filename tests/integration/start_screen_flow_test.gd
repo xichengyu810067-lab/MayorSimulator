@@ -63,7 +63,11 @@ func _run() -> void:
 	_check(first.vertical_slice.session.state.npcs.size() == 328 and int(first.vertical_slice.session.state.metrics.get("population", -1)) == 328, "seeded residence keeps core population mirrors consistent")
 	var action_save_count: int = first._autosave_count
 	first.call("_on_tax_changed", 17.0, "income")
-	_check(first._autosave_count > action_save_count and first._last_autosave_reason == "action:tax_changed", "a state-changing player action autosaves")
+	_check(int(first.tax_rates["income"]) != 17, "a tax slider change remains a draft before apply-all")
+	_check(first._autosave_count == action_save_count, "an unapplied tax draft does not autosave")
+	first.call("_apply_fiscal_draft")
+	_check(int(first.tax_rates["income"]) == 17, "apply-all commits the tax draft before saving")
+	_check(first._autosave_count == action_save_count + 1 and first._last_autosave_reason == "action:fiscal_draft_applied", "apply-all autosaves the complete fiscal draft exactly once")
 	_check(FileAccess.file_exists(ProjectSettings.globalize_path(TEST_SAVE_PATH) + ".bak"), "autosave retains the immediately previous valid snapshot")
 	first.call("_toggle_policy", true, "環保政策")
 	for _day in range(3):
