@@ -10,6 +10,7 @@
     { "id": "terrain_flatten_lifecycle", "script": "res://tests/integration/terrain_flatten_lifecycle_test.gd", "success_pattern": "Terrain flatten lifecycle integration test passed." },
     { "id": "public_service_lifecycle", "script": "res://tests/integration/public_service_lifecycle_test.gd", "success_pattern": "Public service lifecycle integration test passed." },
     { "id": "transport_coordinator_integration", "script": "res://tests/integration/transport_coordinator_integration_test.gd", "success_pattern": "Transport coordinator integration test passed." },
+    { "id": "transport_planning_session_integration", "script": "res://tests/integration/transport_planning_session_integration_test.gd", "success_pattern": "Transport planning session integration test passed." },
     { "id": "transport_network_integration", "script": "res://tests/integration/transport_network_integration_test.gd", "success_pattern": "Transport network integration test passed." },
     { "id": "transport_all_mode_lifecycle_contract", "script": "res://tests/integration/transport_all_mode_lifecycle_contract_test.gd", "success_pattern": "Transport all-mode lifecycle contract passed." },
     { "id": "fiscal_slider_pointer", "script": "res://tests/ui/fiscal_slider_pointer_test.gd", "success_pattern": "Fiscal stadium pointer test passed." },

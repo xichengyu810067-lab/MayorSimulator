@@ -6,7 +6,7 @@
     "writer_allowed": true,
     "save_envelope_schema_version": 1,
     "city_state_schema_version": 2,
-    "vertical_slice_schema_version": 9,
+    "vertical_slice_schema_version": 10,
     "terrain_layout_version": 3,
     "population_schema_version": 2,
     "npc_record_schema_version": 2
@@ -14,7 +14,7 @@
   "version_ceiling": {
     "save_envelope_schema_version": 1,
     "city_state_schema_version": 2,
-    "vertical_slice_schema_version": 9,
+    "vertical_slice_schema_version": 10,
     "terrain_layout_version": 3,
     "population_schema_version": 2,
     "npc_record_schema_version": 2
@@ -36,10 +36,10 @@
     },
     {
       "component": "vertical_slice",
-      "current_version": 9,
-      "max_supported_version": 9,
-      "supported_read_versions": [4, 5, 6, 7, 8, 9],
-      "compatibility": "unsupported_0_to_3_direct_read_then_write_9_for_4_to_6_migration_7_2_and_8_3_current_9_3"
+      "current_version": 10,
+      "max_supported_version": 10,
+      "supported_read_versions": [4, 5, 6, 7, 8, 9, 10],
+      "compatibility": "unsupported_0_to_3_direct_read_then_write_10_for_4_to_6_migration_7_2_8_3_and_9_3_current_10_3"
     },
     {
       "component": "terrain_layout",
@@ -91,6 +91,12 @@
     {
       "vertical_slice_schema_versions": [9],
       "terrain_layout_version": 3,
+      "status": "transport_session_migration_input",
+      "writer_allowed": false
+    },
+    {
+      "vertical_slice_schema_versions": [10],
+      "terrain_layout_version": 3,
       "status": "current",
       "writer_allowed": true
     }
@@ -99,12 +105,12 @@
     {
       "id": "current_round_trip",
       "path": "res://tests/fixtures/save_schema/current_round_trip.json",
-      "behavior": "current_9_round_trip_single_population_copy_and_building_footprints"
+      "behavior": "current_10_round_trip_population_building_footprints_and_transport_session"
     },
     {
       "id": "supported_legacy_migration",
       "path": "res://tests/fixtures/save_schema/supported_legacy_migration.json",
-      "behavior": "city_state_1_mirror_match_to_2_and_vertical_7_layout_2_to_9_layout_3_single_footprints"
+      "behavior": "city_state_1_mirror_match_to_2_and_vertical_7_layout_2_to_10_layout_3_single_footprints_inactive_transport_session"
     },
     {
       "id": "future_reject",
@@ -119,7 +125,7 @@
     {
       "id": "oldest_supported_vertical_4",
       "path": "res://tests/fixtures/save_schema/oldest_supported_vertical_4.json",
-      "behavior": "oldest_supported_vertical_4_direct_read_then_write_9_single_footprints"
+      "behavior": "oldest_supported_vertical_4_direct_read_then_write_10_single_footprints_inactive_transport_session"
     },
     {
       "id": "unsupported_vertical_3",
@@ -145,13 +151,13 @@
       "status": "active"
     },
     {
-      "id": "vertical_7_layout_2_to_9_layout_3",
+      "id": "vertical_7_layout_2_to_10_layout_3",
       "source": {
         "vertical_slice_schema_version": 7,
         "terrain_layout_version": 2
       },
       "target": {
-        "vertical_slice_schema_version": 9,
+        "vertical_slice_schema_version": 10,
         "terrain_layout_version": 3
       },
       "implementation": [
@@ -164,18 +170,35 @@
       "status": "active"
     },
     {
-      "id": "vertical_8_layout_3_to_9_layout_3",
+      "id": "vertical_8_layout_3_to_10_layout_3",
       "source": {
         "vertical_slice_schema_version": 8,
         "terrain_layout_version": 3
       },
       "target": {
-        "vertical_slice_schema_version": 9,
+        "vertical_slice_schema_version": 10,
         "terrain_layout_version": 3
       },
       "implementation": [
         "scripts/core/game_session.gd:_migrate_state_snapshot_to_current_pair",
         "data/catalogs/building_footprints.gd:legacy_single_fields"
+      ],
+      "test": "res://tests/unit/core/save_recovery_self_test.gd",
+      "status": "active"
+    },
+    {
+      "id": "vertical_9_layout_3_to_10_layout_3",
+      "source": {
+        "vertical_slice_schema_version": 9,
+        "terrain_layout_version": 3
+      },
+      "target": {
+        "vertical_slice_schema_version": 10,
+        "terrain_layout_version": 3
+      },
+      "implementation": [
+        "scripts/core/game_session.gd:_migrate_state_snapshot_to_current_pair",
+        "scripts/systems/city/transport_planning_session.gd:to_dict"
       ],
       "test": "res://tests/unit/core/save_recovery_self_test.gd",
       "status": "active"

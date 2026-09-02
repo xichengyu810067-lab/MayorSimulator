@@ -15,6 +15,7 @@ const BlueprintLibraryServiceScript = preload("res://scripts/app/blueprint_libra
 const VerticalSliceViewModelAssemblerScript = preload("res://scripts/app/vertical_slice_view_model_assembler.gd")
 const CityTerrainMapScript = preload("res://scripts/world/city_terrain_map.gd")
 const TransportNetworkSystemScript = preload("res://scripts/systems/city/transport_network_system.gd")
+const TransportPlanningSessionScript = preload("res://scripts/systems/city/transport_planning_session.gd")
 const TransportModesScript = preload("res://data/catalogs/transport_modes.gd")
 const SaveSchemaAuthorityScript = preload("res://scripts/core/save_schema_authority.gd")
 const BuildingFootprintsScript = preload("res://data/catalogs/building_footprints.gd")
@@ -39,6 +40,7 @@ var governance
 var population
 var terrain_map
 var transport
+var transport_planning_session
 var building_definitions: Dictionary = {}
 var maintenance_payment_enabled := true
 var selected_npc_id := ""
@@ -99,6 +101,7 @@ func new_game(
 	terrain_map = CityTerrainMapScript.new()
 	terrain_map.apply_default_city_layout()
 	transport = TransportNetworkSystemScript.new()
+	transport_planning_session = TransportPlanningSessionScript.new()
 	building_definitions = ContentRegistry.buildings_by_id()
 	blueprint_library_service.reset(building_definitions)
 	maintenance_payment_enabled = true
@@ -470,6 +473,210 @@ func transport_project_quote(
 	}
 
 
+func begin_transport_planning_session(station_blueprint_name: String) -> Dictionary:
+	if governance.has_failed():
+		return _terminal_command_error()
+	if station_blueprint_name not in TransportModesScript.STATION_KINDS:
+		return {"ok": false, "error": "invalid_station_blueprint"}
+	var active := active_blueprint_status(station_blueprint_name)
+	if not bool(active.get("exists", false)):
+		return {"ok": false, "error": "approved_blueprint_required"}
+	var library_id := str(active.get("library_id", active.get("id", "")))
+	var result: Dictionary = transport_planning_session.begin(station_blueprint_name, library_id)
+	if bool(result.get("ok", false)):
+		_push_ui_event("transport_planning_session_started", result.get("session", {}))
+		_emit_changed()
+	return result
+
+
+func transport_planning_session_snapshot() -> Dictionary:
+	return transport_planning_session.snapshot() if transport_planning_session != null else {"state": "inactive"}
+
+
+func place_transport_session_station(
+	anchor_tile_id: int,
+	worker_count: int = -1
+) -> Dictionary:
+	if governance.has_failed():
+		return _terminal_command_error()
+	if transport_planning_session == null:
+		return {"ok": false, "error": "transport_planning_session_unavailable"}
+	var current: Dictionary = transport_planning_session.snapshot()
+	var station_name := str(current.get("station_blueprint_name", ""))
+	var active := active_blueprint_status(station_name)
+	var library_id := str(active.get("library_id", active.get("id", "")))
+	var preflight: Dictionary = transport_planning_session.can_place_station(station_name, library_id)
+	if not bool(preflight.get("ok", false)):
+		return preflight
+	var resolved_workers := worker_count
+	if resolved_workers <= 0:
+		resolved_workers = int(active.get("blueprint", {}).get("requested_workers", 5))
+	var placement: Dictionary = start_approved_building(station_name, anchor_tile_id, resolved_workers)
+	if not bool(placement.get("ok", false)):
+		placement["session"] = transport_planning_session.snapshot()
+		return placement
+	var recorded: Dictionary = transport_planning_session.record_station_job(
+		Dictionary(placement.get("job", {})),
+		placement
+	)
+	if not bool(recorded.get("ok", false)):
+		push_error("Transport planning session failed to record a preflighted station job.")
+		return {"ok": false, "error": "transport_session_record_failed"}
+	placement["session"] = transport_planning_session.snapshot()
+	_push_ui_event("transport_session_station_started", {
+		"job": Dictionary(placement.get("job", {})).duplicate(true),
+		"session": transport_planning_session.snapshot(),
+	})
+	_emit_changed()
+	return placement
+
+
+func begin_transport_session_network_placement(
+	network_kind: String,
+	draft: Dictionary = {}
+) -> Dictionary:
+	if governance.has_failed():
+		return _terminal_command_error()
+	var result: Dictionary = transport_planning_session.begin_network_placement(network_kind, draft)
+	if bool(result.get("ok", false)):
+		_push_ui_event("transport_session_network_placement", result.get("session", {}))
+		_emit_changed()
+	return result
+
+
+func start_transport_session_network_project(
+	network_kind: String,
+	tile_ids: Array,
+	worker_count: int = 5,
+	city_grid: Array = []
+) -> Dictionary:
+	if governance.has_failed():
+		return _terminal_command_error()
+	var draft := {
+		"kind": network_kind,
+		"operation": "build",
+		"tile_ids": tile_ids.duplicate(),
+		"worker_count": worker_count,
+	}
+	var draft_result: Dictionary = transport_planning_session.update_network_draft(network_kind, draft)
+	if not bool(draft_result.get("ok", false)):
+		return draft_result
+	var started: Dictionary = start_transport_project(
+		network_kind,
+		"build",
+		tile_ids,
+		worker_count,
+		city_grid
+	)
+	if not bool(started.get("ok", false)):
+		# The attempted geometry remains an editable player draft.  The failed
+		# authority command is atomic: no project, job, reference, or charge was applied.
+		started["draft_retained"] = true
+		started["authoritative_changes_applied"] = false
+		started["session"] = transport_planning_session.snapshot()
+		return started
+	var recorded: Dictionary = transport_planning_session.record_network_job(
+		Dictionary(started.get("project", {})),
+		Dictionary(started.get("job", {}))
+	)
+	if not bool(recorded.get("ok", false)):
+		push_error("Transport planning session failed to record a preflighted network job.")
+		return {"ok": false, "error": "transport_session_record_failed"}
+	started["session"] = transport_planning_session.snapshot()
+	_emit_changed()
+	return started
+
+
+func begin_transport_session_route_edit(draft: Dictionary = {}) -> Dictionary:
+	if governance.has_failed():
+		return _terminal_command_error()
+	var result: Dictionary = transport_planning_session.begin_route_edit(draft)
+	if bool(result.get("ok", false)):
+		_push_ui_event("transport_session_route_edit", result.get("session", {}))
+		_emit_changed()
+	return result
+
+
+func materialize_transport_session_route(
+	station_tile_ids: Array,
+	fleet_size: int,
+	headway_minutes: int,
+	fare: int,
+	city_grid: Array = []
+) -> Dictionary:
+	if governance.has_failed():
+		return _terminal_command_error()
+	var current: Dictionary = transport_planning_session.snapshot()
+	var draft := {
+		"mode": str(current.get("mode", "")),
+		"station_tile_ids": station_tile_ids.duplicate(),
+		"fleet_size": fleet_size,
+		"headway_minutes": headway_minutes,
+		"fare": fare,
+	}
+	var draft_result: Dictionary = transport_planning_session.update_route_draft(draft)
+	if not bool(draft_result.get("ok", false)):
+		return draft_result
+	var created: Dictionary = create_transport_route(
+		str(current.get("mode", "")),
+		station_tile_ids,
+		fleet_size,
+		headway_minutes,
+		fare,
+		city_grid
+	)
+	if not bool(created.get("ok", false)):
+		# Preserve the attempted route for correction while explicitly reporting
+		# that topology, references, construction, and treasury remain untouched.
+		created["draft_retained"] = true
+		created["authoritative_changes_applied"] = false
+		created["session"] = transport_planning_session.snapshot()
+		return created
+	var recorded: Dictionary = transport_planning_session.record_route(Dictionary(created.get("route", {})))
+	if not bool(recorded.get("ok", false)):
+		push_error("Transport planning session failed to record a created route.")
+		return {"ok": false, "error": "transport_session_record_failed"}
+	created["session"] = transport_planning_session.snapshot()
+	_emit_changed()
+	return created
+
+
+func wait_for_transport_session_construction(resume_state: String = "network_placement") -> Dictionary:
+	var result: Dictionary = transport_planning_session.wait_for_construction(resume_state)
+	if bool(result.get("ok", false)):
+		_emit_changed()
+	return result
+
+
+func pause_transport_planning_session() -> Dictionary:
+	var result: Dictionary = transport_planning_session.pause()
+	if bool(result.get("ok", false)):
+		_emit_changed()
+	return result
+
+
+func resume_transport_planning_session() -> Dictionary:
+	var result: Dictionary = transport_planning_session.resume()
+	if bool(result.get("ok", false)):
+		_emit_changed()
+	return result
+
+
+func close_transport_planning_session(reason: String = "player_closed") -> Dictionary:
+	var result: Dictionary = transport_planning_session.close(reason)
+	if bool(result.get("ok", false)):
+		_push_ui_event("transport_planning_session_closed", result.get("session", {}))
+		_emit_changed()
+	return result
+
+
+func cancel_transport_planning_session() -> Dictionary:
+	# Cancelling the planning workflow never rewrites already-authoritative
+	# construction or topology. Those jobs continue and materialize normally;
+	# only the session is closed against further planning commands.
+	return close_transport_planning_session("player_cancelled_planning")
+
+
 func start_transport_project(
 	kind: String,
 	operation: String,
@@ -629,6 +836,8 @@ func delete_transport_route(route_id: String) -> Dictionary:
 	if not bool(deleted.get("ok", false)):
 		return deleted
 	var removed: Dictionary = Dictionary(deleted.get("route", {})).duplicate(true)
+	if transport_planning_session != null:
+		transport_planning_session.mark_route_deleted(route_id)
 	_record_fact({
 		"type": "transport_route_deleted",
 		"subject_id": route_id,
@@ -1545,6 +1754,8 @@ func _handle_construction_fact(event: Dictionary) -> bool:
 		var completion: Dictionary = transport.complete_project(project_id) if transport != null else {"ok": false, "error": "transport_system_unavailable"}
 		if bool(completion.get("ok", false)):
 			var completed_project: Dictionary = completion.get("project", {})
+			if transport_planning_session != null:
+				transport_planning_session.mark_job_completed(job_id, project_id)
 			_record_fact({
 				"type": "transport_project_completed",
 				"subject_id": project_id,
@@ -1612,6 +1823,8 @@ func _handle_construction_fact(event: Dictionary) -> bool:
 		})
 		_upsert_building(record, "building.construction_completed")
 		_register_transport_station_for_building(record)
+		if transport_planning_session != null:
+			transport_planning_session.mark_job_completed(job_id, instance_id)
 		_push_ui_event("building_completed", record)
 	elif operation == "demolish":
 		var target_id := str(job.get("target_id", ""))
@@ -1855,6 +2068,11 @@ func _stash_subsystems() -> void:
 		"population": population.to_dict(),
 		"terrain": terrain_map.to_dict() if terrain_map != null else {},
 		"transport": transport.to_dict() if transport != null else TransportNetworkSystemScript.new().to_dict(),
+		"transport_planning_session": (
+			transport_planning_session.to_dict()
+			if transport_planning_session != null
+			else TransportPlanningSessionScript.inactive_snapshot()
+		),
 		"maintenance_payment_enabled": maintenance_payment_enabled,
 		"selected_npc_id": selected_npc_id,
 		"selected_request_id": selected_request_id,
@@ -1893,6 +2111,15 @@ func _restore_subsystems() -> void:
 		# Schema 5 and earlier did not persist a transport overlay. Preserve the
 		# city and bootstrap an empty network, then reconcile completed stations.
 		transport = TransportNetworkSystemScript.new()
+	var transport_planning_value: Variant = data.get("transport_planning_session", {})
+	if source_schema >= SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION and transport_planning_value is Dictionary:
+		transport_planning_session = TransportPlanningSessionScript.create_from_dict(
+			transport_planning_value as Dictionary
+		)
+	else:
+		transport_planning_session = TransportPlanningSessionScript.new()
+	if transport_planning_session == null:
+		transport_planning_session = TransportPlanningSessionScript.new()
 	maintenance_payment_enabled = bool(data.get("maintenance_payment_enabled", true))
 	selected_npc_id = str(data.get("selected_npc_id", ""))
 	selected_request_id = str(data.get("selected_request_id", ""))

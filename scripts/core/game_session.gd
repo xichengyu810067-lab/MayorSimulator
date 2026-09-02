@@ -10,6 +10,7 @@ const ConstructionSystemScript = preload("res://scripts/systems/city/constructio
 const PopulationSystemScript = preload("res://scripts/systems/population/population_system.gd")
 const BlueprintLibraryServiceScript = preload("res://scripts/app/blueprint_library_service.gd")
 const TransportNetworkSystemScript = preload("res://scripts/systems/city/transport_network_system.gd")
+const TransportPlanningSessionScript = preload("res://scripts/systems/city/transport_planning_session.gd")
 const CityTerrainMapScript = preload("res://scripts/world/city_terrain_map.gd")
 const TransportModesScript = preload("res://data/catalogs/transport_modes.gd")
 const BuildingFootprintsScript = preload("res://data/catalogs/building_footprints.gd")
@@ -221,9 +222,9 @@ func _migrate_state_snapshot_to_current_pair(state_snapshot: Dictionary) -> Dict
 	migrated_state["metadata"] = metadata
 	var footprints_migrated := bool(footprint_migration.get("migrated", false))
 	# Schemas four through six remain direct-read compatible because they do not
-	# contain enough current subsystem state to synthesize schema nine safely.
+	# contain enough current subsystem state to synthesize schema ten safely.
 	# Their building records are normalized now and the coordinator writes schema
-	# nine on the next save without guessing any historical footprint size.
+	# ten on the next save without guessing any historical footprint size.
 	if schema_version < SaveSchemaAuthorityScript.LEGACY_MIGRATION_VERTICAL_SCHEMA_VERSION:
 		return {"ok": true, "migrated": footprints_migrated, "state": migrated_state}
 	var terrain_value: Variant = vertical.get("terrain", null)
@@ -236,8 +237,15 @@ func _migrate_state_snapshot_to_current_pair(state_snapshot: Dictionary) -> Dict
 	var layout_version := int(layout_value)
 	if SaveSchemaAuthorityScript.validate_vertical_terrain_pair(schema_version, layout_version):
 		return {"ok": true, "migrated": footprints_migrated, "state": migrated_state}
+	if SaveSchemaAuthorityScript.is_transport_session_migration_pair(schema_version, layout_version):
+		vertical["schema_version"] = SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION
+		vertical["transport_planning_session"] = TransportPlanningSessionScript.inactive_snapshot()
+		metadata["vertical_slice"] = vertical
+		migrated_state["metadata"] = metadata
+		return {"ok": true, "migrated": true, "state": migrated_state}
 	if SaveSchemaAuthorityScript.is_footprint_migration_pair(schema_version, layout_version):
 		vertical["schema_version"] = SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION
+		vertical["transport_planning_session"] = TransportPlanningSessionScript.inactive_snapshot()
 		metadata["vertical_slice"] = vertical
 		migrated_state["metadata"] = metadata
 		return {"ok": true, "migrated": true, "state": migrated_state}
@@ -248,6 +256,7 @@ func _migrate_state_snapshot_to_current_pair(state_snapshot: Dictionary) -> Dict
 		return {"ok": false, "migrated": false, "state": {}}
 	vertical["schema_version"] = SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION
 	vertical["terrain"] = migrated_terrain
+	vertical["transport_planning_session"] = TransportPlanningSessionScript.inactive_snapshot()
 	metadata["vertical_slice"] = vertical
 	migrated_state["metadata"] = metadata
 	return {"ok": true, "migrated": true, "state": migrated_state}
@@ -264,7 +273,7 @@ func _migrate_legacy_building_footprints(
 		return {"ok": false}
 	var buildings: Dictionary = buildings_value
 	var migrated := false
-	if source_schema_version < SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION:
+	if source_schema_version < SaveSchemaAuthorityScript.TRANSPORT_SESSION_MIGRATION_VERTICAL_SCHEMA_VERSION:
 		for building_key: Variant in buildings.keys():
 			var record_value: Variant = buildings[building_key]
 			if not record_value is Dictionary:
@@ -625,10 +634,26 @@ func _validate_vertical_slice_metadata(restored_state, runtime: Dictionary) -> b
 		if not _validate_transport_construction_links(vertical, restored_state):
 			return false
 		if (
-			schema_version >= SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION
+			schema_version >= SaveSchemaAuthorityScript.TRANSPORT_SESSION_MIGRATION_VERTICAL_SCHEMA_VERSION
 			and not _validate_building_construction_footprints(vertical)
 		):
 			return false
+		if schema_version >= SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION:
+			var planning_value: Variant = vertical.get("transport_planning_session", null)
+			if not planning_value is Dictionary:
+				return false
+			var planning_validation: Dictionary = TransportPlanningSessionScript.validate_snapshot(
+				planning_value as Dictionary
+			)
+			if not bool(planning_validation.get("valid", false)):
+				return false
+			var planning_reference_validation: Dictionary = TransportPlanningSessionScript.validate_references(
+				planning_value as Dictionary,
+				vertical.get("construction", {}),
+				transport_value as Dictionary
+			)
+			if not bool(planning_reference_validation.get("valid", false)):
+				return false
 	if schema_version >= 7:
 		var terrain_value: Variant = vertical.get("terrain", null)
 		if not terrain_value is Dictionary:

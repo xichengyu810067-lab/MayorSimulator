@@ -16,13 +16,14 @@ const CITY_STATE_CURRENT_SCHEMA_VERSION := 2
 const CITY_STATE_MIN_SUPPORTED_SCHEMA_VERSION := 1
 const CITY_STATE_MAX_SUPPORTED_SCHEMA_VERSION := 2
 
-const CURRENT_VERTICAL_SCHEMA_VERSION := 9
+const CURRENT_VERTICAL_SCHEMA_VERSION := 10
 const MIN_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA := 4
-const MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA := 9
-const SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMAS := [4, 5, 6, 7, 8, 9]
+const MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA := 10
+const SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMAS := [4, 5, 6, 7, 8, 9, 10]
 const UNSUPPORTED_HISTORICAL_VERTICAL_SCHEMAS := [0, 1, 2, 3]
 const LEGACY_MIGRATION_VERTICAL_SCHEMA_VERSION := 7
 const FOOTPRINT_MIGRATION_VERTICAL_SCHEMA_VERSION := 8
+const TRANSPORT_SESSION_MIGRATION_VERTICAL_SCHEMA_VERSION := 9
 
 const CURRENT_TERRAIN_LAYOUT_VERSION := 3
 const MAX_SUPPORTED_TERRAIN_LAYOUT_VERSION := 3
@@ -62,7 +63,7 @@ const _EXPECTED_COMPONENT_MATRIX := {
 		"current_version": CURRENT_VERTICAL_SCHEMA_VERSION,
 		"max_supported_version": MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA,
 		"supported_read_versions": SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMAS,
-		"compatibility": "unsupported_0_to_3_direct_read_then_write_9_for_4_to_6_migration_7_2_and_8_3_current_9_3",
+		"compatibility": "unsupported_0_to_3_direct_read_then_write_10_for_4_to_6_migration_7_2_8_3_and_9_3_current_10_3",
 	},
 	"terrain_layout": {
 		"current_version": CURRENT_TERRAIN_LAYOUT_VERSION,
@@ -87,11 +88,11 @@ const _EXPECTED_COMPONENT_MATRIX := {
 const _EXPECTED_FIXTURES := {
 	"current_round_trip": {
 		"path": "res://tests/fixtures/save_schema/current_round_trip.json",
-		"behavior": "current_9_round_trip_single_population_copy_and_building_footprints",
+		"behavior": "current_10_round_trip_population_building_footprints_and_transport_session",
 	},
 	"supported_legacy_migration": {
 		"path": "res://tests/fixtures/save_schema/supported_legacy_migration.json",
-		"behavior": "city_state_1_mirror_match_to_2_and_vertical_7_layout_2_to_9_layout_3_single_footprints",
+		"behavior": "city_state_1_mirror_match_to_2_and_vertical_7_layout_2_to_10_layout_3_single_footprints_inactive_transport_session",
 	},
 	"future_reject": {
 		"path": "res://tests/fixtures/save_schema/future_reject.json",
@@ -103,7 +104,7 @@ const _EXPECTED_FIXTURES := {
 	},
 	"oldest_supported_vertical_4": {
 		"path": "res://tests/fixtures/save_schema/oldest_supported_vertical_4.json",
-		"behavior": "oldest_supported_vertical_4_direct_read_then_write_9_single_footprints",
+		"behavior": "oldest_supported_vertical_4_direct_read_then_write_10_single_footprints_inactive_transport_session",
 	},
 	"unsupported_vertical_3": {
 		"path": "res://tests/fixtures/save_schema/unsupported_vertical_3.json",
@@ -153,6 +154,13 @@ static func is_legacy_migration_pair(vertical_schema_version: int, terrain_layou
 static func is_footprint_migration_pair(vertical_schema_version: int, terrain_layout_version: int) -> bool:
 	return (
 		vertical_schema_version == FOOTPRINT_MIGRATION_VERTICAL_SCHEMA_VERSION
+		and terrain_layout_version == CURRENT_TERRAIN_LAYOUT_VERSION
+	)
+
+
+static func is_transport_session_migration_pair(vertical_schema_version: int, terrain_layout_version: int) -> bool:
+	return (
+		vertical_schema_version == TRANSPORT_SESSION_MIGRATION_VERTICAL_SCHEMA_VERSION
 		and terrain_layout_version == CURRENT_TERRAIN_LAYOUT_VERSION
 	)
 
@@ -244,7 +252,7 @@ static func _validate_component_matrix(value: Variant) -> bool:
 
 
 static func _validate_paired_support_matrix(value: Variant) -> bool:
-	if not value is Array or (value as Array).size() != 5:
+	if not value is Array or (value as Array).size() != 6:
 		return false
 	var expected := [
 		{
@@ -269,6 +277,12 @@ static func _validate_paired_support_matrix(value: Variant) -> bool:
 			"vertical_slice_schema_versions": [FOOTPRINT_MIGRATION_VERTICAL_SCHEMA_VERSION],
 			"terrain_layout_version": CURRENT_TERRAIN_LAYOUT_VERSION,
 			"status": "footprint_migration_input",
+			"writer_allowed": false,
+		},
+		{
+			"vertical_slice_schema_versions": [TRANSPORT_SESSION_MIGRATION_VERTICAL_SCHEMA_VERSION],
+			"terrain_layout_version": CURRENT_TERRAIN_LAYOUT_VERSION,
+			"status": "transport_session_migration_input",
 			"writer_allowed": false,
 		},
 		{
@@ -335,16 +349,18 @@ static func _validate_fixture_registry(value: Variant) -> bool:
 
 
 static func _validate_migration_registry(value: Variant) -> bool:
-	if not value is Array or (value as Array).size() != 3:
+	if not value is Array or (value as Array).size() != 4:
 		return false
 	var city_item: Variant = (value as Array)[0]
 	var terrain_item: Variant = (value as Array)[1]
 	var footprint_item: Variant = (value as Array)[2]
-	if not city_item is Dictionary or not terrain_item is Dictionary or not footprint_item is Dictionary:
+	var transport_session_item: Variant = (value as Array)[3]
+	if not city_item is Dictionary or not terrain_item is Dictionary or not footprint_item is Dictionary or not transport_session_item is Dictionary:
 		return false
 	var city_migration: Dictionary = city_item
 	var migration: Dictionary = terrain_item
 	var footprint_migration: Dictionary = footprint_item
+	var transport_session_migration: Dictionary = transport_session_item
 	return (
 		_has_exact_keys(city_migration, [
 			"id", "source", "target", "precondition", "implementation", "test", "fixture", "status",
@@ -363,7 +379,7 @@ static func _validate_migration_registry(value: Variant) -> bool:
 		_has_exact_keys(migration, [
 			"id", "source", "target", "implementation", "test", "fixture", "status",
 		])
-		and str(migration.get("id", "")) == "vertical_7_layout_2_to_9_layout_3"
+		and str(migration.get("id", "")) == "vertical_7_layout_2_to_10_layout_3"
 		and _matches_pair(
 			migration.get("source", null),
 			LEGACY_MIGRATION_VERTICAL_SCHEMA_VERSION,
@@ -386,7 +402,7 @@ static func _validate_migration_registry(value: Variant) -> bool:
 		_has_exact_keys(footprint_migration, [
 			"id", "source", "target", "implementation", "test", "status",
 		])
-		and str(footprint_migration.get("id", "")) == "vertical_8_layout_3_to_9_layout_3"
+		and str(footprint_migration.get("id", "")) == "vertical_8_layout_3_to_10_layout_3"
 		and _matches_pair(
 			footprint_migration.get("source", null),
 			FOOTPRINT_MIGRATION_VERTICAL_SCHEMA_VERSION,
@@ -403,6 +419,27 @@ static func _validate_migration_registry(value: Variant) -> bool:
 		])
 		and str(footprint_migration.get("test", "")) == "res://tests/unit/core/save_recovery_self_test.gd"
 		and str(footprint_migration.get("status", "")) == "active"
+		and
+		_has_exact_keys(transport_session_migration, [
+			"id", "source", "target", "implementation", "test", "status",
+		])
+		and str(transport_session_migration.get("id", "")) == "vertical_9_layout_3_to_10_layout_3"
+		and _matches_pair(
+			transport_session_migration.get("source", null),
+			TRANSPORT_SESSION_MIGRATION_VERTICAL_SCHEMA_VERSION,
+			CURRENT_TERRAIN_LAYOUT_VERSION
+		)
+		and _matches_pair(
+			transport_session_migration.get("target", null),
+			CURRENT_VERTICAL_SCHEMA_VERSION,
+			CURRENT_TERRAIN_LAYOUT_VERSION
+		)
+		and _string_arrays_equal(transport_session_migration.get("implementation", null), [
+			"scripts/core/game_session.gd:_migrate_state_snapshot_to_current_pair",
+			"scripts/systems/city/transport_planning_session.gd:to_dict",
+		])
+		and str(transport_session_migration.get("test", "")) == "res://tests/unit/core/save_recovery_self_test.gd"
+		and str(transport_session_migration.get("status", "")) == "active"
 	)
 
 

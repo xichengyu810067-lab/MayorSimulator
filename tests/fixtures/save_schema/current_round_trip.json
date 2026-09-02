@@ -59,7 +59,7 @@
 		},
 		"metadata": {
 			"vertical_slice": {
-				"schema_version": 9,
+				"schema_version": 10,
 				"construction": {
 					"schema_version": 1,
 					"seed": 8024611,
@@ -683,6 +683,13 @@
 					"stations": {},
 					"crossings": {},
 					"routes": {}
+				},
+				"transport_planning_session": {
+					"schema_version": 1,
+					"next_session_sequence": 1,
+					"session": {
+						"state": "inactive"
+					}
 				},
 				"maintenance_payment_enabled": true,
 				"selected_npc_id": "npc_000001",
