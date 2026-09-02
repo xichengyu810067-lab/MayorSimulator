@@ -331,7 +331,12 @@ func _run() -> void:
 							visible_filters += 1
 					_check(visible_filters <= 2, "each building family keeps its subgroup list below three choices")
 				for pager_variant in main.building_card_pagers.values():
-					_check(pager_variant.visible_choice_count() <= 3, "building catalogs reveal at most three cards per page")
+					_check(pager_variant.page_size == 6 and pager_variant.visible_choice_count() <= 6, "building catalogs expose up to six balanced cards per page")
+					_check(bool(pager_variant.get_meta("balanced_building_pager", false)), "building catalogs opt into the count-balanced layout")
+					_check(pager_variant.has_method("debug_layout_state"), "building catalogs expose inspectable balanced geometry")
+					if pager_variant.has_method("debug_layout_state"):
+						var building_layout: Dictionary = pager_variant.debug_layout_state()
+						_check(Array(building_layout.get("row_counts", [])) == _expected_building_rows(pager_variant.visible_choice_count()), "building catalog row geometry follows its visible card count")
 				for building_button_variant in main.building_buttons.values():
 					_check((building_button_variant as Button).get_theme_font_size("font_size") >= 18, "building cards use at least 18px text")
 			main.municipal_overlay.open_hub()
@@ -732,3 +737,14 @@ func _check(condition: bool, message: String) -> void:
 		return
 	_failed = true
 	push_error("Main integration check failed: %s" % message)
+
+
+func _expected_building_rows(visible_count: int) -> Array:
+	match visible_count:
+		0: return []
+		1: return [1]
+		2: return [2]
+		3: return [3]
+		4: return [2, 2]
+		5: return [3, 2]
+		_: return [3, 3]

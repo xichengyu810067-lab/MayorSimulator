@@ -82,11 +82,12 @@ func _run() -> void:
 
 	main.municipal_overlay.open_page("buildings")
 	await _settle()
+	_validate_balanced_building_distribution(main)
 	_check(main.building_family_tabs.get_tab_count() == 3, "building selector has three broad families")
 	_check(main.building_group_buttons.size() == 6, "building selector preserves all six subgroups")
 	_check(main.building_buttons.size() > 3, "building selector preserves the full catalog")
 	for pager_variant in main.building_card_pagers.values():
-		_validate_pager(pager_variant, "building catalog")
+		_validate_building_pager(pager_variant, "building catalog")
 	var residential_card := main.find_child("BuildingCard_住宅", true, false) as Button
 	_check(residential_card != null, "residential building card is reachable")
 	if residential_card != null:
@@ -173,6 +174,46 @@ func _validate_pager(pager, context: String) -> void:
 	pager.set_page(0)
 
 
+func _validate_building_pager(pager, context: String) -> void:
+	_check(pager.page_size == 6, "%s does not favor six visible cards" % context)
+	_check(bool(pager.get_meta("balanced_building_pager", false)), "%s does not opt into balanced rows" % context)
+	_check(pager.has_method("debug_layout_state"), "%s does not expose inspectable balanced geometry" % context)
+	if not pager.has_method("debug_layout_state"):
+		return
+	var preserved_count: int = int(pager.choice_count())
+	for page_index in range(pager.page_count()):
+		pager.set_page(page_index)
+		var visible_count: int = int(pager.visible_choice_count())
+		var layout: Dictionary = pager.debug_layout_state()
+		_check(visible_count <= 6, "%s page %d exceeds six choices" % [context, page_index])
+		_check(Array(layout.get("row_counts", [])) == _expected_building_rows(visible_count), "%s page %d does not balance %d visible cards" % [context, page_index, visible_count])
+	_check(pager.choice_count() == preserved_count, "%s pagination lost choices" % context)
+	pager.set_page(0)
+
+
+func _validate_balanced_building_distribution(main) -> void:
+	var pager = main.building_card_pagers.values()[0] if not main.building_card_pagers.is_empty() else null
+	_check(pager != null, "building catalog provides a pager for balance validation")
+	if pager == null:
+		return
+	_check(pager.has_method("balanced_rows_for_count"), "balanced building pager exposes deterministic count distribution")
+	if not pager.has_method("balanced_rows_for_count"):
+		return
+	for count in range(1, 7):
+		_check(Array(pager.balanced_rows_for_count(count)) == _expected_building_rows(count), "%d-card page uses the expected balanced rows" % count)
+
+
+func _expected_building_rows(visible_count: int) -> Array:
+	match visible_count:
+		0: return []
+		1: return [1]
+		2: return [2]
+		3: return [3]
+		4: return [2, 2]
+		5: return [3, 2]
+		_: return [3, 3]
+
+
 func _validate_all_marked_groups(main: Node) -> void:
 	var marked_groups := 0
 	for node_variant in main.find_children("*", "Control", true, false):
@@ -183,7 +224,8 @@ func _validate_all_marked_groups(main: Node) -> void:
 		if node is TabContainer:
 			_check((node as TabContainer).get_tab_count() <= 3, "marked tab group '%s' exceeds three choices" % node.name)
 		elif node.has_method("visible_choice_count"):
-			_check(node.visible_choice_count() <= 3, "marked pager '%s' exceeds three choices" % node.name)
+			var limit := 6 if bool(node.get_meta("balanced_building_pager", false)) else 3
+			_check(node.visible_choice_count() <= limit, "marked pager '%s' exceeds %d choices" % [node.name, limit])
 		else:
 			var visible_choices := 0
 			for child_variant in node.get_children():

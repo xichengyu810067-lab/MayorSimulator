@@ -203,6 +203,16 @@ func _validate_municipal_surface(overlay: Control, page_id: String, resolution: 
 		_check(int(hub_debug.get("secondary_columns", 0)) == 2 and int(hub_debug.get("secondary_rows", 0)) == 3, "%s keeps its six-card 2x3 grid" % label)
 		_check(float(hub_debug.get("minimum_target_extent", 0.0)) >= MIN_INTERACTIVE_EXTENT, "%s cards retain 44px targets" % label)
 		_check(str(hub_debug.get("layout_mode", "")) == ("narrow" if resolution.x < 1400 else "wide"), "%s uses its expected responsive structure" % label)
+	elif page_id == "buildings":
+		for pager_variant in overlay.find_children("BuildingChoices_*", "VBoxContainer", true, false):
+			var pager := pager_variant as VBoxContainer
+			_check(int(pager.get("page_size")) == 6, "%s building pager favors six cards" % label)
+			_check(bool(pager.get_meta("balanced_building_pager", false)), "%s building pager uses count-balanced rows" % label)
+			_check(pager.has_method("debug_layout_state"), "%s building pager exposes inspectable geometry" % label)
+			if pager.is_visible_in_tree() and pager.has_method("debug_layout_state"):
+				var layout: Dictionary = pager.call("debug_layout_state")
+				_check(int(layout.get("visible_count", 0)) <= 6, "%s visible building cards stay within six" % label)
+				_check(Array(layout.get("row_counts", [])).size() <= 2, "%s building cards stay within two balanced rows" % label)
 
 	var visible_page_count := 0
 	if page_host != null:

@@ -1671,8 +1671,10 @@ func _build_building_tab() -> ScrollContainer:
 		var category_names: Array = group["categories"]
 		var heading := _category_title("%s｜%s" % [group["title"], "、".join(PackedStringArray(category_names))])
 		page.add_child(heading)
-		var category_grid = ProgressiveChoicePagerScript.new(3, 3)
+		var category_grid = ProgressiveChoicePagerScript.new(3, 6)
 		category_grid.name = "BuildingChoices_%s" % group_id
+		category_grid.call("set_balanced_page_layout", true)
+		category_grid.call("set_minimum_choice_width", 300.0)
 		page.add_child(category_grid)
 		for category: String in category_names:
 			for building_name in _buildings_in_category(category):
