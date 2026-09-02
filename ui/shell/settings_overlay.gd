@@ -299,7 +299,10 @@ func _mode_button(node_name: String, label_text: String) -> Button:
 	var button := Button.new()
 	button.name = node_name
 	button.text = label_text
-	button.custom_minimum_size = Vector2(128, 44)
+	button.tooltip_text = label_text
+	button.custom_minimum_size = Vector2(150, 44)
+	button.clip_text = true
+	button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	button.add_theme_font_size_override("font_size", 18)
 	return button
 
@@ -311,7 +314,16 @@ func _volume_row(label_text: String, node_name: String, value: float) -> Diction
 	row.add_theme_constant_override("separation", 12)
 	var label := Label.new()
 	label.text = label_text
-	label.custom_minimum_size = Vector2(128, 44)
+	# Keep both rails on one fixed axis in every locale. Without clipping, a
+	# longer translation expands one label's intrinsic minimum and shifts only
+	# that slider to the right.
+	# Volume captions need a wider shared column than the short section labels;
+	# 196px keeps the complete English "Sound effects volume" visible while the
+	# slider still has ample room inside the compact 680px sheet.
+	label.custom_minimum_size = Vector2(196, 44)
+	label.clip_text = true
+	label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	label.tooltip_text = label_text
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.add_theme_font_size_override("font_size", 18)
 	_section_labels.append(label)

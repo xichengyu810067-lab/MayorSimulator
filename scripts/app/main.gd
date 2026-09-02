@@ -2934,7 +2934,13 @@ func _build_tax_row(tax_key: String) -> VBoxContainer:
 	input.focus_exited.connect(Callable(self, "_on_tax_input_focus_exited").bind(tax_key))
 	tax_inputs[tax_key] = input
 	control_row.add_child(input)
-	var unit_label := _label(L10n.text("%% / %s") % L10n.text(str(def["unit"]).replace(" %", "")), 14, _theme_muted())
+	# Keep the Traditional-Chinese source on the node.  This row can be rebuilt
+	# while another locale is active (for example after changing the theme); if
+	# it stores that translation as its source, switching back leaks English tax
+	# units into an otherwise Chinese finance page.
+	var unit_source := str(def["unit"]).replace(" %", "")
+	var unit_label := _label("% / " + unit_source, 14, _theme_muted())
+	unit_label.name = "FiscalTaxUnit_%s" % tax_key
 	unit_label.custom_minimum_size = Vector2(96, 44)
 	unit_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	unit_label.max_lines_visible = 2

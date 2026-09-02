@@ -55,6 +55,7 @@ func _run() -> void:
 	var expected_english := str(_l10n.text("新遊戲"))
 	_check(previous_caption_text == expected_english, "English is rendered before the locale-switch sequence")
 	_check(expected_english != "新遊戲", "the English check observes translated text, not the source label")
+	_validate_fiscal_tax_units(main, "en")
 
 	for locale in SWITCH_LOCALES:
 		_check(_l10n.set_locale(locale, false), "%s locale can be selected without persistence" % locale)
@@ -89,6 +90,7 @@ func _run() -> void:
 				"%s visibly differs from the preceding locale" % locale
 			)
 			previous_caption_text = current_caption.text
+		_validate_fiscal_tax_units(main, locale)
 
 	await _finish(main, original_locale)
 
@@ -163,6 +165,29 @@ func _new_game_caption(main) -> Label:
 	if main == null or main.start_screen == null or main.start_screen.new_game_button == null:
 		return null
 	return _first_descendant_label(main.start_screen.new_game_button)
+
+
+func _validate_fiscal_tax_units(main, locale: String) -> void:
+	var expected_sources := {
+		"income": "% / 所得",
+		"consumption": "% / 消費額",
+	}
+	for tax_key_variant in expected_sources.keys():
+		var tax_key := str(tax_key_variant)
+		var unit_label := main.find_child("FiscalTaxUnit_%s" % tax_key, true, false) as Label
+		_check(unit_label != null, "%s keeps the %s tax unit available" % [locale, tax_key])
+		if unit_label == null:
+			continue
+		var expected := str(_l10n.text(str(expected_sources[tax_key])))
+		_check(
+			unit_label.text == expected,
+			"%s renders the %s tax unit from its canonical source: expected='%s' actual='%s'" % [
+				locale,
+				tax_key,
+				expected,
+				unit_label.text,
+			]
+		)
 
 
 func _first_descendant_label(node: Node) -> Label:

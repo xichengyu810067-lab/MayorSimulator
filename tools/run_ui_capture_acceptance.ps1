@@ -104,7 +104,7 @@ $expectedCaptures = [ordered]@{
     settings_dark_en = 'fullscreen-settings-dark-en.png'
     building_context = 'fullscreen-building-context.png'
     hub = 'fullscreen-municipal-hub.png'
-    hub_development = 'fullscreen-municipal-development.png'
+    finance_draft = 'fullscreen-finance-draft.png'
     buildings = 'fullscreen-buildings.png'
     governance = 'fullscreen-governance.png'
     governance_review = 'fullscreen-governance-review.png'
@@ -288,7 +288,7 @@ else {
             throw "Native GUI window mode is invalid: $($nativeResult.window_mode)"
         }
         if ([int]$nativeResult.required_capture_count -ne 5 -or [int]$nativeResult.capture_count -ne 5 -or @($nativeResult.captures).Count -ne 5) {
-            throw 'Native GUI result does not contain the complete four-state contract.'
+            throw 'Native GUI result does not contain the complete five-state contract.'
         }
         if (@($nativeResult.physical_size).Count -ne 2 -or @($nativeResult.logical_size).Count -ne 2 -or
             @($nativeResult.window_size).Count -ne 2 -or @($nativeResult.root_texture_size).Count -ne 2) {

@@ -37,7 +37,8 @@ func _run() -> void:
 	_check(audio_toggle_row != null and music_volume_row != null and sfx_volume_row != null, "audio controls expose named aligned rows")
 	if audio_toggle_row != null and music_volume_row != null and sfx_volume_row != null:
 		_check(audio_toggle_row.get_theme_constant("separation") == 12 and music_volume_row.get_theme_constant("separation") == 12 and sfx_volume_row.get_theme_constant("separation") == 12, "audio controls use the shared 12px horizontal rhythm")
-		_check(overlay.music_button.custom_minimum_size == Vector2(128.0, 44.0) and overlay.sfx_button.custom_minimum_size == Vector2(128.0, 44.0), "audio toggles share 44px targets and a common baseline")
+		_check(overlay.music_button.custom_minimum_size == Vector2(150.0, 44.0) and overlay.sfx_button.custom_minimum_size == Vector2(150.0, 44.0), "audio toggles share 44px targets and a common baseline")
+		_check((music_volume_row.get_child(0) as Label).custom_minimum_size == Vector2(196.0, 44.0) and (sfx_volume_row.get_child(0) as Label).custom_minimum_size == Vector2(196.0, 44.0), "English volume captions keep one complete aligned column")
 		_check(overlay.music_volume_label.custom_minimum_size == Vector2(72.0, 44.0) and overlay.sfx_volume_label.custom_minimum_size == Vector2(72.0, 44.0), "volume percentages use one fixed right column")
 	overlay.open()
 	await process_frame
@@ -68,6 +69,7 @@ func _run() -> void:
 	overlay.open()
 	await process_frame
 	_validate_mode_buttons(overlay, true, "after locale switch")
+	_validate_compact_layout(overlay, settings_panel, audio_toggle_row, music_volume_row, sfx_volume_row)
 	_check(
 		overlay.language_selector.selected_choice_id() == switched_locale,
 		"language selector reflects the switched locale"
@@ -109,6 +111,11 @@ func _validate_compact_layout(overlay, panel: Control, audio_toggle_row: HBoxCon
 func _validate_mode_buttons(overlay, dark_mode: bool, phase: String) -> void:
 	var selected_button: Button = overlay.dark_button if dark_mode else overlay.light_button
 	var idle_button: Button = overlay.light_button if dark_mode else overlay.dark_button
+	for button in [selected_button, idle_button, overlay.music_button, overlay.sfx_button]:
+		_check(
+			button.tooltip_text == button.text and not button.tooltip_text.is_empty(),
+			"%s clipped mode labels preserve their complete localized tooltip" % phase
+		)
 	for state in ["normal", "hover", "pressed", "hover_pressed"]:
 		_check(selected_button.has_theme_stylebox_override(state), "%s selected mode defines %s background" % [phase, state])
 		_check(idle_button.has_theme_stylebox_override(state), "%s idle mode defines %s background" % [phase, state])
