@@ -396,6 +396,10 @@ func _capture_states() -> void:
 	overlay.call("close_overlay")
 	scene.call("_next_month")
 	scene.set("security", 45)
+	# The report history includes the period just settled. Advance a second
+	# period before asking for an actual prior-month comparison; one settlement
+	# is still the first-period safety-line state.
+	scene.call("_next_month")
 	scene.call("_update_ui")
 	scene.call("_open_city_data")
 	await _settle()
