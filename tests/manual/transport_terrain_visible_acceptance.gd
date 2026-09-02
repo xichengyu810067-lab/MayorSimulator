@@ -197,6 +197,7 @@ func _validate_actual_main(prepared: Dictionary) -> bool:
 		return false
 	var projection: Dictionary = main.city_backdrop.debug_terrain_projection()
 	var visual_policy: Dictionary = projection.get("visual_policy", {})
+	var render_order: Dictionary = main.city_backdrop.debug_render_order() if main.city_backdrop.has_method("debug_render_order") else {}
 	if (
 		int(projection.get("tile_count", 0)) != 100
 		or str(Dictionary(projection.get("tiles", {})).get(str(lake_tile), {}).get("terrain_kind", "")) != "river_lake"
@@ -205,6 +206,11 @@ func _validate_actual_main(prepared: Dictionary) -> bool:
 		or not is_zero_approx(float(visual_policy.get("non_flat_fill_max_alpha", -1.0)))
 		or bool(visual_policy.get("persistent_terrain_overlay", true))
 		or str(visual_policy.get("interactive_grid_owner", "")) != "CityTileButton"
+		or int(render_order.get("background_texture_z_index", -1)) != 0
+		or not bool(render_order.get("background_texture_visible_in_tree", false))
+		or main.city_backdrop.get_parent() != main.map_stage
+		or int(render_order.get("backdrop_sibling_index", -1)) != 0
+		or not bool(render_order.get("precedes_all_later_canvas_siblings", false))
 	):
 		_fail("actual Main backdrop does not retain the natural map as the only persistent terrain art")
 		return false
@@ -276,6 +282,7 @@ func _result(prepared: Dictionary, capture: Dictionary) -> Dictionary:
 			"station_renderer": "CityTileButton",
 			"network_renderer": "TransportNetworkLayer",
 			"backdrop_renderer": "CityBackdrop",
+			"backdrop_render_order": main.city_backdrop.debug_render_order(),
 		},
 		"captures": [capture],
 	}

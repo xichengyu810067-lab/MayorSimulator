@@ -80,6 +80,15 @@ func _run() -> void:
 		_check(is_zero_approx(float(backdrop_policy.get("non_flat_fill_max_alpha", -1.0))), "city backdrop adds a persistent non-flat terrain fill")
 		_check(not bool(backdrop_policy.get("persistent_terrain_overlay", true)), "city backdrop adds persistent per-cell terrain decoration")
 		_check(str(backdrop_policy.get("interactive_grid_owner", "")) == "CityTileButton", "city backdrop does not delegate interactive grid drawing to CityTileButton")
+		_check(main.city_backdrop.has_method("debug_render_order"), "city backdrop exposes no render-order debug contract")
+		if main.city_backdrop.has_method("debug_render_order"):
+			var render_order: Dictionary = main.city_backdrop.debug_render_order()
+			_check(main.city_backdrop.get_parent() == main.map_stage, "city backdrop is not attached to the actual map stage")
+			_check(int(render_order.get("backdrop_sibling_index", -1)) == 0, "city backdrop is not the first map-stage visual layer")
+			_check(int(render_order.get("background_texture_z_index", -1)) == 0, "city backdrop texture falls behind the root background")
+			_check(bool(render_order.get("background_texture_visible_in_tree", false)), "city backdrop texture is hidden in the actual Main tree")
+			_check(Rect2(render_order.get("background_texture_rect", Rect2())).size.is_equal_approx(main.city_backdrop.size), "city backdrop texture does not cover the actual map stage")
+			_check(bool(render_order.get("precedes_all_later_canvas_siblings", false)), "city backdrop does not render before transport, tiles, vehicles, and NPCs")
 
 	# The map-first shell must not instantiate the old permanent tab/sidebar or
 	# fixed top-bar UI. Only floating HUD surfaces may sit above the map.

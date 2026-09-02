@@ -69,6 +69,13 @@ func _run() -> void:
 	var backdrop_debug: Dictionary = backdrop.call("debug_terrain_projection") if backdrop.has_method("debug_terrain_projection") else {}
 	_check(int(backdrop_debug.get("tile_count", 0)) == 100, "visible substrate does not project all 100 terrain-authority tiles")
 	_check(str(backdrop_debug.get("projection", "")) == "SquareGridLayout", "visible substrate is not bound to SquareGridLayout")
+	_check(backdrop.has_method("debug_render_order"), "visible substrate exposes no render-order debug contract")
+	if backdrop.has_method("debug_render_order"):
+		var render_order: Dictionary = backdrop.call("debug_render_order")
+		_check(bool(render_order.get("background_texture_present", false)), "natural background texture is absent")
+		_check(bool(render_order.get("background_texture_visible_in_tree", false)), "natural background texture is not visible in the active canvas tree")
+		_check(int(render_order.get("background_texture_z_index", -1)) == 0, "natural background texture is rendered behind the root background")
+		_check(Rect2(render_order.get("background_texture_rect", Rect2())).size.is_equal_approx(backdrop.size), "natural background texture does not cover the backdrop")
 	var visual_policy: Dictionary = backdrop_debug.get("visual_policy", {})
 	_check(str(visual_policy.get("base_asset", "")) == "city-map-background.png", "visible substrate does not retain the natural city map as its base asset")
 	_check(bool(visual_policy.get("background_primary", false)), "terrain hints replace the natural city map instead of remaining overlays")
