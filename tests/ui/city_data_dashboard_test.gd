@@ -100,6 +100,7 @@ func _validate_refresh_contract(dashboard) -> void:
 	_check(str(dashboard.monthly_data_service_charts["security"].get_meta("chart_render_mode", "")) == "donut", "monthly charts render as donut charts while preserving their public API")
 	await _validate_baseline_to_target_animation(dashboard.monthly_data_service_charts["security"])
 	_validate_safety_warning_streaks(dashboard)
+	_validate_current_period_history_semantics(dashboard)
 
 	dashboard.restart_animations()
 	var restarted_count := 0
@@ -139,6 +140,36 @@ func _validate_safety_warning_streaks(dashboard) -> void:
 	_check(str(reset_warning.get_meta("safety_warning_severity", "")) == "caution", "a safe intervening month resets the warning streak")
 
 
+func _validate_current_period_history_semantics(dashboard) -> void:
+	var snapshot := _snapshot(false)
+	snapshot["metrics"]["security"] = 45
+	snapshot["monthly_report_history"] = [
+		_security_history_snapshot(72, 1),
+		_security_history_snapshot(45, 2),
+	]
+	snapshot["history_includes_current"] = true
+	snapshot["current_period_index"] = 2
+	snapshot["has_previous_month"] = true
+	snapshot["previous_month"] = _security_history_snapshot(45, 2)
+	dashboard.refresh(snapshot)
+	var chart = dashboard.monthly_data_service_charts["security"]
+	_check(is_equal_approx(chart.baseline_value(), 72.0), "a history tail marked current compares against the true prior period")
+	_check(chart.safety_warning_label.text.contains("連續 1 月"), "the current unsafe period is counted exactly once")
+
+	var gap_snapshot := _snapshot(false)
+	gap_snapshot["metrics"]["security"] = 45
+	gap_snapshot["monthly_report_history"] = [
+		_security_history_snapshot(45, 1),
+		_security_history_snapshot(45, 3),
+	]
+	gap_snapshot["history_includes_current"] = true
+	gap_snapshot["current_period_index"] = 3
+	dashboard.refresh(gap_snapshot)
+	chart = dashboard.monthly_data_service_charts["security"]
+	_check(is_equal_approx(chart.baseline_value(), 60.0), "a missing prior period falls back to the safety-line baseline")
+	_check(chart.safety_warning_label.text.contains("連續 1 月"), "a period gap interrupts the unsafe warning streak")
+
+
 func _refresh_security_warning(dashboard, history: Array, current_security: int):
 	var snapshot := _snapshot(false)
 	snapshot["metrics"]["security"] = current_security
@@ -151,8 +182,8 @@ func _refresh_security_warning(dashboard, history: Array, current_security: int)
 	return dashboard.monthly_data_service_charts["security"]
 
 
-func _security_history_snapshot(value: int) -> Dictionary:
-	return {
+func _security_history_snapshot(value: int, period_index: int = 0) -> Dictionary:
+	var snapshot := {
 		"security": value,
 		"coverage_rate": 100.0,
 		"population_rate": 0.0,
@@ -163,6 +194,9 @@ func _security_history_snapshot(value: int) -> Dictionary:
 		"education": 70,
 		"healthcare": 70,
 	}
+	if period_index > 0:
+		snapshot["period_index"] = period_index
+	return snapshot
 
 
 func _validate_hidden_tab_chart_redraw(dashboard) -> void:

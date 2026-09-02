@@ -3085,10 +3085,20 @@ func _illustrated_section_title(icon_key: String, title_text: String) -> HBoxCon
 func _refresh_city_data_dashboard(finance_snapshot: Dictionary) -> void:
 	if city_data_dashboard == null:
 		return
+	# CityReportHistoryService appends the freshly settled period before Main
+	# refreshes the dashboard. Mark that tail explicitly as the current period so
+	# comparisons and warning streaks only consume completed prior periods.
+	var current_period_index := 0
+	if not monthly_report_history.is_empty():
+		var current_snapshot: Variant = monthly_report_history[monthly_report_history.size() - 1]
+		if current_snapshot is Dictionary:
+			current_period_index = int((current_snapshot as Dictionary).get("period_index", 0))
 	city_data_dashboard.refresh({
-		"has_previous_month": not monthly_report_history.is_empty(),
+		"has_previous_month": monthly_report_history.size() >= 2,
 		"previous_month": city_report_history_service.latest_monthly_report_snapshot(),
 		"monthly_report_history": monthly_report_history.duplicate(true),
+		"history_includes_current": not monthly_report_history.is_empty(),
+		"current_period_index": current_period_index,
 		"population": population,
 		"month_start_population": month_start_population,
 		"satisfaction": total_satisfaction,

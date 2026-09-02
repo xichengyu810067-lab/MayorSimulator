@@ -287,6 +287,9 @@ func _run() -> void:
 				previous_snapshot["coverage_rate"] = 125.0
 				previous_snapshot["security"] = 72
 				main.monthly_report_history.append(previous_snapshot)
+				var current_snapshot: Dictionary = main._make_monthly_report_snapshot(900, 800, 1.0)
+				current_snapshot["security"] = 45
+				main.monthly_report_history.append(current_snapshot)
 				main.security = 45
 				main._update_ui()
 				_check(is_equal_approx(main.monthly_data_kpi_charts["net"].baseline_value(), 125.0), "second-month finance chart compares against last month")
@@ -296,7 +299,7 @@ func _run() -> void:
 				_check(main.monthly_data_service_charts["security"].difference_label.text.contains("上月"), "second-month chart states its prior-month comparison")
 				_check(str(main.monthly_data_service_charts["security"].get_meta("chart_render_mode", "")) == "donut", "Main city data renders its monthly comparisons as donut charts")
 				main.monthly_report_history.clear()
-				for _month in 2:
+				for _month in 3:
 					var unsafe_snapshot: Dictionary = main._make_monthly_report_snapshot(1000, 800, 1.5)
 					unsafe_snapshot["security"] = 45
 					main.monthly_report_history.append(unsafe_snapshot)

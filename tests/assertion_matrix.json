@@ -69,6 +69,7 @@
     { "id": "terrain_navigation_blocker", "script": "res://tests/ui/terrain_navigation_blocker_test.gd", "success_pattern": "Terrain navigation blocker test passed." },
     { "id": "city_metric_card", "script": "res://tests/ui/city_metric_card_test.gd", "success_pattern": "City metric card test passed." },
     { "id": "city_data_dashboard", "script": "res://tests/ui/city_data_dashboard_test.gd", "success_pattern": "City data dashboard test passed." },
+    { "id": "monthly_dashboard_period_semantics", "script": "res://tests/integration/monthly_dashboard_period_semantics_test.gd", "success_pattern": "MONTHLY_DASHBOARD_PERIOD_SEMANTICS_TEST_PASSED", "timeout_seconds": 180 },
     { "id": "npc_actor_rig_contract", "script": "res://tests/ui/npc_actor_rig_contract_test.gd", "success_pattern": "NPC rig contract passed." },
     { "id": "npc_authority_and_construction_sync", "script": "res://tests/ui/npc_authority_and_construction_sync_test.gd", "success_pattern": "NPC authority/construction sync passed." },
     { "id": "npc_dialogue_card", "script": "res://tests/ui/npc_dialogue_card_test.gd", "success_pattern": "NPC dialogue card test passed." },
