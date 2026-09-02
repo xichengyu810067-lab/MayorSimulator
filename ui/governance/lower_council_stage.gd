@@ -8,6 +8,8 @@ const BACKGROUND_PATH := "res://assets/images/ui/legislative_chamber_v1/legislat
 const MEMBER_PATH := "res://assets/images/characters/npc/npc-council-member.png"
 const SEAT_COUNT := 30
 const MAJORITY_THRESHOLD := 16
+const TEXT_COLOR := Color("172033")
+const MUTED_TEXT_COLOR := Color("334155")
 
 var response_buttons: Array[Button] = []
 var confirm_button: Button
@@ -36,7 +38,7 @@ var _layout_columns := 10
 
 func _init() -> void:
 	name = "LowerCouncilStage"
-	custom_minimum_size = Vector2(0, 640)
+	custom_minimum_size = Vector2(0, 580)
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	add_theme_constant_override("separation", 10)
 	_build_stage()
@@ -118,13 +120,14 @@ func _build_stage() -> void:
 	_status_label = Label.new()
 	_status_label.name = "LowerCouncilStatus"
 	_status_label.add_theme_font_size_override("font_size", 20)
+	_status_label.add_theme_color_override("font_color", TEXT_COLOR)
 	_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_status_label.custom_minimum_size = Vector2(0, 34)
 	add_child(_status_label)
 
 	_scene = Control.new()
 	_scene.name = "LowerCouncilChamberVisual"
-	_scene.custom_minimum_size = Vector2(720, 350)
+	_scene.custom_minimum_size = Vector2(720, 300)
 	_scene.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_scene.clip_contents = true
 	add_child(_scene)
@@ -154,11 +157,11 @@ func _build_stage() -> void:
 	for index in SEAT_COUNT:
 		var seat := PanelContainer.new()
 		seat.name = "LowerCouncilSeat_%02d" % (index + 1)
-		seat.custom_minimum_size = Vector2(54, 66)
+		seat.custom_minimum_size = Vector2(46, 52)
 		seat.tooltip_text = L10n.text("下議院第 %d 席") % (index + 1)
 		var portrait := TextureRect.new()
 		portrait.texture = ResourceLoader.load(MEMBER_PATH, "Texture2D") as Texture2D
-		portrait.custom_minimum_size = Vector2(44, 56)
+		portrait.custom_minimum_size = Vector2(38, 44)
 		portrait.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		portrait.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -171,8 +174,9 @@ func _build_stage() -> void:
 	_question_label = Label.new()
 	_question_label.name = "LowerCouncilPrimaryQuestion"
 	_question_label.add_theme_font_size_override("font_size", 20)
+	_question_label.add_theme_color_override("font_color", TEXT_COLOR)
 	_question_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_question_label.custom_minimum_size = Vector2(0, 50)
+	_question_label.custom_minimum_size = Vector2(0, 42)
 	add_child(_question_label)
 
 	_response_row = HBoxContainer.new()
@@ -183,15 +187,16 @@ func _build_stage() -> void:
 	_preview_label = Label.new()
 	_preview_label.name = "LowerCouncilReadonlyPreview"
 	_preview_label.add_theme_font_size_override("font_size", 18)
+	_preview_label.add_theme_color_override("font_color", MUTED_TEXT_COLOR)
 	_preview_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_preview_label.custom_minimum_size = Vector2(0, 42)
+	_preview_label.custom_minimum_size = Vector2(0, 34)
 	add_child(_preview_label)
 
 	confirm_button = Button.new()
 	confirm_button.name = "LowerCouncilConfirmResponse"
 	confirm_button.text = L10n.text("確認答詢並進行正式表決")
 	confirm_button.set_meta("semantic_label", confirm_button.text)
-	confirm_button.custom_minimum_size = Vector2(0, 52)
+	confirm_button.custom_minimum_size = Vector2(0, 48)
 	confirm_button.add_theme_font_size_override("font_size", 19)
 	confirm_button.disabled = true
 	confirm_button.pressed.connect(_on_confirm_pressed)
@@ -270,7 +275,7 @@ func _rebuild_response_buttons(options: Array) -> void:
 		button.toggle_mode = true
 		button.button_group = group
 		button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		button.custom_minimum_size = Vector2(220, 88)
+		button.custom_minimum_size = Vector2(220, 74)
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		button.add_theme_font_size_override("font_size", 17)
 		button.pressed.connect(_on_response_pressed.bind(response_id))
@@ -296,7 +301,7 @@ func _layout_scene() -> void:
 		return
 	_layout_columns = 6 if _scene.size.x < 800.0 else 10
 	_seat_grid.columns = _layout_columns
-	var seat_minimum := Vector2(48, 52) if _layout_columns == 6 else Vector2(54, 66)
+	var seat_minimum := Vector2(42, 48) if _layout_columns == 6 else Vector2(46, 52)
 	for seat: PanelContainer in _seats:
 		seat.custom_minimum_size = seat_minimum
 	_seat_grid.position = Vector2(_scene.size.x * 0.06, _scene.size.y * 0.08)

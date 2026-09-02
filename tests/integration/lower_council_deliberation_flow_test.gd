@@ -98,6 +98,7 @@ func _test_main_stage_and_single_autosave() -> void:
 	var stage = main.lower_council_stage
 	var signature: Dictionary = stage.debug_signature()
 	_check(bool(signature.get("visible", false)), "governance page shows the actual lower-council stage while awaiting response")
+	_check(not main.governance_catalog_title.visible and not main.governance_status_tabs.visible, "active hearing replaces the legacy policy catalog in the first viewport")
 	_check(bool(signature.get("background_loaded", false)), "stage loads the chamber background directly without importer metadata")
 	_check(int(signature.get("seat_count", 0)) == 30 and int(signature.get("majority_threshold", 0)) == 16, "stage displays authoritative 30 seats and threshold 16")
 	_check(int(signature.get("rendered_seat_count", 0)) == 30 and bool(signature.get("authority_contract_valid", false)), "stage validates authority values against its 30-seat visual contract")

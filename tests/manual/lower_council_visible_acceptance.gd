@@ -169,6 +169,8 @@ func _validate_hearing(signature: Dictionary) -> bool:
 		or str(signature.get("selected_response_id", "")).is_empty()
 		or not bool(signature.get("readonly_preview", false))
 		or bool(signature.get("confirm_disabled", true))
+		or main.governance_catalog_title.visible
+		or main.governance_status_tabs.visible
 	):
 		_fail("authoritative hearing/preview contract failed: %s" % signature)
 		return false

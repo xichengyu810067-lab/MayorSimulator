@@ -225,6 +225,9 @@ var governance_status_sections: Dictionary = {}
 var governance_status_empty_labels: Dictionary = {}
 var governance_bill_cards: Dictionary = {}
 var governance_policy_cards: Dictionary = {}
+var governance_catalog_title: Control
+var governance_catalog_legend: Control
+var governance_force_panel: Control
 var lower_council_stage
 var settings_button: Button
 var municipal_button: Button
@@ -1885,7 +1888,8 @@ func _build_bill_tab() -> ScrollContainer:
 	content.add_theme_constant_override("separation", 10)
 	scroll.add_child(content)
 
-	content.add_child(_illustrated_section_title("governance", "政策與法案"))
+	governance_catalog_title = _illustrated_section_title("governance", "政策與法案")
+	content.add_child(governance_catalog_title)
 	var legend := HFlowContainer.new()
 	legend.name = "GovernanceTagLegend"
 	legend.add_theme_constant_override("separation", 8)
@@ -1895,6 +1899,7 @@ func _build_bill_tab() -> ScrollContainer:
 	legend_note.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	legend.add_child(legend_note)
 	content.add_child(legend)
+	governance_catalog_legend = legend
 
 	bill_status_label = _label("", 16, _theme_text())
 	bill_status_label.name = "GovernanceStatusSummary"
@@ -1971,6 +1976,7 @@ func _build_bill_tab() -> ScrollContainer:
 
 	var force_panel := _panel(_theme_panel_alt(), 10, 14)
 	force_panel.name = "GovernanceForcePanel"
+	governance_force_panel = force_panel
 	var force_row := HBoxContainer.new()
 	force_row.add_theme_constant_override("separation", 14)
 	force_panel.add_child(force_row)
@@ -2123,6 +2129,16 @@ func _refresh_lower_council_stage() -> void:
 	if lower_council_stage == null or vertical_slice == null or vertical_slice.governance == null:
 		return
 	var pending: Dictionary = vertical_slice.governance.pending_bill
+	var hearing_active := str(pending.get("status", "")) == "awaiting_mayor_response"
+	for catalog_control in [
+		governance_catalog_title,
+		governance_catalog_legend,
+		bill_status_label,
+		governance_status_tabs,
+		governance_force_panel,
+	]:
+		if is_instance_valid(catalog_control):
+			(catalog_control as Control).visible = not hearing_active
 	var bill_id := str(pending.get("bill_id", ""))
 	var definition: Dictionary = vertical_slice.governance.bill_definitions.get(bill_id, {})
 	var latest_decision: Dictionary = {}
@@ -6484,6 +6500,9 @@ func _rebuild_ui() -> void:
 	governance_status_empty_labels.clear()
 	governance_bill_cards.clear()
 	governance_policy_cards.clear()
+	governance_catalog_title = null
+	governance_catalog_legend = null
+	governance_force_panel = null
 	lower_council_stage = null
 	map_stage = null
 	city_backdrop = null
