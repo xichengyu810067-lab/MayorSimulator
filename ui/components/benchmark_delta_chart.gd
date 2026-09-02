@@ -1,7 +1,7 @@
 class_name BenchmarkDeltaChart
 extends VBoxContainer
 
-const DEFAULT_MINIMUM_SIZE := Vector2(0, 124)
+const DEFAULT_MINIMUM_SIZE := Vector2(0, 138)
 
 var current_label: Label
 var difference_label: Label
@@ -21,8 +21,9 @@ var _good_above := true
 var _safety_enabled := true
 var _dark_mode := false
 var _animation_duration := 0.82
-var _animation: Tween
+var _animation_elapsed := 0.0
 var _pulse_phase := 0.0
+var _warning_severity := ""
 
 
 func _init() -> void:
@@ -61,6 +62,9 @@ func set_chart(data: Dictionary, animate: bool = true) -> void:
 		difference_label.text = _fallback_difference_text()
 	difference_label.tooltip_text = difference_label.text
 	var safety_warning_text := str(data.get("safety_warning_text", ""))
+	_warning_severity = str(data.get("safety_warning_severity", "caution" if not _is_safe(_target_value) else ""))
+	if _warning_severity not in ["caution", "critical"]:
+		_warning_severity = ""
 	safety_warning_label.text = safety_warning_text
 	safety_warning_label.visible = _safety_enabled and not _is_safe(_target_value) and not safety_warning_text.is_empty()
 	safety_warning_label.tooltip_text = safety_warning_text
@@ -76,6 +80,8 @@ func set_chart(data: Dictionary, animate: bool = true) -> void:
 	set_meta("difference", _target_value - _baseline_value)
 	set_meta("good_above", _good_above)
 	set_meta("safety_warning_active", _safety_enabled and not _is_safe(_target_value))
+	set_meta("safety_warning_severity", _warning_severity)
+	set_meta("chart_render_mode", "donut")
 	_apply_palette()
 	if animate and is_inside_tree():
 		restart_animation()
@@ -88,6 +94,7 @@ func set_chart(data: Dictionary, animate: bool = true) -> void:
 func restart_animation() -> void:
 	_stop_animation()
 	_display_value = _baseline_value
+	_animation_elapsed = 0.0
 	set_meta("animation_active", true)
 	queue_redraw()
 	if not is_inside_tree():
@@ -95,13 +102,7 @@ func restart_animation() -> void:
 		set_meta("animation_active", false)
 		queue_redraw()
 		return
-	_animation = create_tween()
-	_animation.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	_animation.tween_method(_set_display_value, _baseline_value, _target_value, _animation_duration)
-	_animation.finished.connect(func() -> void:
-		set_meta("animation_active", false)
-		set_process(not _is_safe(_target_value))
-	)
+	set_process(true)
 
 
 func set_dark_mode(enabled: bool) -> void:
@@ -158,6 +159,7 @@ func _build_content() -> void:
 	safety_warning_label = Label.new()
 	safety_warning_label.name = "BenchmarkSafetyWarning"
 	safety_warning_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	safety_warning_label.custom_minimum_size = Vector2(0, 18)
 	safety_warning_label.add_theme_font_size_override("font_size", 14)
 	safety_warning_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	safety_warning_label.visible = false
@@ -165,7 +167,7 @@ func _build_content() -> void:
 
 	plot_area = Control.new()
 	plot_area.name = "BenchmarkPlot"
-	plot_area.custom_minimum_size = Vector2(0, 50)
+	plot_area.custom_minimum_size = Vector2(0, 62)
 	plot_area.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	plot_area.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(plot_area)
@@ -198,50 +200,55 @@ func _legend_label(label_name: String, alignment: HorizontalAlignment) -> Label:
 func _draw() -> void:
 	if plot_area == null or plot_area.size.x <= 1.0:
 		return
-	var plot_rect := Rect2(plot_area.position + Vector2(3, 10), Vector2(maxf(1.0, plot_area.size.x - 6.0), 28))
-	var baseline_x := _value_x(_baseline_value, plot_rect)
-	var safety_x := _value_x(_safety_value, plot_rect)
-	var current_x := _value_x(_display_value, plot_rect)
-	var unsafe_color := Color("71342e") if _dark_mode else Color("f5c9c0")
-	var safe_color := Color("205a4b") if _dark_mode else Color("bce6d4")
+	var plot_rect := Rect2(plot_area.position + Vector2(3, 2), Vector2(maxf(1.0, plot_area.size.x - 6.0), maxf(1.0, plot_area.size.y - 4.0)))
+	var center := plot_rect.get_center()
+	var radius := maxf(10.0, minf(plot_rect.size.x, plot_rect.size.y) * 0.5 - 13.0)
+	var start_angle := -PI * 0.5
+	var baseline_angle := _value_angle(_baseline_value, start_angle)
+	var safety_angle := _value_angle(_safety_value, start_angle)
+	var current_angle := _value_angle(_display_value, start_angle)
 	var track_color := Color("2b3e49") if _dark_mode else Color("d8e1e5")
 	var baseline_color := Color("ffd166") if _dark_mode else Color("9a6500")
 	var safety_color := Color("ff8f7b") if _dark_mode else Color("b83228")
-	var safe_side := Rect2(Vector2(safety_x, plot_rect.position.y), Vector2(plot_rect.end.x - safety_x, plot_rect.size.y))
-	var unsafe_side := Rect2(plot_rect.position, Vector2(safety_x - plot_rect.position.x, plot_rect.size.y))
-	if not _good_above:
-		var swapped := safe_side
-		safe_side = unsafe_side
-		unsafe_side = swapped
-	draw_rect(plot_rect, track_color, true)
-	draw_rect(unsafe_side, unsafe_color, true)
-	draw_rect(safe_side, safe_color, true)
-	for fraction in [0.25, 0.5, 0.75]:
-		var tick_x := plot_rect.position.x + plot_rect.size.x * float(fraction)
-		draw_line(Vector2(tick_x, plot_rect.position.y + 3), Vector2(tick_x, plot_rect.end.y - 3), Color(1, 1, 1, 0.28), 1.0)
-	if _safety_enabled:
-		draw_line(Vector2(safety_x, plot_rect.position.y - 5), Vector2(safety_x, plot_rect.end.y + 5), safety_color, 2.0)
-	draw_line(Vector2(baseline_x, plot_rect.position.y - 7), Vector2(baseline_x, plot_rect.end.y + 7), baseline_color, 3.0)
+	draw_arc(center, radius, start_angle, start_angle + TAU, 56, track_color, 10.0, true)
 	var result_color := Color("4fd1a1") if _dark_mode else Color("087f5b")
 	if not _is_safe(_display_value):
 		result_color = Color("ff8f7b") if _dark_mode else Color("c83f2b")
-	var segment_start := minf(baseline_x, current_x)
-	var segment_width := maxf(3.0, absf(current_x - baseline_x))
-	var segment_rect := Rect2(Vector2(segment_start, plot_rect.position.y + 8), Vector2(segment_width, 12))
-	draw_rect(segment_rect, result_color, true)
+	draw_arc(center, radius, start_angle, current_angle, 56, result_color, 10.0, true)
+	# The outer gold arc/marker is the comparison baseline; the red tick remains
+	# an independent safety guide even when both values happen to coincide.
+	draw_arc(center, radius + 8.0, start_angle, baseline_angle, 56, baseline_color, 2.0, true)
+	draw_line(_polar_point(center, radius - 7.0, baseline_angle), _polar_point(center, radius + 10.0, baseline_angle), baseline_color, 3.0, true)
+	if _safety_enabled:
+		draw_arc(center, radius + 14.0, safety_angle - 0.06, safety_angle + 0.06, 8, safety_color, 3.0, true)
+		draw_line(_polar_point(center, radius + 10.0, safety_angle), _polar_point(center, radius + 18.0, safety_angle), safety_color, 2.0, true)
 	var pulse := 1.0 + (sin(_pulse_phase) + 1.0) * 1.5 if not _is_safe(_display_value) else 1.0
-	draw_circle(Vector2(current_x, plot_rect.get_center().y), 9.0 + pulse, Color(result_color, 0.18))
-	draw_circle(Vector2(current_x, plot_rect.get_center().y), 7.0, result_color)
-	draw_arc(Vector2(current_x, plot_rect.get_center().y), 7.0, 0.0, TAU, 24, Color.WHITE, 2.0)
+	var current_marker := _polar_point(center, radius, current_angle)
+	draw_circle(current_marker, 7.0 + pulse, Color(result_color, 0.18))
+	draw_circle(current_marker, 5.0, result_color)
+	draw_arc(current_marker, 5.0, 0.0, TAU, 16, Color.WHITE, 1.5, true)
 
 
 func _process(delta: float) -> void:
+	if bool(get_meta("animation_active", false)):
+		_animation_elapsed = minf(_animation_elapsed + delta, _animation_duration)
+		var progress := clampf(_animation_elapsed / _animation_duration, 0.0, 1.0)
+		var eased_progress := 1.0 - pow(1.0 - progress, 3.0)
+		_set_display_value(lerpf(_baseline_value, _target_value, eased_progress))
+		if is_equal_approx(progress, 1.0):
+			_set_display_value(_target_value)
+			set_meta("animation_active", false)
+			set_process(not _is_safe(_target_value))
 	_pulse_phase = fmod(_pulse_phase + delta * 4.0, TAU)
 	queue_redraw()
 
 
-func _value_x(value: float, rect: Rect2) -> float:
-	return rect.position.x + inverse_lerp(_minimum_value, _maximum_value, clampf(value, _minimum_value, _maximum_value)) * rect.size.x
+func _value_angle(value: float, start_angle: float) -> float:
+	return start_angle + TAU * inverse_lerp(_minimum_value, _maximum_value, clampf(value, _minimum_value, _maximum_value))
+
+
+func _polar_point(center: Vector2, radius: float, angle: float) -> Vector2:
+	return center + Vector2(cos(angle), sin(angle)) * radius
 
 
 func _is_safe(value: float) -> bool:
@@ -256,9 +263,7 @@ func _set_display_value(value: float) -> void:
 
 
 func _stop_animation() -> void:
-	if _animation != null and _animation.is_valid():
-		_animation.kill()
-	_animation = null
+	_animation_elapsed = 0.0
 	set_meta("animation_active", false)
 	set_process(false)
 
@@ -273,7 +278,10 @@ func _apply_palette() -> void:
 		difference_color = Color("ffad9f") if _dark_mode else Color("a52d20")
 	current_label.add_theme_color_override("font_color", text_color)
 	difference_label.add_theme_color_override("font_color", difference_color)
-	safety_warning_label.add_theme_color_override("font_color", Color("ffad9f") if _dark_mode else Color("a52d20"))
+	var warning_color := Color("ffd166") if _dark_mode else Color("9a6500")
+	if _warning_severity == "critical":
+		warning_color = Color("ff8f7b") if _dark_mode else Color("a52d20")
+	safety_warning_label.add_theme_color_override("font_color", warning_color)
 	minimum_label.add_theme_color_override("font_color", muted_color)
 	maximum_label.add_theme_color_override("font_color", muted_color)
 	baseline_label.add_theme_color_override("font_color", Color("ffd166") if _dark_mode else Color("805300"))

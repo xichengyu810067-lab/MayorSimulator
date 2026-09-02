@@ -294,6 +294,14 @@ func _run() -> void:
 				_check(is_equal_approx(main.monthly_data_service_charts["security"].safety_value(), 60.0), "second-month service chart keeps its independent safety line")
 				_check(main.monthly_data_service_charts["security"].has_safety_warning(), "second-month comparison still raises a below-safety warning")
 				_check(main.monthly_data_service_charts["security"].difference_label.text.contains("上月"), "second-month chart states its prior-month comparison")
+				_check(str(main.monthly_data_service_charts["security"].get_meta("chart_render_mode", "")) == "donut", "Main city data renders its monthly comparisons as donut charts")
+				main.monthly_report_history.clear()
+				for _month in 2:
+					var unsafe_snapshot: Dictionary = main._make_monthly_report_snapshot(1000, 800, 1.5)
+					unsafe_snapshot["security"] = 45
+					main.monthly_report_history.append(unsafe_snapshot)
+				main._update_ui()
+				_check(str(main.monthly_data_service_charts["security"].get_meta("safety_warning_severity", "")) == "critical", "Main forwards existing monthly history so the third unsafe month turns critical")
 				main.monthly_report_history.clear()
 				main.security = original_security
 				main._update_ui()

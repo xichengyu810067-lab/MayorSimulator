@@ -3037,6 +3037,7 @@ func _refresh_city_data_dashboard(finance_snapshot: Dictionary) -> void:
 	city_data_dashboard.refresh({
 		"has_previous_month": not monthly_report_history.is_empty(),
 		"previous_month": city_report_history_service.latest_monthly_report_snapshot(),
+		"monthly_report_history": monthly_report_history.duplicate(true),
 		"population": population,
 		"month_start_population": month_start_population,
 		"satisfaction": total_satisfaction,
