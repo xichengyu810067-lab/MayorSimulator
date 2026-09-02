@@ -167,8 +167,11 @@ const DATA_ICONS := {
 # they never reserve layout space away from the map.
 const UI_MIN_FONT_SIZE := 19
 const UI_CONTROL_FONT_SIZE := 21
-const UI_HUD_BUTTON_SIZE := 88
-const UI_STATUS_HEIGHT := 58
+const UI_HUD_BUTTON_SIZE := 72
+const UI_STATUS_HEIGHT := 72
+const UI_HUD_EDGE_INSET := 12.0
+const UI_HUD_GAP := 12
+const UI_HUD_PANEL_PADDING := 12
 const UI_MAP_SAFE_TOP_PADDING := 10.0
 const UI_MAP_VISUAL_TOP_MARGIN := 18.0
 const TOAST_SUCCESS_TEXT := Color(0.68, 1.0, 0.80)
@@ -990,17 +993,20 @@ func _build_compact_status_hud() -> PanelContainer:
 	panel.anchor_top = 0.0
 	panel.anchor_right = 1.0
 	panel.anchor_bottom = 0.0
-	panel.offset_left = 10.0
-	panel.offset_top = 10.0
-	panel.offset_right = -10.0
-	panel.offset_bottom = 10.0 + UI_STATUS_HEIGHT
+	panel.offset_left = UI_HUD_EDGE_INSET
+	panel.offset_top = UI_HUD_EDGE_INSET
+	panel.offset_right = -UI_HUD_EDGE_INSET
+	panel.offset_bottom = UI_HUD_EDGE_INSET + UI_STATUS_HEIGHT
 
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 5)
+	row.name = "StatusMetricRow"
+	row.add_theme_constant_override("separation", 8)
 	panel.add_child(row)
 
-	var title := _label("CivicTale: Voice of Promise", 20, Color("fff4d7") if is_dark_mode else Color("35291f"))
-	title.custom_minimum_size = Vector2(164, 0)
+	var title := _label("城諾之音", 20, Color("fff4d7") if is_dark_mode else Color("35291f"))
+	title.name = "StatusBrand"
+	title.custom_minimum_size = Vector2(150, 0)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.tooltip_text = L10n.text("療癒城市治理模擬")
 	row.add_child(title)
 
@@ -1098,22 +1104,25 @@ func _build_placement_banner() -> PanelContainer:
 	return panel
 
 func _build_action_dock() -> PanelContainer:
-	var panel := _panel(Color(0.04, 0.12, 0.19, 0.94), 12, 7)
+	var panel := _panel(Color(0.04, 0.12, 0.19, 0.94), 12, UI_HUD_PANEL_PADDING)
 	panel.name = "ActionDock"
 	panel.z_index = 3100
 	panel.anchor_left = 1.0
 	panel.anchor_top = 1.0
 	panel.anchor_right = 1.0
 	panel.anchor_bottom = 1.0
-	panel.offset_left = -310.0
-	panel.offset_top = -112.0
-	panel.offset_right = -10.0
-	panel.offset_bottom = -10.0
+	panel.offset_left = -276.0
+	panel.offset_top = -108.0
+	panel.offset_right = -UI_HUD_EDGE_INSET
+	panel.offset_bottom = -UI_HUD_EDGE_INSET
 
 	var grid := GridContainer.new()
+	grid.name = "ActionButtonRow"
 	grid.columns = 3
-	grid.add_theme_constant_override("h_separation", 6)
-	grid.add_theme_constant_override("v_separation", 6)
+	grid.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	grid.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	grid.add_theme_constant_override("h_separation", UI_HUD_GAP)
+	grid.add_theme_constant_override("v_separation", UI_HUD_GAP)
 	panel.add_child(grid)
 
 	municipal_button = _hud_picture_button("municipal", "市政", "開啟市政中心：建築、政策法案、藍圖與財政", "primary")
@@ -1123,7 +1132,7 @@ func _build_action_dock() -> PanelContainer:
 	settings_button.name = "SettingsButton"
 	settings_button.pressed.connect(Callable(self, "_open_settings"))
 	grid.add_child(settings_button)
-	exit_button = _hud_picture_button("exit", "離開", "離開 CivicTale: Voice of Promise", "danger")
+	exit_button = _hud_picture_button("exit", "離開", "離開城諾之音", "danger")
 	exit_button.name = "ExitButton"
 	exit_button.pressed.connect(Callable(self, "_request_application_quit"))
 	grid.add_child(exit_button)
@@ -1139,14 +1148,14 @@ func _hud_picture_button(icon_key: String, label_text: String, tooltip: String, 
 	button.set_meta("semantic_label", label_text)
 	var stack := VBoxContainer.new()
 	stack.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	stack.offset_left = 3
-	stack.offset_top = 2
-	stack.offset_right = -3
-	stack.offset_bottom = -2
-	stack.add_theme_constant_override("separation", -2)
+	stack.offset_left = 8
+	stack.offset_top = 8
+	stack.offset_right = -8
+	stack.offset_bottom = -8
+	stack.add_theme_constant_override("separation", 0)
 	stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	button.add_child(stack)
-	var picture := _icon_texture_rect(icon_key, Vector2(0, 32))
+	var picture := _icon_texture_rect(icon_key, Vector2(0, 28))
 	picture.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	stack.add_child(picture)
 	var caption := Label.new()
@@ -1155,8 +1164,9 @@ func _hud_picture_button(icon_key: String, label_text: String, tooltip: String, 
 	caption.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	caption.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	caption.max_lines_visible = 2
-	caption.custom_minimum_size = Vector2(0, 34)
+	caption.custom_minimum_size = Vector2(0, 26)
 	caption.clip_text = true
+	caption.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	caption.add_theme_font_size_override("font_size", 18)
 	caption.add_theme_color_override("font_color", Color.WHITE if variant in ["primary", "danger"] else _theme_text())
 	caption.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -1492,10 +1502,21 @@ func _toggle_report_details() -> void:
 
 func _header_metric_card(key: String) -> PanelContainer:
 	var card := PanelContainer.new()
+	card.name = "StatusMetric_%s" % key.capitalize()
 	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var minimum_widths := {
+		"month": 92.0,
+		"funds": 116.0,
+		"population": 108.0,
+		"satisfaction": 108.0,
+		"grievance": 108.0,
+		"trust": 100.0,
+		"score": 96.0,
+		"rating": 122.0,
+	}
+	card.custom_minimum_size = Vector2(float(minimum_widths.get(key, 100.0)), 0)
 	if key == "rating":
-		card.custom_minimum_size = Vector2(145, 0)
-		card.size_flags_stretch_ratio = 1.25
+		card.size_flags_stretch_ratio = 1.15
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color("493b32") if is_dark_mode else Color("fffbef")
 	style.border_color = Color("8d7055") if is_dark_mode else Color("b38a55")
@@ -1512,10 +1533,14 @@ func _header_metric_card(key: String) -> PanelContainer:
 	var visual_row := HBoxContainer.new()
 	visual_row.add_theme_constant_override("separation", 3)
 	stack.add_child(visual_row)
-	visual_row.add_child(_icon_texture_rect(key, Vector2(27, 27)))
+	visual_row.add_child(_icon_texture_rect(key, Vector2(24, 24)))
 	var item := _label("", 14, Color("fff4d7") if is_dark_mode else Color("35291f"))
 	item.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	item.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	item.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	item.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	item.max_lines_visible = 2
+	item.clip_text = false
+	item.custom_minimum_size = Vector2(0, 40)
 	item.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	labels[key] = item
 	visual_row.add_child(item)

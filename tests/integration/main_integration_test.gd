@@ -146,13 +146,20 @@ func _run() -> void:
 		main.exit_button,
 	]
 	_check(compact_actions.size() == 3, "ActionDock keeps only municipal, settings, and exit actions")
+	var previous_action_rect := Rect2()
 	for action_button in compact_actions:
 		_check(action_button != null, "every main/context/exit action has a compact button")
 		if action_button == null:
 			continue
 		var action_name := str(action_button.get_meta("semantic_label", action_button.text))
-		_check(action_button.custom_minimum_size == Vector2(88.0, 88.0), "'%s' declares a readable 88x88 click target" % action_name)
+		_check(action_button.custom_minimum_size == Vector2(72.0, 72.0), "'%s' declares a readable 72x72 click target" % action_name)
 		_check(absf(action_button.size.x - action_button.size.y) <= 2.0, "'%s' renders as a square button" % action_name)
+		var action_rect: Rect2 = (action_button as Button).get_global_rect()
+		if previous_action_rect.size != Vector2.ZERO:
+			_check(absf(action_rect.position.y - previous_action_rect.position.y) <= 1.0, "compact actions share one aligned top edge")
+			_check(absf(action_rect.size.y - previous_action_rect.size.y) <= 1.0, "compact actions share one aligned height")
+			_check(absf(action_rect.position.x - previous_action_rect.end.x - 12.0) <= 1.0, "compact actions use one consistent 12px gutter")
+		previous_action_rect = action_rect
 		_check(_rect_inside_viewport(action_button.get_global_rect(), viewport_size), "compact action '%s' stays inside the viewport" % action_name)
 		var captions: Array[Node] = action_button.find_children("*", "Label", true, false)
 		_check(captions.size() == 1, "compact action '%s' has one caption" % action_name)
