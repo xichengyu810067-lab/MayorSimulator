@@ -18,6 +18,7 @@ func _initialize() -> void:
 func _run() -> void:
 	_cleanup()
 	_test_state_semantics_fail_closed()
+	_test_mode_compatible_supporting_infrastructure()
 	_test_continuous_session_and_round_trip()
 	_test_schema_nine_migrates_inactive_and_schema_ten_fails_closed()
 	_test_close_does_not_cancel_authoritative_construction()
@@ -34,7 +35,6 @@ func _test_state_semantics_fail_closed() -> void:
 		not bool(TransportPlanningSessionScript.validate_snapshot(materialized).get("valid", false)),
 		"shape-valid materialized state without completed phases and a route fails closed"
 	)
-
 	var route_edit := _planning_snapshot_fixture()
 	route_edit["session"]["state"] = "route_edit"
 	route_edit["session"]["station_refs"] = [
@@ -88,6 +88,40 @@ func _test_state_semantics_fail_closed() -> void:
 	_check(
 		bool(TransportPlanningSessionScript.validate_snapshot(legal_waiting).get("valid", false)),
 		"legal mid-construction station wait remains serializable"
+	)
+
+
+func _test_mode_compatible_supporting_infrastructure() -> void:
+	var train_signal := _planning_snapshot_fixture()
+	train_signal["session"]["station_blueprint_name"] = "火車站"
+	train_signal["session"]["mode"] = "train"
+	train_signal["session"]["state"] = "network_placement"
+	train_signal["session"]["station_refs"] = [
+		_station_ref("train_station_job_1", 1, "active"),
+		_station_ref("train_station_job_2", 2, "active"),
+	]
+	train_signal["session"]["network_draft"] = {"kind": "rail_signal"}
+	_check(
+		bool(TransportPlanningSessionScript.validate_snapshot(train_signal).get("valid", false)),
+		"train session accepts a rail-signal project supported by its rail guideway"
+	)
+
+	var air_taxiway := _planning_snapshot_fixture()
+	air_taxiway["session"]["station_blueprint_name"] = "機場"
+	air_taxiway["session"]["mode"] = "air"
+	air_taxiway["session"]["state"] = "network_placement"
+	air_taxiway["session"]["station_refs"] = [_station_ref("airport_job_1", 3, "active")]
+	air_taxiway["session"]["network_draft"] = {"kind": "taxiway"}
+	_check(
+		bool(TransportPlanningSessionScript.validate_snapshot(air_taxiway).get("valid", false)),
+		"air session accepts its taxiway support segment"
+	)
+
+	var cross_mode := train_signal.duplicate(true)
+	cross_mode["session"]["network_draft"] = {"kind": "metro_track"}
+	_check(
+		not bool(TransportPlanningSessionScript.validate_snapshot(cross_mode).get("valid", false)),
+		"session still rejects infrastructure from another transport mode"
 	)
 
 

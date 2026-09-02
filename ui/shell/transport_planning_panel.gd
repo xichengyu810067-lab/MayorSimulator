@@ -2,12 +2,15 @@ class_name TransportPlanningPanel
 extends ScrollContainer
 
 const ProgressiveChoicePagerScript = preload("res://ui/components/progressive_choice_pager.gd")
+const TransportPlanningSessionScript = preload("res://scripts/systems/city/transport_planning_session.gd")
 
 signal infrastructure_requested(kind: String, operation: String)
 signal station_requested(building_name: String)
 signal route_planning_requested(mode: String, fleet_size: int, headway_minutes: int, fare: int)
 signal route_toggle_requested(route_id: String, enabled: bool)
 signal route_delete_requested(route_id: String)
+signal session_continue_requested
+signal session_close_requested
 
 const BODY_FONT_SIZE := 18
 const SECTION_FONT_SIZE := 22
@@ -52,6 +55,7 @@ var _spin_boxes: Array[SpinBox] = []
 var _new_plan_buttons: Array[Button] = []
 var _pagers: Array[Control] = []
 var _route_models: Dictionary = {}
+var _planning_session: Dictionary = {"state": "inactive"}
 
 var _content: VBoxContainer
 var _unlock_label: Label
@@ -65,6 +69,11 @@ var _infrastructure_pager: Control
 var _route_mode_pager: Control
 var _route_pager: Control
 var _route_empty_label: Label
+var _session_card: PanelContainer
+var _session_status_label: Label
+var _session_detail_label: Label
+var _session_continue_button: Button
+var _session_close_button: Button
 
 
 func _init() -> void:
@@ -78,15 +87,16 @@ func _init() -> void:
 
 func set_view_model(snapshot: Dictionary) -> void:
 	_view_model = snapshot.duplicate(true)
+	var session_value: Variant = snapshot.get("planning_session", {"state": "inactive"})
+	_planning_session = Dictionary(session_value).duplicate(true) if session_value is Dictionary else {"state": "inactive"}
 	_planning_unlocked = bool(snapshot.get("planning_unlocked", snapshot.get("unlocked", true)))
 	_unlock_label.text = (
 		L10n.text("交通規劃已解鎖｜可進行站點、路網與營運決策。")
 		if _planning_unlocked
 		else L10n.text("交通規劃尚未解鎖｜請先完成對應的城市交通決策。")
 	)
-	for button: Button in _new_plan_buttons:
-		if is_instance_valid(button):
-			button.disabled = not _planning_unlocked
+	_render_planning_session()
+	_refresh_new_plan_button_states()
 
 	if snapshot.has("fleet_size"):
 		_fleet_input.set_value_no_signal(clampf(float(snapshot["fleet_size"]), _fleet_input.min_value, _fleet_input.max_value))
@@ -135,6 +145,11 @@ func debug_snapshot() -> Dictionary:
 		"station_choices": STATION_CHOICES.duplicate(true),
 		"infrastructure_choices": INFRASTRUCTURE_CHOICES.duplicate(true),
 		"route_modes": ROUTE_MODES.duplicate(true),
+		"planning_session": _planning_session.duplicate(true),
+		"session_visible": _session_card.visible if _session_card != null else false,
+		"session_status": _session_status_label.text if _session_status_label != null else "",
+		"session_detail": _session_detail_label.text if _session_detail_label != null else "",
+		"session_continue_enabled": not _session_continue_button.disabled if _session_continue_button != null else false,
 	}
 
 
@@ -161,6 +176,28 @@ func _build_content() -> void:
 	_unlock_label.name = "TransportPlanningUnlockStatus"
 	hero_stack.add_child(_unlock_label)
 	_content.add_child(hero)
+
+	_session_card = _card("TransportPlanningSessionCard")
+	_session_card.visible = false
+	var session_stack := VBoxContainer.new()
+	session_stack.add_theme_constant_override("separation", 8)
+	_session_card.add_child(session_stack)
+	_session_status_label = _label("目前沒有進行中的交通規劃。", SECTION_FONT_SIZE)
+	_session_status_label.name = "TransportPlanningSessionStatus"
+	session_stack.add_child(_session_status_label)
+	_session_detail_label = _label("", BODY_FONT_SIZE)
+	_session_detail_label.name = "TransportPlanningSessionDetail"
+	session_stack.add_child(_session_detail_label)
+	var session_actions := HBoxContainer.new()
+	session_actions.add_theme_constant_override("separation", 10)
+	session_stack.add_child(session_actions)
+	_session_continue_button = _button("TransportPlanningSessionContinue", "繼續規劃", "primary")
+	_session_continue_button.pressed.connect(func() -> void: session_continue_requested.emit())
+	session_actions.add_child(_session_continue_button)
+	_session_close_button = _button("TransportPlanningSessionClose", "結束規劃", "danger")
+	_session_close_button.pressed.connect(func() -> void: session_close_requested.emit())
+	session_actions.add_child(_session_close_button)
+	_content.add_child(_session_card)
 
 	var station_section := _section_card(
 		"TransportStationSection",
@@ -263,6 +300,8 @@ func _station_choice(choice: Dictionary) -> PanelContainer:
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	stack.add_child(hint)
 	var button := _button("StationAction_%s" % choice_id, "選址 %s" % building_name, "primary")
+	button.set_meta("transport_action", "station")
+	button.set_meta("transport_building_name", building_name)
 	button.pressed.connect(_on_station_pressed.bind(building_name))
 	_new_plan_buttons.append(button)
 	stack.add_child(button)
@@ -289,6 +328,8 @@ func _infrastructure_choice(choice: Dictionary) -> PanelContainer:
 		"primary"
 	)
 	add_button.pressed.connect(_on_infrastructure_pressed.bind(kind, str(choice.get("add", "build"))))
+	add_button.set_meta("transport_action", "infrastructure_add")
+	add_button.set_meta("transport_kind", "rail_track" if kind == "heavy_rail" else kind)
 	_new_plan_buttons.append(add_button)
 	actions.add_child(add_button)
 	var remove_button := _button(
@@ -297,6 +338,8 @@ func _infrastructure_choice(choice: Dictionary) -> PanelContainer:
 		"danger"
 	)
 	remove_button.pressed.connect(_on_infrastructure_pressed.bind(kind, str(choice.get("remove", "demolish"))))
+	remove_button.set_meta("transport_action", "infrastructure_remove")
+	remove_button.set_meta("transport_kind", "rail_track" if kind == "heavy_rail" else kind)
 	_new_plan_buttons.append(remove_button)
 	actions.add_child(remove_button)
 	return card
@@ -314,6 +357,8 @@ func _route_mode_choice(mode: Dictionary) -> PanelContainer:
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	stack.add_child(hint)
 	var button := _button("PlanRoute_%s" % mode_id, "開始規劃", "primary")
+	button.set_meta("transport_action", "route")
+	button.set_meta("transport_mode", mode_id)
 	button.pressed.connect(_on_route_planning_pressed.bind(mode_id))
 	_new_plan_buttons.append(button)
 	stack.add_child(button)
@@ -483,6 +528,95 @@ func _refresh_live_summary() -> void:
 	_live_summary.text = L10n.text(
 		"目前方案：車隊 %d 輛｜班距 %d 分鐘｜票價 $%d。車輛只會在站點選址、全線路徑、平交道或號誌、車庫與路線啟用等條件全部完成後出現；任一條件未完成都不會生成行駛中的車輛。"
 	) % [int(_fleet_input.value), int(_headway_input.value), int(_fare_input.value)]
+
+
+func _render_planning_session() -> void:
+	if _session_card == null:
+		return
+	var state := str(_planning_session.get("state", "inactive"))
+	var visible := state not in ["inactive", "closed"]
+	_session_card.visible = visible
+	if not visible:
+		return
+	var session_id := str(_planning_session.get("id", ""))
+	var station_name := str(_planning_session.get("station_blueprint_name", "交通站點"))
+	var station_count := _non_cancelled_reference_count(_planning_session.get("station_refs", []))
+	var completed_station_count := _completed_reference_count(_planning_session.get("station_refs", []))
+	var network_count := _non_cancelled_reference_count(_planning_session.get("network_refs", []))
+	var route_count := _array_size(_planning_session.get("route_refs", []))
+	_session_status_label.text = L10n.text("進行中規劃｜%s｜%s") % [session_id, _session_state_label(state)]
+	_session_detail_label.text = L10n.text("%s｜站點 %d（完工 %d）｜路網工程 %d｜路線 %d") % [
+		L10n.text(station_name), station_count, completed_station_count, network_count, route_count,
+	]
+	_session_continue_button.visible = state != "materialized"
+	_session_continue_button.disabled = state == "waiting_construction"
+	_session_continue_button.text = L10n.text(_session_continue_label(state))
+	_session_close_button.text = L10n.text("結束規劃")
+
+
+func _refresh_new_plan_button_states() -> void:
+	var state := str(_planning_session.get("state", "inactive"))
+	var session_active := state not in ["inactive", "closed"]
+	var session_mode := str(_planning_session.get("mode", ""))
+	var session_station := str(_planning_session.get("station_blueprint_name", ""))
+	for button: Button in _new_plan_buttons:
+		if not is_instance_valid(button):
+			continue
+		var disabled := not _planning_unlocked
+		if session_active and not disabled:
+			match str(button.get_meta("transport_action", "")):
+				"station":
+					disabled = state != "station_placement" or str(button.get_meta("transport_building_name", "")) != session_station
+				"infrastructure_add":
+					disabled = state != "network_placement" or not TransportPlanningSessionScript.network_kind_matches_mode(
+						session_mode, str(button.get_meta("transport_kind", ""))
+					)
+				"infrastructure_remove":
+					disabled = true
+				"route":
+					disabled = state != "route_edit" or str(button.get_meta("transport_mode", "")) != session_mode
+		button.disabled = disabled
+
+
+func _session_state_label(state: String) -> String:
+	return {
+		"station_placement": "步驟 1/3：站點選址",
+		"network_placement": "步驟 2/3：規劃路網",
+		"route_edit": "步驟 3/3：路線設定",
+		"waiting_construction": "等待施工完成",
+		"paused": "已暫停",
+		"materialized": "規劃已完成",
+	}.get(state, "交通規劃")
+
+
+func _session_continue_label(state: String) -> String:
+	return {
+		"station_placement": "繼續放置站點",
+		"network_placement": "下一步：規劃路線",
+		"route_edit": "繼續設定路線",
+		"waiting_construction": "等待施工完成",
+		"paused": "繼續規劃",
+	}.get(state, "繼續規劃")
+
+
+func _non_cancelled_reference_count(value: Variant) -> int:
+	if not value is Array:
+		return 0
+	var result := 0
+	for ref_value: Variant in value:
+		if ref_value is Dictionary and str((ref_value as Dictionary).get("status", "")) != "cancelled":
+			result += 1
+	return result
+
+
+func _completed_reference_count(value: Variant) -> int:
+	if not value is Array:
+		return 0
+	var result := 0
+	for ref_value: Variant in value:
+		if ref_value is Dictionary and str((ref_value as Dictionary).get("status", "")) == "completed":
+			result += 1
+	return result
 
 
 func _on_station_pressed(building_name: String) -> void:

@@ -548,14 +548,25 @@ static func _inactive_session() -> Dictionary:
 	return {"state": STATE_INACTIVE}
 
 
+static func network_kind_matches_mode(mode: String, network_kind: String) -> bool:
+	return _network_kind_matches_mode(network_kind, TransportModesScript.route_spec(mode))
+
+
 static func _network_kind_matches_mode(network_kind: String, mode_spec: Dictionary) -> bool:
-	return (
-		network_kind == str(mode_spec.get("guideway_kind", ""))
-		or (
-			not str(mode_spec.get("required_depot_kind", "")).is_empty()
-			and network_kind == str(mode_spec.get("required_depot_kind", ""))
-		)
-	)
+	var guideway_kind := str(mode_spec.get("guideway_kind", ""))
+	if network_kind == guideway_kind:
+		return true
+	var depot_kind := str(mode_spec.get("required_depot_kind", ""))
+	if not depot_kind.is_empty() and network_kind == depot_kind:
+		return true
+	# Facilities whose canonical network_kind matches the session guideway are
+	# supporting infrastructure for the same mode (for example rail signals).
+	var facility_spec := TransportModesScript.facility_spec(network_kind)
+	if not facility_spec.is_empty() and str(facility_spec.get("network_kind", "")) == guideway_kind:
+		return true
+	# Air topology models taxiways as their own segment kind rather than a
+	# facility, but they remain a runway-session support project.
+	return guideway_kind == "runway" and network_kind == "taxiway"
 
 
 static func _is_network_kind(kind: String) -> bool:

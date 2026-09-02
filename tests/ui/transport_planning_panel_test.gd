@@ -29,6 +29,8 @@ func _run() -> void:
 	var route_events: Array[Dictionary] = []
 	var toggle_events: Array[Dictionary] = []
 	var delete_events: Array[String] = []
+	var session_continue_events: Array[String] = []
+	var session_close_events: Array[String] = []
 	panel.station_requested.connect(
 		func(building_name: String) -> void: station_events.append(building_name)
 	)
@@ -52,6 +54,8 @@ func _run() -> void:
 	panel.route_delete_requested.connect(
 		func(route_id: String) -> void: delete_events.append(route_id)
 	)
+	panel.session_continue_requested.connect(func() -> void: session_continue_events.append("continue"))
+	panel.session_close_requested.connect(func() -> void: session_close_events.append("close"))
 
 	_check_station_controls(panel)
 	_check_infrastructure_controls(panel)
@@ -173,6 +177,79 @@ func _run() -> void:
 	_check(metro_details != null and metro_details.get_theme_color("font_color") != light_text, "panel text did not refresh for dark mode")
 	_check(dark_input_style != null and dark_input_style.bg_color != light_input_background, "route inputs did not refresh for dark mode")
 	_check(bool(panel.debug_snapshot().get("dark_mode", false)), "debug snapshot does not expose dark mode")
+
+	panel.set_view_model({
+		"planning_unlocked": true,
+		"planning_session": {
+			"id": "transport_plan_ui_1",
+			"state": "network_placement",
+			"mode": "train",
+			"station_blueprint_name": "火車站",
+			"station_refs": [
+				{"job_id": "station_1", "status": "completed"},
+				{"job_id": "station_2", "status": "active"},
+			],
+			"network_refs": [{"job_id": "track_1", "status": "active"}],
+			"route_refs": [],
+		},
+		"routes": [],
+	})
+	await process_frame
+	var session_card := panel.find_child("TransportPlanningSessionCard", true, false) as PanelContainer
+	var session_status := panel.find_child("TransportPlanningSessionStatus", true, false) as Label
+	var session_detail := panel.find_child("TransportPlanningSessionDetail", true, false) as Label
+	var session_continue := panel.find_child("TransportPlanningSessionContinue", true, false) as Button
+	var session_close := panel.find_child("TransportPlanningSessionClose", true, false) as Button
+	_check(session_card != null and session_card.visible, "active planning session summary is not visible")
+	_check(session_status != null and session_status.text.contains("transport_plan_ui_1") and session_status.text.contains("2/3"), "session summary omits identity or phase")
+	_check(session_detail != null and _contains_all(session_detail.text, ["火車站", "站點 2", "完工 1", "路網工程 1"]), "session summary omits authoritative reference counts")
+	_check(session_continue != null and not session_continue.disabled and session_continue.text.contains("規劃路線"), "network session does not expose the explicit route-step CTA")
+	_check(session_close != null and not session_close.disabled, "active session does not expose explicit close")
+	_press(panel, "TransportPlanningSessionContinue")
+	_press(panel, "TransportPlanningSessionClose")
+	_check(session_continue_events == ["continue"] and session_close_events == ["close"], "session CTAs did not emit their explicit commands")
+	var heavy_rail_add := panel.find_child("InfrastructureAdd_heavy_rail", true, false) as Button
+	var rail_signal_add := panel.find_child("InfrastructureAdd_rail_signal", true, false) as Button
+	var metro_add := panel.find_child("InfrastructureAdd_metro_track", true, false) as Button
+	_check(heavy_rail_add != null and not heavy_rail_add.disabled, "train session cannot add its guideway")
+	_check(rail_signal_add != null and not rail_signal_add.disabled, "train session cannot add mode-compatible rail signals")
+	_check(metro_add != null and metro_add.disabled, "train session accepts cross-mode infrastructure")
+	panel.set_view_model({
+		"planning_unlocked": true,
+		"planning_session": {
+			"id": "transport_plan_air_1",
+			"state": "network_placement",
+			"mode": "air",
+			"station_blueprint_name": "機場",
+			"station_refs": [{"job_id": "airport_1", "status": "completed"}],
+			"network_refs": [],
+			"route_refs": [],
+		},
+		"routes": [],
+	})
+	await process_frame
+	var runway_add := panel.find_child("InfrastructureAdd_runway", true, false) as Button
+	var taxiway_add := panel.find_child("InfrastructureAdd_taxiway", true, false) as Button
+	var road_add := panel.find_child("InfrastructureAdd_road", true, false) as Button
+	_check(runway_add != null and not runway_add.disabled, "air session cannot add its runway guideway")
+	_check(taxiway_add != null and not taxiway_add.disabled, "air session cannot add taxiway in the same network phase")
+	_check(road_add != null and road_add.disabled, "air session accepts a cross-mode road project")
+
+	panel.set_view_model({
+		"planning_unlocked": true,
+		"planning_session": {
+			"id": "transport_plan_ui_1",
+			"state": "waiting_construction",
+			"mode": "train",
+			"station_blueprint_name": "火車站",
+			"station_refs": [{"job_id": "station_1", "status": "active"}],
+			"network_refs": [],
+			"route_refs": [],
+		},
+		"routes": [],
+	})
+	await process_frame
+	_check(session_continue.disabled and session_continue.text.contains("等待施工"), "waiting session exposes a premature continue command")
 
 	panel.set_view_model({"planning_unlocked": false, "routes": []})
 	await process_frame
