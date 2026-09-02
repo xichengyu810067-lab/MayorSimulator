@@ -3678,6 +3678,9 @@ func _begin_fiscal_draft() -> void:
 	_sync_fiscal_controls_from_draft()
 	_show_fiscal_categories()
 	_update_ui()
+	if fiscal_page_scroll != null:
+		_layout_fiscal_surface(fiscal_page_scroll)
+		call_deferred("_layout_fiscal_surface", fiscal_page_scroll)
 
 
 func _fiscal_draft_dictionary(kind: String) -> Dictionary:

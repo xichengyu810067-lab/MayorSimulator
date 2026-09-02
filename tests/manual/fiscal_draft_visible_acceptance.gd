@@ -158,6 +158,12 @@ func _validate_categories() -> Dictionary:
 	if preview == null or not preview.is_visible_in_tree() or main.find_child("FiscalCategoryTabs", true, false) != null:
 		_fail("whole-draft preview is missing or legacy nested tabs remain")
 		return {}
+	if int(ui.get("responsive_columns", 0)) != 2:
+		_fail("wide actual-main fiscal layout must use 2 responsive columns")
+		return {}
+	if str(ui.get("preview_placement", "")) != "right":
+		_fail("wide actual-main fiscal layout must place preview right")
+		return {}
 	return {"category_count": 6, "ids": ui.get("category_ids", []), "preview_visible": true, "legacy_tabs_absent": true, "responsive_columns": ui.get("responsive_columns", 0)}
 
 
