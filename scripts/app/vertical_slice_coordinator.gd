@@ -1373,6 +1373,30 @@ func submit_bill(bill_reference: String, city_context: Dictionary = {}) -> Dicti
 	_emit_changed()
 	return result
 
+
+func preview_lower_house_response(response_id: String, city_context: Dictionary = {}) -> Dictionary:
+	if governance.has_failed():
+		return _terminal_command_error()
+	return governance.preview_lower_house_response(response_id, _governance_context(city_context))
+
+
+func answer_lower_house_hearing(response_id: String, city_context: Dictionary = {}) -> Dictionary:
+	if governance.has_failed():
+		return _terminal_command_error()
+	var result: Dictionary = governance.answer_lower_house_hearing(
+		response_id,
+		game_day(),
+		_governance_context(city_context)
+	)
+	if not bool(result.get("ok", false)):
+		return result
+	for event_variant: Variant in result.get("events", []):
+		if event_variant is Dictionary:
+			_handle_governance_fact(event_variant)
+	_sync_governance_to_core("governance.lower_house_response")
+	_emit_changed()
+	return result
+
 func _bill_id_for_reference(bill_reference: String) -> String:
 	if governance.bill_definitions.has(bill_reference):
 		return bill_reference
@@ -1938,7 +1962,11 @@ func _handle_governance_fact(event: Dictionary) -> bool:
 			_post_ledger(-mini(fine, treasury_balance()), "judiciary.fine", str(event.get("subject_id", "court")), {})
 	_push_ui_event(event_type, event)
 	_sync_governance_to_core(str(event.get("reason_tag", "governance.updated")))
-	return event_type.begins_with("judiciary_") or event_type.begins_with("oversight_")
+	return (
+		event_type == "lower_house_hearing_ready"
+		or event_type.begins_with("judiciary_")
+		or event_type.begins_with("oversight_")
+	)
 
 func _sync_population_to_core(reason_tag: String) -> void:
 	var canonical_ids := {}

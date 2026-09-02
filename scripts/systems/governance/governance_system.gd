@@ -10,6 +10,31 @@ const LowerCouncilVoteModelScript = preload("res://systems/governance/lower-coun
 const SCHEMA_VERSION := 3
 const JUDICIARY_MIN_DAYS := 2
 const JUDICIARY_MAX_DAYS := 15
+const LOWER_HOUSE_SEAT_COUNT := 30
+const LOWER_HOUSE_MAJORITY := 16
+const CONCERN_LABELS := {
+	"budget": "預算與成本",
+	"public_opinion": "區域民意",
+	"execution_feasibility": "執行可行性",
+	"feasibility": "執行可行性",
+	"roi": "投資效益",
+	"economic_growth": "經濟成長",
+	"employment": "就業",
+	"environment": "環境影響",
+	"public_safety": "公共安全",
+	"housing": "住宅需求",
+	"transport": "交通影響",
+	"regional_balance": "區域平衡",
+	"social_welfare": "社會福利",
+	"healthcare": "醫療需求",
+	"education": "教育需求",
+	"administrative_efficiency": "行政效率",
+	"utility_affordability": "公共服務可負擔性",
+	"procedural_justice": "程序正義",
+	"public_interest": "公共利益",
+	"innovation": "創新效益",
+	"accountability": "行政責任",
+}
 
 var seed: int = 20_260_715
 var bill_definitions: Dictionary = default_bills()
@@ -148,7 +173,7 @@ func advance_day(current_day: int, context: Dictionary = {}) -> Array[Dictionary
 	justice_system.advance_judicial_procedures(current_day)
 	if (
 		not pending_bill.is_empty()
-		and str(pending_bill.get("status", "")) != "lower_house_data_error"
+		and str(pending_bill.get("status", "")) == "lower_house_review"
 		and current_day >= int(pending_bill.get("decision_day", 0))
 	):
 		emitted.append_array(_resolve_legislative_review(current_day, context))
@@ -471,7 +496,6 @@ static func create_from_dict(data: Dictionary) -> GovernanceSystem:
 
 
 func _resolve_legislative_review(current_day: int, context: Dictionary) -> Array[Dictionary]:
-	var emitted: Array[Dictionary] = []
 	var bill_id := str(pending_bill.get("bill_id", ""))
 	var definition: Dictionary = bill_definitions.get(bill_id, {})
 	var vote_context := context.duplicate(true)
@@ -480,9 +504,124 @@ func _resolve_legislative_review(current_day: int, context: Dictionary) -> Array
 	if not bool(first_vote.get("ok", false)):
 		return _pause_legislative_review_for_contract_error(bill_id, current_day, first_vote)
 	var debate := _build_debate(definition, first_vote, vote_context)
-	var final_vote := _lower_house_vote(definition, vote_context, true, debate["feature_updates"])
+	var response_options := _build_mayor_response_options(debate)
+	var ranked_concerns: Array = debate.get("ranked_concerns", [])
+	var primary_concern := str(ranked_concerns[0]) if not ranked_concerns.is_empty() else "execution_feasibility"
+	var hearing := {
+		"created_day": current_day,
+		"seat_count": LOWER_HOUSE_SEAT_COUNT,
+		"majority_threshold": LOWER_HOUSE_MAJORITY,
+		"initial_vote": first_vote.duplicate(true),
+		"concern_counts": (debate.get("concern_counts", {}) as Dictionary).duplicate(true),
+		"ranked_concerns": ranked_concerns.duplicate(true),
+		"primary_concern": primary_concern,
+		"primary_question": "下議院主要質詢：市府將如何回應%s疑慮？" % _concern_label(primary_concern),
+		"response_options": response_options.duplicate(true),
+		"vote_context": vote_context.duplicate(true),
+	}
+	pending_bill["status"] = "awaiting_mayor_response"
+	pending_bill["lower_house_hearing"] = hearing
+	_record_check(
+		"lower_house_hearing",
+		"legislature",
+		"executive",
+		bill_id,
+		current_day,
+		"下議院完成 30 席初步意向並等待市長答詢；尚未正式表決"
+	)
+	return [{
+		"type": "lower_house_hearing_ready",
+		"subject_id": bill_id,
+		"game_day": current_day,
+		"reason_tag": "governance.lower_house_hearing_ready",
+		"payload": pending_bill.duplicate(true),
+	}]
+
+
+func preview_lower_house_response(response_id: String, context: Dictionary = {}) -> Dictionary:
+	if pending_bill.is_empty():
+		return _error("no_pending_bill")
+	if str(pending_bill.get("status", "")) != "awaiting_mayor_response":
+		return _error("lower_house_not_awaiting_response")
+	var hearing: Dictionary = pending_bill.get("lower_house_hearing", {})
+	var response := _hearing_response_option(hearing, response_id)
+	if response.is_empty():
+		return _error("lower_house_response_not_found")
+	var bill_id := str(pending_bill.get("bill_id", ""))
+	var definition: Dictionary = bill_definitions.get(bill_id, {})
+	var vote_context: Dictionary = hearing.get("vote_context", {}).duplicate(true)
+	for key: Variant in context.keys():
+		vote_context[key] = context[key]
+	var evidence: Dictionary = response.get("feature_updates", {}).duplicate(true)
+	var final_preview := _lower_house_vote(definition, vote_context, true, evidence, false)
+	if not bool(final_preview.get("ok", false)):
+		return final_preview
+	final_preview["readonly"] = true
+	final_preview["response_id"] = response_id
+	final_preview["debate_evidence"] = evidence
+	final_preview["model_input_signature"] = _response_model_input_signature(evidence)
+	return final_preview
+
+
+func answer_lower_house_hearing(response_id: String, current_day: int, context: Dictionary = {}) -> Dictionary:
+	if pending_bill.is_empty():
+		return _error("no_pending_bill")
+	if str(pending_bill.get("status", "")) != "awaiting_mayor_response":
+		return _error("lower_house_not_awaiting_response")
+	var hearing: Dictionary = pending_bill.get("lower_house_hearing", {})
+	var response := _hearing_response_option(hearing, response_id)
+	if response.is_empty():
+		return _error("lower_house_response_not_found")
+	var bill_id := str(pending_bill.get("bill_id", ""))
+	var definition: Dictionary = bill_definitions.get(bill_id, {})
+	var vote_context: Dictionary = hearing.get("vote_context", {}).duplicate(true)
+	for key: Variant in context.keys():
+		vote_context[key] = context[key]
+	vote_context["game_day"] = current_day
+	var evidence: Dictionary = response.get("feature_updates", {}).duplicate(true)
+	var final_vote := _lower_house_vote(definition, vote_context, true, evidence, true)
 	if not bool(final_vote.get("ok", false)):
-		return _pause_legislative_review_for_contract_error(bill_id, current_day, final_vote)
+		var paused_events := _pause_legislative_review_for_contract_error(bill_id, current_day, final_vote)
+		return {
+			"ok": false,
+			"error": str(final_vote.get("error", "lower_council_vote_contract_invalid")),
+			"events": paused_events,
+		}
+	var selected_debate := {
+		"rounds": 1,
+		"concern_counts": (hearing.get("concern_counts", {}) as Dictionary).duplicate(true),
+		"feature_updates": evidence,
+		"selected_response": response.duplicate(true),
+		"model_input_signature": _response_model_input_signature(evidence),
+	}
+	var events := _complete_legislative_review(
+		current_day,
+		definition,
+		hearing.get("initial_vote", {}).duplicate(true),
+		selected_debate,
+		final_vote,
+		vote_context,
+		response
+	)
+	return {
+		"ok": true,
+		"response_id": response_id,
+		"decision": legislative_history.back().duplicate(true),
+		"events": events,
+	}
+
+
+func _complete_legislative_review(
+	current_day: int,
+	definition: Dictionary,
+	first_vote: Dictionary,
+	debate: Dictionary,
+	final_vote: Dictionary,
+	context: Dictionary,
+	mayor_response: Dictionary
+) -> Array[Dictionary]:
+	var emitted: Array[Dictionary] = []
+	var bill_id := str(pending_bill.get("bill_id", ""))
 	var lower_passed := bool(final_vote.get("passed", int(final_vote["votes_for"]) > int(final_vote["votes_against"])))
 	var upper_vote := {
 		"passed": false,
@@ -499,6 +638,7 @@ func _resolve_legislative_review(current_day: int, context: Dictionary) -> Array
 		"resolved_day": current_day,
 		"first_vote": first_vote,
 		"debate": debate,
+		"mayor_response": mayor_response.duplicate(true),
 		"final_vote": final_vote,
 		"lower_passed": lower_passed,
 		"upper_vote": upper_vote,
@@ -542,7 +682,8 @@ func _lower_house_vote(
 	definition: Dictionary,
 	context: Dictionary,
 	after_debate: bool,
-	feature_updates: Dictionary
+	feature_updates: Dictionary,
+	persist_final: bool = true
 ) -> Dictionary:
 	if not _lower_council_is_available():
 		return _lower_council_contract_error_vote()
@@ -554,7 +695,7 @@ func _lower_house_vote(
 	vote_context["grievance"] = grievance
 	var stage := "final" if after_debate else "initial"
 	var raw_result: Dictionary
-	if after_debate:
+	if after_debate and persist_final:
 		raw_result = lower_council_vote_model.conduct_vote(bill, vote_context, stage, feature_updates)
 	else:
 		raw_result = lower_council_vote_model.preview_vote(bill, vote_context, stage, feature_updates)
@@ -579,6 +720,7 @@ func _lower_house_vote(
 		"absences": int(raw_result.get("absences", 0)),
 		"majority_threshold": int(raw_result.get("majority_threshold", 16)),
 		"passed": bool(raw_result.get("passed", false)),
+		"stage": stage,
 		"model": "lower_council_30_member",
 		"votes": normalized_votes,
 	}
@@ -615,26 +757,103 @@ func _pause_legislative_review_for_contract_error(
 
 
 func _build_debate(definition: Dictionary, first_vote: Dictionary, context: Dictionary) -> Dictionary:
-	var concern_counts := {"cost": 0, "public_opinion": 0, "feasibility": 0}
+	var concern_counts := {}
 	for vote in first_vote.get("votes", []):
 		if not bool(vote.get("supports", false)):
-			var concern := str(vote.get("concern", "feasibility"))
+			var concern := str(vote.get("concern", "execution_feasibility"))
 			concern_counts[concern] = int(concern_counts.get(concern, 0)) + 1
 	var debate_strength := float(definition.get("debate_strength", 8))
 	debate_strength += float(context.get("mayor_argument_bonus", 0.0))
+	var ranked_concerns := _ranked_concerns(concern_counts)
+	for fallback in ["budget", "public_opinion", "execution_feasibility"]:
+		if ranked_concerns.size() >= 3:
+			break
+		if fallback not in ranked_concerns:
+			ranked_concerns.append(fallback)
 	var updates := {}
-	for concern_key in concern_counts.keys():
-		updates[str(concern_key)] = debate_strength if int(concern_counts[concern_key]) > 0 else 0.0
+	for concern_key: String in ranked_concerns:
+		updates[concern_key] = debate_strength if int(concern_counts.get(concern_key, 0)) > 0 else 0.0
 	return {
 		"rounds": 1,
 		"concern_counts": concern_counts,
+		"ranked_concerns": ranked_concerns,
+		"debate_strength": debate_strength,
 		"feature_updates": updates,
-		"templates": {
-			"cost": "支持方提交分期預算與成本上限，回應財政疑慮。",
-			"public_opinion": "支持方提交區域民意與受益人口資料，回應民意疑慮。",
-			"feasibility": "支持方提交執行時程與責任單位，回應可行性疑慮。"
-		}
 	}
+
+
+func _build_mayor_response_options(debate: Dictionary) -> Array[Dictionary]:
+	var ranked: Array = debate.get("ranked_concerns", [])
+	var base_strength := clampf(float(debate.get("debate_strength", 8.0)), 1.0, 100.0)
+	var first := str(ranked[0])
+	var second := str(ranked[1])
+	var third := str(ranked[2])
+	var focus_updates := {}
+	focus_updates[first] = minf(100.0, base_strength + 18.0)
+	var balance_updates := {}
+	balance_updates[first] = minf(100.0, base_strength + 10.0)
+	balance_updates[second] = minf(100.0, base_strength + 10.0)
+	var comprehensive_updates := {}
+	comprehensive_updates[first] = minf(100.0, base_strength + 5.0)
+	comprehensive_updates[second] = minf(100.0, base_strength + 5.0)
+	comprehensive_updates[third] = minf(100.0, base_strength + 5.0)
+	return [
+		{
+			"id": "focus_primary",
+			"label": "聚焦主要疑慮",
+			"description": "提出具體證據，優先回應%s。" % _concern_label(first),
+			"focus_concerns": [first],
+			"feature_updates": focus_updates,
+		},
+		{
+			"id": "balance_coalition",
+			"label": "平衡兩項質詢",
+			"description": "同時回應%s與%s，爭取跨黨團支持。" % [_concern_label(first), _concern_label(second)],
+			"focus_concerns": [first, second],
+			"feature_updates": balance_updates,
+		},
+		{
+			"id": "comprehensive_commitment",
+			"label": "提出全面執行承諾",
+			"description": "以完整執行方案回應%s、%s與%s。" % [_concern_label(first), _concern_label(second), _concern_label(third)],
+			"focus_concerns": [first, second, third],
+			"feature_updates": comprehensive_updates,
+		},
+	]
+
+
+func _ranked_concerns(concern_counts: Dictionary) -> Array[String]:
+	var ranked: Array[String] = []
+	for key: Variant in concern_counts.keys():
+		ranked.append(str(key))
+	ranked.sort_custom(func(left: String, right: String) -> bool:
+		var left_count := int(concern_counts.get(left, 0))
+		var right_count := int(concern_counts.get(right, 0))
+		return left < right if left_count == right_count else left_count > right_count
+	)
+	return ranked
+
+
+func _hearing_response_option(hearing: Dictionary, response_id: String) -> Dictionary:
+	for option_variant: Variant in hearing.get("response_options", []):
+		if option_variant is Dictionary and str((option_variant as Dictionary).get("id", "")) == response_id:
+			return (option_variant as Dictionary).duplicate(true)
+	return {}
+
+
+func _concern_label(concern: String) -> String:
+	return str(CONCERN_LABELS.get(concern, concern.replace("_", " ")))
+
+
+func _response_model_input_signature(evidence: Dictionary) -> String:
+	var sorted_evidence := {}
+	var keys: Array[String] = []
+	for key: Variant in evidence.keys():
+		keys.append(str(key))
+	keys.sort()
+	for key: String in keys:
+		sorted_evidence[key] = evidence[key]
+	return JSON.stringify({"debate_evidence": sorted_evidence}).sha256_text()
 
 
 func _upper_house_vote(definition: Dictionary, context: Dictionary) -> Dictionary:

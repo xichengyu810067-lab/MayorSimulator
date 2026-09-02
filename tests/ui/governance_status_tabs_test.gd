@@ -44,6 +44,19 @@ func _run() -> void:
 	await process_frame
 	_check(_parent_name(main.governance_bill_cards["交通建設法案"]) == "review_bill_Grid", "submitted bill moves to review")
 	_check(tabs.current_tab == 1, "successful submission opens the review tab")
+	var decision_day := int(main.vertical_slice.governance.pending_bill.get("decision_day", -1))
+	var hearing_events: Array[Dictionary] = main.vertical_slice.advance_days(
+		decision_day - main.vertical_slice.game_day(),
+		{"public_support": 70, "regional_support": {"north": 70, "east": 70, "south": 70, "west": 70}},
+		false
+	)
+	main._consume_vertical_events(hearing_events)
+	main._update_ui()
+	await process_frame
+	var hearing_signature: Dictionary = main.lower_council_stage.debug_signature()
+	_check(bool(hearing_signature.get("visible", false)), "review bill opens the lower-council hearing stage on decision day")
+	_check(int(hearing_signature.get("seat_count", 0)) == 30 and int(hearing_signature.get("majority_threshold", 0)) == 16, "hearing stage shows 30 seats and threshold 16")
+	_check(int(hearing_signature.get("response_option_count", 0)) == 3, "hearing stage shows exactly three mayor response choices")
 
 	main.vertical_slice.governance.pending_bill.clear()
 	main.vertical_slice.governance.active_laws["transit_act"] = {

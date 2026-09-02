@@ -42,14 +42,24 @@ func _initialize() -> void:
 		"public_support": 0,
 		"regional_support": {"north": 0, "east": 0, "south": 0, "west": 0},
 	})
-	_check(events.size() == 1, "legislature resolves the due proposal")
-	_check(governance.legislative_history.size() == 1, "legislative decision enters permanent history")
+	_check(events.size() == 1 and str(events[0].get("type", "")) == "lower_house_hearing_ready", "due proposal opens the lower-house hearing")
+	_check(governance.legislative_history.is_empty(), "hearing does not enter permanent history before the mayor answers")
+	var hearing: Dictionary = governance.pending_bill.get("lower_house_hearing", {})
+	var initial_vote: Dictionary = hearing.get("initial_vote", {})
+	var responses: Array = hearing.get("response_options", [])
+	_check(responses.size() == 3, "lower-house hearing offers three evidence responses")
+	var vote_history_before: int = governance.lower_council_database.vote_history.size()
+	var preview: Dictionary = governance.preview_lower_house_response(str((responses[0] as Dictionary).get("id", "")))
+	_check(bool(preview.get("ok", false)) and governance.lower_council_database.vote_history.size() == vote_history_before, "final-vote preview is read-only")
+	var answered: Dictionary = governance.answer_lower_house_hearing(str((responses[0] as Dictionary).get("id", "")), 2)
+	_check(bool(answered.get("ok", false)), "mayor response conducts the legislature's formal vote")
+	_check(governance.legislative_history.size() == 1, "formal legislative decision enters permanent history")
 	var decision: Dictionary = governance.legislative_history[0]
-	var initial_vote: Dictionary = decision.get("first_vote", {})
 	var final_vote: Dictionary = decision.get("final_vote", {})
 	_check(str(initial_vote.get("model", "")) == "lower_council_30_member", "initial vote uses the 30-person model")
 	_check((initial_vote.get("votes", []) as Array).size() == 30, "initial stage records 30 individual choices")
 	_check((final_vote.get("votes", []) as Array).size() == 30, "final stage records 30 individual choices")
+	_check(governance.lower_council_database.vote_history.size() == vote_history_before + 30, "only the formal vote appends 30 vote-history records")
 	_check(int(final_vote.get("votes_for", 0)) + int(final_vote.get("votes_against", 0)) + int(final_vote.get("abstentions", 0)) + int(final_vote.get("absences", 0)) == 30, "all lower-chamber outcomes reconcile to 30 seats")
 	_check(not bool(decision.get("passed", true)), "legislature can reject the executive proposal")
 

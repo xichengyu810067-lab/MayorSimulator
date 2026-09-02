@@ -16,6 +16,7 @@ const MunicipalEconomyServiceScript = preload("res://scripts/app/municipal_econo
 const VerticalSlicePanelScript = preload("res://ui/shell/vertical_slice_panel.gd")
 const MunicipalOverlayScript = preload("res://ui/shell/municipal_overlay.gd")
 const JusticeOversightPanelScript = preload("res://ui/governance/justice_oversight_panel.gd")
+const LowerCouncilStageScript = preload("res://ui/governance/lower_council_stage.gd")
 const PublicAffairsPanelScript = preload("res://ui/shell/public_affairs_panel.gd")
 const BuildingContextPanelScript = preload("res://ui/shell/building_context_panel.gd")
 const ExitConfirmOverlayScript = preload("res://ui/shell/exit_confirm_overlay.gd")
@@ -224,6 +225,7 @@ var governance_status_sections: Dictionary = {}
 var governance_status_empty_labels: Dictionary = {}
 var governance_bill_cards: Dictionary = {}
 var governance_policy_cards: Dictionary = {}
+var lower_council_stage
 var settings_button: Button
 var municipal_button: Button
 var exit_button: Button
@@ -1411,6 +1413,7 @@ func _on_municipal_page_opened(page_id: String) -> void:
 	if page_id != "governance":
 		return
 	_refresh_governance_catalog()
+	_refresh_lower_council_stage()
 	_select_governance_status(_preferred_governance_status())
 
 
@@ -1898,6 +1901,10 @@ func _build_bill_tab() -> ScrollContainer:
 	bill_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	bill_status_label.custom_minimum_size = Vector2(0, 34)
 	content.add_child(bill_status_label)
+	lower_council_stage = LowerCouncilStageScript.new()
+	lower_council_stage.response_selected.connect(_on_lower_council_response_selected)
+	lower_council_stage.response_confirmed.connect(_on_lower_council_response_confirmed)
+	content.add_child(lower_council_stage)
 
 	governance_status_tabs = TabContainer.new()
 	governance_status_tabs.name = "GovernanceStatusTabs"
@@ -2110,6 +2117,18 @@ func _refresh_governance_catalog() -> void:
 			var section := governance_status_sections.get("%s:%s" % [tab_status_id, kind_id]) as VBoxContainer
 			if pager != null and section:
 				section.visible = int(pager.call("choice_count")) > 0
+
+
+func _refresh_lower_council_stage() -> void:
+	if lower_council_stage == null or vertical_slice == null or vertical_slice.governance == null:
+		return
+	var pending: Dictionary = vertical_slice.governance.pending_bill
+	var bill_id := str(pending.get("bill_id", ""))
+	var definition: Dictionary = vertical_slice.governance.bill_definitions.get(bill_id, {})
+	var latest_decision: Dictionary = {}
+	if pending.is_empty() and not vertical_slice.governance.legislative_history.is_empty():
+		latest_decision = vertical_slice.governance.legislative_history.back().duplicate(true)
+	lower_council_stage.refresh(pending, definition, latest_decision)
 
 
 func _move_governance_card(card_variant: Variant, status_id: String, kind_id: String) -> void:
@@ -4017,6 +4036,27 @@ func _submit_bill(bill_name: String) -> void:
 		_autosave("action:bill_submitted")
 
 
+func _on_lower_council_response_selected(response_id: String) -> void:
+	if vertical_slice == null or lower_council_stage == null:
+		return
+	var preview: Dictionary = vertical_slice.preview_lower_house_response(response_id, _vertical_city_context())
+	lower_council_stage.set_preview(preview)
+	if not bool(preview.get("ok", false)):
+		_set_hint("表決預覽無法建立：%s" % _vertical_error_text(str(preview.get("error", "unknown"))), true)
+
+
+func _on_lower_council_response_confirmed(response_id: String) -> void:
+	if vertical_slice == null or lower_council_stage == null:
+		return
+	var result: Dictionary = vertical_slice.answer_lower_house_hearing(response_id, _vertical_city_context())
+	if not bool(result.get("ok", false)):
+		_set_hint("答詢無法送出：%s" % _vertical_error_text(str(result.get("error", "unknown"))), true)
+		return
+	_consume_vertical_events(vertical_slice.drain_ui_events())
+	_update_ui()
+	_set_hint("答詢已確認，下議院完成正式表決。", false)
+
+
 func _is_transport_map_action_active() -> bool:
 	return map_action_mode in ["transport_infrastructure", "transport_route_stops"]
 
@@ -5522,6 +5562,8 @@ func _consume_vertical_events(events: Array[Dictionary]) -> void:
 				_add_announcement("%s 耐久低於 40，已報廢；請安排拆除。" % payload.get("building_name", "建築"))
 			"month_started":
 				_settle_month(false)
+			"lower_house_hearing_ready":
+				_add_announcement("下議院完成初步意向，正在等待市長進入治理頁答詢。")
 			"bill_enacted":
 				_add_announcement("法案通過兩院並正式生效。")
 				_record_major_event("bill_enacted", str(payload.get("name", payload.get("bill_id", "法案"))), "", "bill_enacted:%s" % str(payload.get("bill_id", "")), event_game_time)
@@ -6262,6 +6304,7 @@ func _update_ui() -> void:
 		_apply_building_button_style(button, building_name, building_name == selected_building)
 
 	_refresh_governance_catalog()
+	_refresh_lower_council_stage()
 	for policy_name in policy_checks.keys():
 		_apply_policy_style(policy_checks[policy_name], active_policies[policy_name])
 
@@ -6441,6 +6484,7 @@ func _rebuild_ui() -> void:
 	governance_status_empty_labels.clear()
 	governance_bill_cards.clear()
 	governance_policy_cards.clear()
+	lower_council_stage = null
 	map_stage = null
 	city_backdrop = null
 	tile_layer = null

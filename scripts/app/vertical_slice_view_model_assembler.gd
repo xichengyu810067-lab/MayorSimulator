@@ -231,6 +231,8 @@ static func _governance_text(input: Dictionary, localizer) -> String:
 	if not pending_bill.is_empty():
 		var bill_id := str(pending_bill.get("bill_id", ""))
 		var bill_name := _text(localizer, str(bill_definitions.get(bill_id, {}).get("name", bill_id)))
+		if str(pending_bill.get("status", "")) == "awaiting_mayor_response":
+			return _text(localizer, "%s 已進入下議院答詢；正式表決將在市長確認答覆後進行。") % bill_name
 		return _text(localizer, "%s 審核中，預計第 %d 天完成兩院表決。") % [bill_name, int(pending_bill.get("decision_day", 0))]
 	var rejected_id := str(input.get("latest_rejected_bill_id", ""))
 	var active_laws: Dictionary = input.get("active_laws", {})
