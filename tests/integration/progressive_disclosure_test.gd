@@ -95,7 +95,7 @@ func _run() -> void:
 		await _settle()
 		_check(main.municipal_overlay.current_page() == "blueprint", "building-card selection does not enter blueprint design directly")
 		_check(main.selected_building == "住宅", "direct blueprint entry lost the selected building authority")
-		_check(not main.transport_shortcut_button.visible, "non-transport building exposes an irrelevant transport shortcut")
+		_check(main.find_child("OpenTransportPlanningButton", true, false) == null, "non-transport building does not expose transport shortcut")
 	main.municipal_overlay.open_page("buildings")
 	await _settle()
 
