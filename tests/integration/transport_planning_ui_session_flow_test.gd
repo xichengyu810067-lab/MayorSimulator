@@ -126,13 +126,23 @@ func _run() -> void:
 	_check_station_draft_ghosts(main, [first_tile, second_tile], "network planning")
 
 	var road_button := main.transport_planning_panel.find_child("InfrastructureAdd_road", true, false) as Button
-	_check(road_button != null and not road_button.disabled, "network phase does not expose the same-mode guideway")
-	_check(main.transport_planning_panel.find_child("InfrastructureAdd_bus_depot", true, false) is Button, "bus package does not expose its compatible depot")
-	_check(main.transport_planning_panel.find_child("InfrastructureAdd_metro_track", true, false) == null, "bus package still renders metro infrastructure")
-	_check(main.transport_planning_panel.find_child("InfrastructureAdd_heavy_rail", true, false) == null, "bus package still renders rail infrastructure")
-	_check(main.transport_planning_panel.find_child("InfrastructureAdd_runway", true, false) == null, "bus package still renders air infrastructure")
-	_check(main.transport_planning_panel.find_child("PlanRoute_bus", true, false) is Button, "bus package hides its matching route card")
-	_check(main.transport_planning_panel.find_child("PlanRoute_metro", true, false) == null and main.transport_planning_panel.find_child("PlanRoute_train", true, false) == null and main.transport_planning_panel.find_child("PlanRoute_air", true, false) == null, "bus package still renders a foreign route card")
+	_check(road_button != null and road_button.is_inside_tree() and road_button.is_visible_in_tree() and not road_button.disabled, "network phase does not expose the same-mode guideway")
+	var bus_depot_button := main.transport_planning_panel.find_child("InfrastructureAdd_bus_depot", true, false) as Button
+	_check(bus_depot_button != null and bus_depot_button.is_inside_tree() and bus_depot_button.is_visible_in_tree(), "bus package does not expose its compatible depot")
+	var metro_infra := main.transport_planning_panel.find_child("InfrastructureAdd_metro_track", true, false) as Button
+	_check(metro_infra != null and metro_infra.is_inside_tree() and not metro_infra.is_visible_in_tree(), "bus package still renders metro infrastructure")
+	var rail_infra := main.transport_planning_panel.find_child("InfrastructureAdd_heavy_rail", true, false) as Button
+	_check(rail_infra != null and rail_infra.is_inside_tree() and not rail_infra.is_visible_in_tree(), "bus package still renders rail infrastructure")
+	var runway_infra := main.transport_planning_panel.find_child("InfrastructureAdd_runway", true, false) as Button
+	_check(runway_infra != null and runway_infra.is_inside_tree() and not runway_infra.is_visible_in_tree(), "bus package still renders air infrastructure")
+	var route_button_bus := main.transport_planning_panel.find_child("PlanRoute_bus", true, false) as Button
+	_check(route_button_bus != null and route_button_bus.is_inside_tree(), "bus package hides its matching route card")
+	var route_button_metro := main.transport_planning_panel.find_child("PlanRoute_metro", true, false) as Button
+	_check(route_button_metro != null and route_button_metro.is_inside_tree() and not route_button_metro.is_visible_in_tree(), "bus package still renders a foreign route card")
+	var route_button_train := main.transport_planning_panel.find_child("PlanRoute_train", true, false) as Button
+	_check(route_button_train != null and route_button_train.is_inside_tree() and not route_button_train.is_visible_in_tree(), "bus package still renders a foreign route card")
+	var route_button_air := main.transport_planning_panel.find_child("PlanRoute_air", true, false) as Button
+	_check(route_button_air != null and route_button_air.is_inside_tree() and not route_button_air.is_visible_in_tree(), "bus package still renders a foreign route card")
 	if road_button != null:
 		road_button.pressed.emit()
 	_check(main.map_action_mode == "transport_infrastructure" and main.transport_plan_kind == "road", "road action did not enter the real infrastructure map mode")
