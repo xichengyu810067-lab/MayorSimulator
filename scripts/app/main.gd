@@ -38,6 +38,7 @@ const ProgressiveChoicePagerScript = preload("res://ui/components/progressive_ch
 const NpcDialogueCardScript = preload("res://ui/components/npc_dialogue_card.gd")
 const CityMetricCardScript = preload("res://ui/components/city_metric_card.gd")
 const UiIconCatalog = preload("res://ui/theme/ui_icon_catalog.gd")
+const SemanticPalette = preload("res://ui/theme/semantic_palette.gd")
 const VERSION_UPDATES_PATH := "res://data/version_updates.json"
 const QA_RELEASE_SMOKE_ARG_PREFIX := "--qa-release-smoke-frames="
 # Resident records store personal currency units. City treasury calculations
@@ -2017,6 +2018,7 @@ func _build_bill_tab() -> ScrollContainer:
 			section.add_theme_constant_override("separation", 8)
 			var pager = ProgressiveChoicePagerScript.new(3, 3)
 			pager.name = "%s_%s_Pager" % [status_id, kind_id]
+			pager.set_dark_mode(is_dark_mode)
 			var grid := pager.call("choice_grid") as GridContainer
 			grid.name = "%s_%s_Grid" % [status_id, kind_id]
 			section.add_child(pager)
@@ -7035,25 +7037,29 @@ func _apply_button_style(button: Button, variant: String = "normal") -> void:
 	var is_primary := variant == "primary"
 	var is_danger := variant == "danger"
 	var normal := StyleBoxFlat.new()
-	normal.bg_color = COLOR_WARNING if is_danger else (COLOR_ACCENT if is_primary else (Color(0.18, 0.25, 0.32) if is_dark_mode else Color(0.96, 0.91, 0.80)))
+	normal.bg_color = SemanticPalette.color_for(is_dark_mode, "danger") if is_danger else (SemanticPalette.color_for(is_dark_mode, "action_primary") if is_primary else SemanticPalette.color_for(is_dark_mode, "surface_raised"))
 	normal.set_corner_radius_all(8)
 	normal.set_border_width_all(2)
-	normal.border_color = Color(0.48, 0.05, 0.03) if is_danger else (COLOR_ACCENT_DARK if is_primary else (Color(0.58, 0.42, 0.22) if not is_dark_mode else _theme_border()))
+	normal.border_color = SemanticPalette.color_for(is_dark_mode, "danger") if is_danger else (SemanticPalette.color_for(is_dark_mode, "border_focus") if is_primary else _theme_border())
 	var hover := normal.duplicate()
-	hover.bg_color = Color(0.92, 0.25, 0.12) if is_danger else (Color(0.08, 0.52, 0.82) if is_primary else (Color(0.23, 0.32, 0.42) if is_dark_mode else Color(1.0, 0.96, 0.84)))
+	hover.bg_color = SemanticPalette.color_for(is_dark_mode, "danger") if is_danger else (SemanticPalette.color_for(is_dark_mode, "action_primary_hover") if is_primary else SemanticPalette.color_for(is_dark_mode, "surface_muted"))
+	hover.border_color = SemanticPalette.color_for(is_dark_mode, "border_focus")
 	var pressed := normal.duplicate()
-	pressed.bg_color = Color(0.48, 0.05, 0.03) if is_danger else (COLOR_ACCENT_DARK if is_primary else (Color(0.13, 0.22, 0.31) if is_dark_mode else Color(0.86, 0.75, 0.56)))
+	pressed.bg_color = SemanticPalette.color_for(is_dark_mode, "danger") if is_danger else (SemanticPalette.color_for(is_dark_mode, "action_primary_hover") if is_primary else SemanticPalette.color_for(is_dark_mode, "surface_base"))
 	var disabled := normal.duplicate()
-	disabled.bg_color = Color(0.78, 0.82, 0.85)
-	disabled.border_color = Color(0.56, 0.61, 0.66)
+	disabled.bg_color = SemanticPalette.color_for(is_dark_mode, "action_primary_disabled")
+	disabled.border_color = SemanticPalette.color_for(is_dark_mode, "border_disabled")
 	button.add_theme_stylebox_override("normal", normal)
 	button.add_theme_stylebox_override("hover", hover)
 	button.add_theme_stylebox_override("pressed", pressed)
+	button.add_theme_stylebox_override("focus", hover)
 	button.add_theme_stylebox_override("disabled", disabled)
-	button.add_theme_color_override("font_color", Color.WHITE if is_primary or is_danger else _theme_text())
-	button.add_theme_color_override("font_hover_color", Color.WHITE if is_primary or is_danger else _theme_text())
-	button.add_theme_color_override("font_pressed_color", Color.WHITE)
-	button.add_theme_color_override("font_disabled_color", Color(0.31, 0.36, 0.40))
+	var action_text := SemanticPalette.color_for(is_dark_mode, "text_on_accent")
+	button.add_theme_color_override("font_color", action_text if is_primary or is_danger else _theme_text())
+	button.add_theme_color_override("font_hover_color", action_text if is_primary or is_danger else _theme_text())
+	button.add_theme_color_override("font_pressed_color", action_text if is_primary or is_danger else _theme_text())
+	button.add_theme_color_override("font_focus_color", action_text if is_primary or is_danger else _theme_text())
+	button.add_theme_color_override("font_disabled_color", SemanticPalette.color_for(is_dark_mode, "text_disabled"))
 
 func _apply_cell_style(button: Button, item: String) -> void:
 	var style := StyleBoxFlat.new()
@@ -7149,13 +7155,13 @@ func _style_tabs(tabs: TabContainer) -> void:
 	unselected_style.content_margin_top = 6
 	unselected_style.content_margin_bottom = 6
 	var selected_style := unselected_style.duplicate() as StyleBoxFlat
-	selected_style.bg_color = Color("28414a") if is_dark_mode else Color("fff4cf")
-	selected_style.border_color = Color("d3aa58") if is_dark_mode else Color("d59a38")
+	selected_style.bg_color = SemanticPalette.color_for(is_dark_mode, "surface_muted")
+	selected_style.border_color = SemanticPalette.color_for(is_dark_mode, "border_focus")
 	selected_style.shadow_color = Color(0, 0, 0, 0.16)
 	selected_style.shadow_size = 2
 	var hovered_style := unselected_style.duplicate() as StyleBoxFlat
-	hovered_style.bg_color = Color("23414a") if is_dark_mode else Color("eaf7f4")
-	hovered_style.border_color = Color("63a69b")
+	hovered_style.bg_color = SemanticPalette.color_for(is_dark_mode, "surface_raised")
+	hovered_style.border_color = SemanticPalette.color_for(is_dark_mode, "border_focus")
 	tabs.add_theme_stylebox_override("tab_selected", selected_style)
 	tabs.add_theme_stylebox_override("tab_unselected", unselected_style)
 	tabs.add_theme_stylebox_override("tab_hovered", hovered_style)
@@ -7301,33 +7307,33 @@ func _readable_text_color(background: Color) -> Color:
 	return Color.WHITE if luminance < 0.48 else COLOR_TEXT
 
 func _theme_bg() -> Color:
-	return Color(0.08, 0.11, 0.15) if is_dark_mode else Color(0.96, 0.98, 1.0)
+	return SemanticPalette.color_for(is_dark_mode, "surface_base")
 
 func _theme_panel() -> Color:
-	return Color(0.13, 0.18, 0.24) if is_dark_mode else Color.WHITE
+	return SemanticPalette.color_for(is_dark_mode, "surface_raised")
 
 func _theme_panel_alt() -> Color:
-	return Color(0.11, 0.16, 0.21) if is_dark_mode else Color(0.98, 1.0, 0.99)
+	return SemanticPalette.color_for(is_dark_mode, "surface_muted")
 
 
 func _theme_report_bg() -> Color:
 	return Color(0.06, 0.09, 0.13) if is_dark_mode else Color(0.08, 0.14, 0.20)
 
 func _theme_text() -> Color:
-	return Color(0.93, 0.96, 0.98) if is_dark_mode else COLOR_TEXT
+	return SemanticPalette.color_for(is_dark_mode, "text_primary")
 
 func _theme_muted() -> Color:
-	return Color(0.70, 0.76, 0.82) if is_dark_mode else COLOR_MUTED
+	return SemanticPalette.color_for(is_dark_mode, "text_secondary")
 
 func _theme_border() -> Color:
-	return Color(0.31, 0.42, 0.52) if is_dark_mode else Color(0.72, 0.80, 0.86)
+	return SemanticPalette.color_for(is_dark_mode, "border_default")
 
 func _theme_accent_text() -> Color:
-	return Color(0.55, 0.78, 1.0) if is_dark_mode else COLOR_ACCENT_DARK
+	return SemanticPalette.color_for(is_dark_mode, "border_focus")
 
 
 func _theme_success_text() -> Color:
-	return Color(0.38, 0.92, 0.66) if is_dark_mode else COLOR_SUCCESS
+	return SemanticPalette.color_for(is_dark_mode, "success")
 
 func _avg(values: Array) -> int:
 	if values.is_empty():

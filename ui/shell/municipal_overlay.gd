@@ -2,6 +2,7 @@ class_name MunicipalOverlay
 extends Control
 
 const UiIconCatalog = preload("res://ui/theme/ui_icon_catalog.gd")
+const SemanticPalette = preload("res://ui/theme/semantic_palette.gd")
 
 signal page_opened(page_id: String)
 signal overlay_closed
@@ -614,27 +615,27 @@ func _apply_palette() -> void:
 	if not is_instance_valid(_backdrop):
 		return
 
-	_backdrop.color = Color(0.01, 0.02, 0.035, 0.80) if _dark_mode else Color(0.04, 0.05, 0.06, 0.67)
+	_backdrop.color = SemanticPalette.color_for(_dark_mode, "scrim")
 	_panel.add_theme_stylebox_override("panel", _panel_style(
-		Color(0.075, 0.105, 0.135) if _dark_mode else Color(0.985, 0.965, 0.91),
-		Color(0.28, 0.50, 0.64) if _dark_mode else Color(0.48, 0.34, 0.18),
+		SemanticPalette.color_for(_dark_mode, "surface_raised"),
+		SemanticPalette.color_for(_dark_mode, "border_default"),
 		14,
 		3
 	))
 	_header_panel.add_theme_stylebox_override("panel", _panel_style(
-		Color(0.10, 0.16, 0.21) if _dark_mode else Color(0.91, 0.82, 0.64),
-		Color(0.28, 0.50, 0.64) if _dark_mode else Color(0.48, 0.34, 0.18),
+		SemanticPalette.color_for(_dark_mode, "surface_muted"),
+		SemanticPalette.color_for(_dark_mode, "border_default"),
 		10,
 		0
 	))
 	_content_panel.add_theme_stylebox_override("panel", _panel_style(
-		Color(0.055, 0.078, 0.10) if _dark_mode else Color(1.0, 0.985, 0.95),
+		SemanticPalette.color_for(_dark_mode, "surface_base"),
 		Color.TRANSPARENT,
 		0,
 		0
 	))
 
-	var text_color := Color(0.92, 0.96, 0.98) if _dark_mode else Color(0.08, 0.10, 0.12)
+	var text_color := SemanticPalette.color_for(_dark_mode, "text_primary")
 	_header_title.add_theme_color_override("font_color", text_color)
 	if is_instance_valid(_hub_page):
 		for label_variant in _hub_page.find_children("*", "Label", true, false):
@@ -652,14 +653,15 @@ func _style_header_action(button: Button, text_color: Color) -> void:
 	if not is_instance_valid(button):
 		return
 	var normal := _button_style(
-		Color(0.13, 0.22, 0.29) if _dark_mode else Color(0.98, 0.93, 0.82),
-		Color(0.33, 0.56, 0.69) if _dark_mode else Color(0.55, 0.39, 0.20),
+		SemanticPalette.color_for(_dark_mode, "surface_raised"),
+		SemanticPalette.color_for(_dark_mode, "border_default"),
 		8
 	)
 	var hover := normal.duplicate() as StyleBoxFlat
-	hover.bg_color = Color(0.18, 0.32, 0.42) if _dark_mode else Color(1.0, 0.97, 0.88)
+	hover.bg_color = SemanticPalette.color_for(_dark_mode, "surface_muted")
+	hover.border_color = SemanticPalette.color_for(_dark_mode, "border_focus")
 	var pressed := normal.duplicate() as StyleBoxFlat
-	pressed.bg_color = Color(0.07, 0.15, 0.21) if _dark_mode else Color(0.82, 0.72, 0.54)
+	pressed.bg_color = SemanticPalette.color_for(_dark_mode, "surface_base")
 	button.add_theme_stylebox_override("normal", normal)
 	button.add_theme_stylebox_override("hover", hover)
 	button.add_theme_stylebox_override("focus", hover)
@@ -672,8 +674,8 @@ func _style_header_action(button: Button, text_color: Color) -> void:
 
 func _style_menu_button(button: Button, text_color: Color) -> void:
 	var normal := _button_style(
-		Color(0.105, 0.16, 0.205) if _dark_mode else Color(0.96, 0.90, 0.76),
-		Color(0.27, 0.53, 0.69) if _dark_mode else Color(0.58, 0.41, 0.20),
+		SemanticPalette.color_for(_dark_mode, "surface_raised"),
+		SemanticPalette.color_for(_dark_mode, "border_default"),
 		12
 	)
 	normal.content_margin_left = 24
@@ -681,13 +683,13 @@ func _style_menu_button(button: Button, text_color: Color) -> void:
 	normal.content_margin_top = 18
 	normal.content_margin_bottom = 18
 	var hover := normal.duplicate() as StyleBoxFlat
-	hover.bg_color = Color(0.15, 0.27, 0.35) if _dark_mode else Color(1.0, 0.95, 0.82)
-	hover.border_color = Color(0.38, 0.68, 0.84) if _dark_mode else Color(0.72, 0.48, 0.18)
+	hover.bg_color = SemanticPalette.color_for(_dark_mode, "surface_muted")
+	hover.border_color = SemanticPalette.color_for(_dark_mode, "border_focus")
 	var pressed := normal.duplicate() as StyleBoxFlat
-	pressed.bg_color = Color(0.065, 0.13, 0.18) if _dark_mode else Color(0.86, 0.77, 0.59)
+	pressed.bg_color = SemanticPalette.color_for(_dark_mode, "surface_base")
 	var disabled := normal.duplicate() as StyleBoxFlat
-	disabled.bg_color = Color(0.11, 0.13, 0.15) if _dark_mode else Color(0.84, 0.84, 0.80)
-	disabled.border_color = Color(0.28, 0.32, 0.35) if _dark_mode else Color(0.62, 0.62, 0.57)
+	disabled.bg_color = SemanticPalette.color_for(_dark_mode, "action_primary_disabled")
+	disabled.border_color = SemanticPalette.color_for(_dark_mode, "border_disabled")
 	button.add_theme_stylebox_override("normal", normal)
 	button.add_theme_stylebox_override("hover", hover)
 	button.add_theme_stylebox_override("focus", hover)
@@ -697,7 +699,7 @@ func _style_menu_button(button: Button, text_color: Color) -> void:
 	button.add_theme_color_override("font_hover_color", text_color)
 	button.add_theme_color_override("font_pressed_color", text_color)
 	button.add_theme_color_override("font_focus_color", text_color)
-	button.add_theme_color_override("font_disabled_color", Color(0.54, 0.59, 0.62) if _dark_mode else Color(0.40, 0.42, 0.43))
+	button.add_theme_color_override("font_disabled_color", SemanticPalette.color_for(_dark_mode, "text_disabled"))
 	for node in button.find_children("*", "Label", true, false):
 		(node as Label).add_theme_color_override("font_color", text_color)
 

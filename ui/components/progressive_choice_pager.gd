@@ -1,6 +1,8 @@
 class_name ProgressiveChoicePager
 extends VBoxContainer
 
+const SemanticPalette = preload("res://ui/theme/semantic_palette.gd")
+
 signal page_changed(page_index: int)
 
 const DEFAULT_PAGE_SIZE := 3
@@ -18,6 +20,7 @@ var _previous_button: Button
 var _page_label: Label
 var _next_button: Button
 var _balanced_page_layout := false
+var _dark_mode := false
 
 
 func _init(p_columns: int = 3, p_page_size: int = DEFAULT_PAGE_SIZE) -> void:
@@ -59,14 +62,12 @@ func _init(p_columns: int = 3, p_page_size: int = DEFAULT_PAGE_SIZE) -> void:
 	_page_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_page_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_page_label.add_theme_font_size_override("font_size", 17)
-	# A dark glyph with a light outline stays legible on both supported palettes.
-	_page_label.add_theme_color_override("font_color", Color(0.08, 0.12, 0.16))
-	_page_label.add_theme_color_override("font_outline_color", Color(0.98, 0.98, 0.96))
 	_page_label.add_theme_constant_override("outline_size", 4)
 	_navigation.add_child(_page_label)
 	_next_button = _navigation_button("ChoiceNext", "下一頁 →")
 	_next_button.pressed.connect(func() -> void: set_page(_page_index + 1))
 	_navigation.add_child(_next_button)
+	_apply_semantic_palette()
 	_refresh()
 	resized.connect(_refresh_columns_for_width)
 
@@ -160,6 +161,13 @@ func set_balanced_page_layout(enabled: bool) -> void:
 	_refresh()
 
 
+func set_dark_mode(enabled: bool) -> void:
+	if _dark_mode == enabled:
+		return
+	_dark_mode = enabled
+	_apply_semantic_palette()
+
+
 func balanced_rows_for_count(visible_count: int) -> Array[int]:
 	match clampi(visible_count, 0, page_size):
 		0: return []
@@ -197,6 +205,7 @@ func debug_layout_state() -> Dictionary:
 		"last_row_centered": _balanced_last_row_centered(visible_choice_count()),
 		"navigation_visible": _navigation.visible,
 		"minimum_choice_width": minimum_choice_width,
+		"dark_mode": _dark_mode,
 	}
 
 
@@ -297,6 +306,38 @@ func _add_balanced_spacer(row: HBoxContainer, ratio: float) -> void:
 
 func _balanced_last_row_centered(visible_count: int) -> bool:
 	return visible_count == 1 or visible_count == 5
+
+
+func _apply_semantic_palette() -> void:
+	var text_primary := SemanticPalette.color_for(_dark_mode, "text_primary")
+	_page_label.add_theme_color_override("font_color", text_primary)
+	_page_label.add_theme_color_override("font_outline_color", SemanticPalette.color_for(_dark_mode, "surface_base"))
+	for button in [_previous_button, _next_button]:
+		if not is_instance_valid(button):
+			continue
+		var normal := StyleBoxFlat.new()
+		normal.bg_color = SemanticPalette.color_for(_dark_mode, "surface_raised")
+		normal.border_color = SemanticPalette.color_for(_dark_mode, "border_default")
+		normal.set_border_width_all(2)
+		normal.set_corner_radius_all(8)
+		var hover := normal.duplicate() as StyleBoxFlat
+		hover.bg_color = SemanticPalette.color_for(_dark_mode, "surface_muted")
+		hover.border_color = SemanticPalette.color_for(_dark_mode, "border_focus")
+		var pressed := normal.duplicate() as StyleBoxFlat
+		pressed.bg_color = SemanticPalette.color_for(_dark_mode, "surface_base")
+		var disabled := normal.duplicate() as StyleBoxFlat
+		disabled.bg_color = SemanticPalette.color_for(_dark_mode, "action_primary_disabled")
+		disabled.border_color = SemanticPalette.color_for(_dark_mode, "border_disabled")
+		button.add_theme_stylebox_override("normal", normal)
+		button.add_theme_stylebox_override("hover", hover)
+		button.add_theme_stylebox_override("focus", hover)
+		button.add_theme_stylebox_override("pressed", pressed)
+		button.add_theme_stylebox_override("disabled", disabled)
+		button.add_theme_color_override("font_color", text_primary)
+		button.add_theme_color_override("font_hover_color", text_primary)
+		button.add_theme_color_override("font_pressed_color", text_primary)
+		button.add_theme_color_override("font_focus_color", text_primary)
+		button.add_theme_color_override("font_disabled_color", SemanticPalette.color_for(_dark_mode, "text_disabled"))
 
 
 func _navigation_button(node_name: String, label_text: String) -> Button:

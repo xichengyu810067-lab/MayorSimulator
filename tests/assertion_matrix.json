@@ -44,6 +44,7 @@
     { "id": "redundancy_audit", "script": "res://tests/integration/redundancy_audit_test.gd", "success_pattern": "Redundancy audit passed." },
     { "id": "save_recovery_self", "script": "res://tests/unit/core/save_recovery_self_test.gd", "success_pattern": "Save recovery self-test passed." },
     { "id": "settings_overlay_style", "script": "res://tests/ui/settings_overlay_style_test.gd", "success_pattern": "Settings overlay state style test passed." },
+    { "id": "semantic_theme_contrast", "script": "res://tests/ui/semantic_theme_contrast_test.gd", "success_pattern": "Semantic theme contrast test passed." },
     { "id": "user_settings_service_self", "script": "res://tests/unit/app/user_settings_service_self_test.gd", "success_pattern": "User settings service self-test passed." },
     { "id": "start_screen_flow", "script": "res://tests/integration/start_screen_flow_test.gd", "success_pattern": "Start screen new/continue loading test passed." },
     { "id": "systems_self", "script": "res://tests/unit/systems/systems_self_test.gd", "success_pattern": "Mayor Simulator systems self-test passed." },
