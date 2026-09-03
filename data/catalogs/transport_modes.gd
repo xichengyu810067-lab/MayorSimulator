@@ -138,6 +138,11 @@ const ROUTE_MODES := {
 const CROSSING_KIND := "level_crossing"
 const LEVEL_CROSSING_BUILD_COST := 900
 const LEVEL_CROSSING_MONTHLY_MAINTENANCE := 40
+const ROUTE_PACKAGE_PRICE_MODEL := "route_package_v1"
+const ROUTE_BASE_CONSTRUCTION_PER_TILE := 1_000
+const ROUTE_BASE_MAINTENANCE_PER_TILE := 300
+const ROUTE_BASE_TILE_LIMIT := 10
+const ROUTE_LONG_DISTANCE_MULTIPLIER := 1.02
 const PROJECT_OPERATIONS := ["build", "demolish"]
 const PROJECT_STATUSES := ["planned", "under_construction", "completed"]
 const CONNECTION_DIRECTIONS := ["n", "e", "s", "w"]
@@ -181,6 +186,37 @@ static func route_modes() -> Array[String]:
 		result.append(str(mode_variant))
 	result.sort()
 	return result
+
+
+static func route_package_construction_cost(tile_count: int) -> int:
+	return _route_package_scaled_cost(tile_count, ROUTE_BASE_CONSTRUCTION_PER_TILE)
+
+
+static func route_package_monthly_maintenance(tile_count: int) -> int:
+	return _route_package_scaled_cost(tile_count, ROUTE_BASE_MAINTENANCE_PER_TILE)
+
+
+static func route_package_price_quote(tile_count: int) -> Dictionary:
+	var resolved_count := maxi(0, tile_count)
+	var exponent := maxi(0, resolved_count - ROUTE_BASE_TILE_LIMIT)
+	return {
+		"price_model": ROUTE_PACKAGE_PRICE_MODEL,
+		"route_tile_count": resolved_count,
+		"long_distance_exponent": exponent,
+		"construction_cost": route_package_construction_cost(resolved_count),
+		"monthly_maintenance": route_package_monthly_maintenance(resolved_count),
+	}
+
+
+static func _route_package_scaled_cost(tile_count: int, base_per_tile: int) -> int:
+	var resolved_count := maxi(0, tile_count)
+	var base_tiles := mini(resolved_count, ROUTE_BASE_TILE_LIMIT)
+	var excess_tiles := maxi(0, resolved_count - ROUTE_BASE_TILE_LIMIT)
+	if excess_tiles == 0:
+		return base_per_tile * base_tiles
+	var exponent := excess_tiles
+	var long_distance_unit := float(base_per_tile) * pow(ROUTE_LONG_DISTANCE_MULTIPLIER, exponent)
+	return int(ceil(float(base_per_tile * base_tiles) + float(excess_tiles) * long_distance_unit))
 
 
 static func validation_snapshot() -> Dictionary:

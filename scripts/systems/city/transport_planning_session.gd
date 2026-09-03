@@ -8,6 +8,7 @@ extends RefCounted
 const TransportModesScript = preload("res://data/catalogs/transport_modes.gd")
 
 const SCHEMA_VERSION := 1
+const WORKFLOW_ROUTE_PACKAGE_V1 := "route_package_v1"
 const STATE_INACTIVE := "inactive"
 const STATE_STATION_PLACEMENT := "station_placement"
 const STATE_NETWORK_PLACEMENT := "network_placement"
@@ -38,7 +39,11 @@ var next_session_sequence := 1
 var session: Dictionary = _inactive_session()
 
 
-func begin(station_blueprint_name: String, station_blueprint_library_id: String) -> Dictionary:
+func begin(
+	station_blueprint_name: String,
+	station_blueprint_library_id: String,
+	requested_workflow: String = ""
+) -> Dictionary:
 	if station_blueprint_name not in TransportModesScript.STATION_KINDS:
 		return _error("invalid_station_blueprint")
 	if station_blueprint_library_id.is_empty():
@@ -51,21 +56,91 @@ func begin(station_blueprint_name: String, station_blueprint_library_id: String)
 		return _error("invalid_transport_mode")
 	var session_id := "transport_planning_%06d" % next_session_sequence
 	next_session_sequence += 1
+	var workflow := requested_workflow
+	if workflow not in ["", WORKFLOW_ROUTE_PACKAGE_V1]:
+		return _error("invalid_transport_workflow")
+	if workflow == WORKFLOW_ROUTE_PACKAGE_V1 and mode not in ["bus", "metro", "train"]:
+		return _error("route_package_mode_unsupported")
 	session = {
 		"id": session_id,
 		"state": STATE_STATION_PLACEMENT,
 		"station_blueprint_name": station_blueprint_name,
 		"station_blueprint_library_id": station_blueprint_library_id,
 		"mode": mode,
+		"workflow": workflow,
 		"station_refs": [],
 		"network_refs": [],
 		"route_refs": [],
 		"network_draft": {},
-		"route_draft": {},
+		"route_draft": {"station_placements": []} if workflow == WORKFLOW_ROUTE_PACKAGE_V1 else {},
 		"resume_state": "",
 		"closed_reason": "",
 	}
 	return _success()
+
+
+func is_route_package() -> bool:
+	return str(session.get("workflow", "")) == WORKFLOW_ROUTE_PACKAGE_V1
+
+
+func record_station_draft(placement: Dictionary, worker_count: int) -> Dictionary:
+	if not is_route_package():
+		return _error("transport_session_not_route_package")
+	var preflight := can_place_station(
+		str(session.get("station_blueprint_name", "")),
+		str(session.get("station_blueprint_library_id", ""))
+	)
+	if not bool(preflight.get("ok", false)):
+		return preflight
+	var anchor_tile_id := int(placement.get("anchor_tile_id", -1))
+	var occupied_tile_ids: Array = Array(placement.get("occupied_tile_ids", [])).duplicate()
+	if anchor_tile_id < 0 or occupied_tile_ids.is_empty() or not occupied_tile_ids.has(anchor_tile_id):
+		return _error("invalid_station_draft")
+	var route_draft: Dictionary = Dictionary(session.get("route_draft", {})).duplicate(true)
+	var placements: Array = Array(route_draft.get("station_placements", [])).duplicate(true)
+	for existing_value: Variant in placements:
+		if not existing_value is Dictionary:
+			continue
+		var existing: Dictionary = existing_value
+		if int(existing.get("anchor_tile_id", -1)) == anchor_tile_id:
+			return _error("station_draft_already_recorded")
+		for tile_value: Variant in existing.get("occupied_tile_ids", []):
+			if occupied_tile_ids.has(int(tile_value)):
+				return _error("station_draft_overlap")
+	placements.append({
+		"anchor_tile_id": anchor_tile_id,
+		"occupied_tile_ids": occupied_tile_ids,
+		"footprint_id": str(placement.get("footprint_id", "")),
+		"library_id": str(placement.get("library_id", "")),
+		"blueprint": Dictionary(placement.get("blueprint", {})).duplicate(true),
+		"worker_count": worker_count,
+		"building_cost": int(placement.get("total_cost", 0)),
+		"duration_days": int(placement.get("duration_days", 0)),
+	})
+	route_draft["station_placements"] = placements
+	session["route_draft"] = route_draft
+	return _success({"station_draft_count": placements.size()})
+
+
+func remove_station_draft(anchor_tile_id: int) -> Dictionary:
+	if not is_route_package() or str(session.get("state", "")) != STATE_STATION_PLACEMENT:
+		return _error("transport_session_not_placing_stations")
+	var route_draft: Dictionary = Dictionary(session.get("route_draft", {})).duplicate(true)
+	var placements: Array = Array(route_draft.get("station_placements", [])).duplicate(true)
+	for index in range(placements.size()):
+		var value: Variant = placements[index]
+		if value is Dictionary and int((value as Dictionary).get("anchor_tile_id", -1)) == anchor_tile_id:
+			placements.remove_at(index)
+			route_draft["station_placements"] = placements
+			session["route_draft"] = route_draft
+			return _success({"station_draft_count": placements.size()})
+	return _error("station_draft_not_found")
+
+
+func station_draft_count() -> int:
+	if not is_route_package():
+		return 0
+	return Array(Dictionary(session.get("route_draft", {})).get("station_placements", [])).size()
 
 
 func can_place_station(station_blueprint_name: String, station_blueprint_library_id: String) -> Dictionary:
@@ -109,7 +184,8 @@ func begin_network_placement(network_kind: String, draft: Dictionary = {}) -> Di
 		return _error("transport_session_not_placing_stations")
 	var mode_spec := TransportModesScript.route_spec(str(session.get("mode", "")))
 	var minimum_stops := int(mode_spec.get("minimum_stops", 1))
-	if Array(session.get("station_refs", [])).size() < minimum_stops:
+	var authored_stops := station_draft_count() if is_route_package() else Array(session.get("station_refs", [])).size()
+	if authored_stops < minimum_stops:
 		return _error("transport_session_requires_more_stations", {"required": minimum_stops})
 	if not _network_kind_matches_mode(network_kind, mode_spec):
 		return _error("transport_session_network_kind_mismatch")
@@ -157,7 +233,9 @@ func begin_route_edit(draft: Dictionary = {}) -> Dictionary:
 	if str(session.get("state", "")) != STATE_NETWORK_PLACEMENT:
 		return _error("transport_session_not_placing_network")
 	var candidate := session.duplicate(true)
-	candidate["route_draft"] = draft.duplicate(true)
+	var route_draft := Dictionary(candidate.get("route_draft", {})).duplicate(true) if is_route_package() else {}
+	route_draft.merge(draft, true)
+	candidate["route_draft"] = route_draft
 	candidate["route_draft"]["mode"] = str(candidate.get("mode", ""))
 	candidate["state"] = STATE_ROUTE_EDIT
 	candidate["resume_state"] = ""
@@ -171,8 +249,66 @@ func begin_route_edit(draft: Dictionary = {}) -> Dictionary:
 func update_route_draft(draft: Dictionary) -> Dictionary:
 	if str(session.get("state", "")) != STATE_ROUTE_EDIT:
 		return _error("transport_session_not_editing_route")
-	session["route_draft"] = draft.duplicate(true)
+	var updated := Dictionary(session.get("route_draft", {})).duplicate(true) if is_route_package() else {}
+	updated.merge(draft, true)
+	session["route_draft"] = updated
 	session["route_draft"]["mode"] = str(session.get("mode", ""))
+	return _success()
+
+
+func record_route_package_jobs(
+	station_jobs: Array,
+	station_placements: Array,
+	network_jobs: Array,
+	package_quote: Dictionary
+) -> Dictionary:
+	if not is_route_package() or str(session.get("state", "")) != STATE_ROUTE_EDIT:
+		return _error("transport_session_not_route_package_edit")
+	if station_jobs.size() != station_placements.size() or station_jobs.is_empty() or network_jobs.is_empty():
+		return _error("invalid_route_package_jobs")
+	var station_refs: Array = []
+	for index in range(station_jobs.size()):
+		var job_value: Variant = station_jobs[index]
+		var placement_value: Variant = station_placements[index]
+		if not job_value is Dictionary or not placement_value is Dictionary:
+			return _error("invalid_route_package_jobs")
+		var job: Dictionary = job_value
+		var placement: Dictionary = placement_value
+		station_refs.append({
+			"job_id": str(job.get("id", "")),
+			"station_id": "",
+			"anchor_tile_id": int(placement.get("anchor_tile_id", -1)),
+			"occupied_tile_ids": Array(placement.get("occupied_tile_ids", [])).duplicate(),
+			"status": "active",
+		})
+	var network_refs: Array = []
+	for item_value: Variant in network_jobs:
+		if not item_value is Dictionary:
+			return _error("invalid_route_package_jobs")
+		var item: Dictionary = item_value
+		var project: Dictionary = item.get("project", {})
+		var job: Dictionary = item.get("job", {})
+		var kind := str(item.get("kind", ""))
+		if str(project.get("id", "")).is_empty() or str(job.get("id", "")).is_empty() or not _is_network_kind(kind):
+			return _error("invalid_route_package_jobs")
+		network_refs.append({
+			"project_id": str(project.get("id", "")),
+			"job_id": str(job.get("id", "")),
+			"kind": kind,
+			"status": "active",
+		})
+	var candidate := session.duplicate(true)
+	candidate["station_refs"] = station_refs
+	candidate["network_refs"] = network_refs
+	var route_draft: Dictionary = Dictionary(candidate.get("route_draft", {})).duplicate(true)
+	route_draft["package_quote"] = package_quote.duplicate(true)
+	candidate["route_draft"] = route_draft
+	candidate["state"] = STATE_WAITING_CONSTRUCTION
+	candidate["resume_state"] = STATE_ROUTE_EDIT
+	var semantic_error := _validate_state_semantics(candidate)
+	if not semantic_error.is_empty():
+		return _error(semantic_error)
+	session = candidate
 	return _success()
 
 
@@ -370,6 +506,9 @@ static func validate_snapshot(data: Dictionary) -> Dictionary:
 	for string_field: String in ["id", "station_blueprint_name", "station_blueprint_library_id", "mode", "resume_state", "closed_reason"]:
 		if not current.get(string_field, null) is String:
 			return {"valid": false, "error": "invalid_session_field:%s" % string_field}
+	var workflow_value: Variant = current.get("workflow", "")
+	if not workflow_value is String or str(workflow_value) not in ["", WORKFLOW_ROUTE_PACKAGE_V1]:
+		return {"valid": false, "error": "invalid_transport_workflow"}
 	if str(current.get("id", "")).is_empty() or str(current.get("station_blueprint_library_id", "")).is_empty():
 		return {"valid": false, "error": "missing_session_identity"}
 	var id_suffix := str(current.get("id", "")).trim_prefix("transport_planning_")
@@ -622,6 +761,8 @@ static func _snapshot_has_active_jobs(current: Dictionary) -> bool:
 
 
 static func _validate_state_semantics(current: Dictionary) -> String:
+	if str(current.get("workflow", "")) == WORKFLOW_ROUTE_PACKAGE_V1:
+		return _validate_route_package_semantics(current)
 	var state := str(current.get("state", ""))
 	var resume_state := str(current.get("resume_state", ""))
 	var closed_reason := str(current.get("closed_reason", ""))
@@ -642,6 +783,97 @@ static func _validate_state_semantics(current: Dictionary) -> String:
 	if state == STATE_MATERIALIZED:
 		return _validate_materialized_semantics(current)
 	return _validate_phase_semantics(current, state)
+
+
+static func _validate_route_package_semantics(current: Dictionary) -> String:
+	var state := str(current.get("state", ""))
+	var resume_state := str(current.get("resume_state", ""))
+	var closed_reason := str(current.get("closed_reason", ""))
+	if state == STATE_CLOSED:
+		if closed_reason.is_empty() or not resume_state.is_empty():
+			return "invalid_closed_session_fields"
+		return ""
+	if not closed_reason.is_empty():
+		return "unexpected_closed_reason"
+	if state == STATE_MATERIALIZED:
+		return _validate_materialized_semantics(current)
+	if state == STATE_PAUSED:
+		if resume_state not in RESUMABLE_STATES:
+			return "invalid_resume_state"
+		return _validate_route_package_phase(current, resume_state)
+	if state == STATE_WAITING_CONSTRUCTION:
+		if resume_state != STATE_ROUTE_EDIT or not _snapshot_has_active_jobs(current):
+			return "waiting_without_active_jobs"
+		return _validate_route_package_phase(current, STATE_ROUTE_EDIT, true)
+	if not resume_state.is_empty():
+		return "unexpected_resume_state"
+	return _validate_route_package_phase(current, state)
+
+
+static func _validate_route_package_phase(current: Dictionary, phase: String, materializing: bool = false) -> String:
+	var station_refs: Array = current.get("station_refs", [])
+	var network_refs: Array = current.get("network_refs", [])
+	var route_refs: Array = current.get("route_refs", [])
+	var network_draft: Dictionary = current.get("network_draft", {})
+	var route_draft: Dictionary = current.get("route_draft", {})
+	var placements_value: Variant = route_draft.get("station_placements", null)
+	if not placements_value is Array:
+		return "invalid_station_drafts"
+	var placements: Array = placements_value
+	var seen_anchors: Dictionary = {}
+	var seen_tiles: Dictionary = {}
+	for placement_value: Variant in placements:
+		if not placement_value is Dictionary:
+			return "invalid_station_draft"
+		var placement: Dictionary = placement_value
+		var anchor := int(placement.get("anchor_tile_id", -1))
+		if anchor < 0 or anchor >= 100 or seen_anchors.has(anchor):
+			return "invalid_station_draft"
+		seen_anchors[anchor] = true
+		var occupied_value: Variant = placement.get("occupied_tile_ids", null)
+		if not _valid_unique_integer_array(occupied_value) or not _integer_array_has(occupied_value, anchor):
+			return "invalid_station_draft"
+		for tile_value: Variant in occupied_value:
+			var tile_id := int(tile_value)
+			if seen_tiles.has(tile_id):
+				return "station_draft_overlap"
+			seen_tiles[tile_id] = true
+		if (
+			str(placement.get("library_id", "")).is_empty()
+			or not placement.get("blueprint", null) is Dictionary
+			or int(placement.get("worker_count", 0)) < 1
+			or int(placement.get("building_cost", -1)) < 0
+		):
+			return "invalid_station_draft"
+	if phase == STATE_STATION_PLACEMENT:
+		if not station_refs.is_empty() or not network_refs.is_empty() or not route_refs.is_empty() or not network_draft.is_empty():
+			return "unreachable_station_placement_state"
+		return ""
+	var minimum_stops := _minimum_stops(current)
+	if placements.size() < minimum_stops:
+		return "transport_session_requires_more_stations"
+	var network_kind := str(network_draft.get("kind", ""))
+	if not _network_kind_matches_mode(network_kind, TransportModesScript.route_spec(str(current.get("mode", "")))):
+		return "transport_session_network_kind_mismatch"
+	if phase == STATE_NETWORK_PLACEMENT:
+		if not station_refs.is_empty() or not network_refs.is_empty() or not route_refs.is_empty():
+			return "unreachable_network_placement_state"
+		return ""
+	if phase != STATE_ROUTE_EDIT:
+		return "invalid_session_state"
+	var tile_ids_value: Variant = network_draft.get("tile_ids", null)
+	if not _valid_unique_integer_array(tile_ids_value):
+		return "transport_session_network_required"
+	if str(route_draft.get("mode", "")) != str(current.get("mode", "")):
+		return "route_draft_mode_mismatch"
+	if not route_refs.is_empty():
+		return "unreachable_route_edit_state"
+	if materializing:
+		if station_refs.size() != placements.size() or network_refs.is_empty():
+			return "invalid_route_package_jobs"
+	elif not station_refs.is_empty() or not network_refs.is_empty():
+		return "route_package_jobs_before_confirmation"
+	return ""
 
 
 static func _validate_closed_history_semantics(current: Dictionary) -> String:

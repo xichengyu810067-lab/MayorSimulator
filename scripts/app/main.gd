@@ -33,6 +33,7 @@ const TransportPlanningPanelScript = preload("res://ui/shell/transport_planning_
 const TransportNetworkLayerScript = preload("res://scripts/world/transport_network_layer.gd")
 const TransportVehicleControllerScript = preload("res://scripts/world/transport_vehicle_controller.gd")
 const TransportPlanningSessionScript = preload("res://scripts/systems/city/transport_planning_session.gd")
+const TransportModesScript = preload("res://data/catalogs/transport_modes.gd")
 const ProgressiveChoicePagerScript = preload("res://ui/components/progressive_choice_pager.gd")
 const NpcDialogueCardScript = preload("res://ui/components/npc_dialogue_card.gd")
 const CityMetricCardScript = preload("res://ui/components/city_metric_card.gd")
@@ -4281,11 +4282,25 @@ func _transport_session_supports_kind(mode: String, kind: String) -> bool:
 
 
 func _transport_session_station_count(snapshot: Dictionary) -> int:
+	if str(snapshot.get("workflow", "")) == TransportPlanningSessionScript.WORKFLOW_ROUTE_PACKAGE_V1:
+		return Array(Dictionary(snapshot.get("route_draft", {})).get("station_placements", [])).size()
 	var result := 0
 	for ref_value: Variant in snapshot.get("station_refs", []):
 		if ref_value is Dictionary and str((ref_value as Dictionary).get("status", "")) != "cancelled":
 			result += 1
 	return result
+
+
+func _transport_session_is_route_package(snapshot: Dictionary = {}) -> bool:
+	var current := snapshot if not snapshot.is_empty() else _transport_session_snapshot()
+	return str(current.get("workflow", "")) == TransportPlanningSessionScript.WORKFLOW_ROUTE_PACKAGE_V1
+
+
+func _transport_session_has_station_draft(snapshot: Dictionary, anchor_tile_id: int) -> bool:
+	for placement_value: Variant in Dictionary(snapshot.get("route_draft", {})).get("station_placements", []):
+		if placement_value is Dictionary and int((placement_value as Dictionary).get("anchor_tile_id", -1)) == anchor_tile_id:
+			return true
+	return false
 
 
 func _transport_session_has_active_jobs(snapshot: Dictionary) -> bool:
@@ -4360,7 +4375,10 @@ func _on_transport_station_requested(building_name: String) -> void:
 				_open_transport_planning()
 				return
 		else:
-			var begun: Dictionary = vertical_slice.call("begin_transport_planning_session", building_name)
+			var begun: Dictionary = vertical_slice.call(
+				"begin_transport_planning_session", building_name,
+				TransportPlanningSessionScript.WORKFLOW_ROUTE_PACKAGE_V1
+			)
 			if not bool(begun.get("ok", false)):
 				_set_hint("無法開始交通規劃：%s" % _vertical_error_text(str(begun.get("error", "unknown"))), true)
 				return
@@ -4420,6 +4438,13 @@ func _on_transport_session_continue_requested() -> void:
 				_advance_transport_session_to_route()
 		"route_edit":
 			var settings: Dictionary = transport_planning_panel.debug_snapshot() if transport_planning_panel != null else {}
+			if _transport_session_is_route_package(session):
+				_confirm_transport_session_package(
+					int(settings.get("fleet_size", 2)),
+					int(settings.get("headway_minutes", 10)),
+					int(settings.get("fare", 30))
+				)
+				return
 			_on_transport_route_planning_requested(
 				str(session.get("mode", "")),
 				int(settings.get("fleet_size", 2)),
@@ -4642,6 +4667,18 @@ func _confirm_transport_infrastructure_plan() -> void:
 		and transport_plan_operation == "build"
 		and _transport_session_supports_kind(str(session.get("mode", "")), transport_plan_kind)
 	)
+	if use_session and _transport_session_is_route_package(session):
+		var drafted: Dictionary = vertical_slice.call(
+			"draft_transport_session_network", transport_plan_kind, transport_plan_tiles, workers
+		)
+		if not bool(drafted.get("ok", false)):
+			_set_hint("路線草案無法保存：%s" % _vertical_error_text(str(drafted.get("error", "unknown"))), true)
+			return
+		var selected_count := transport_plan_tiles.size()
+		_clear_transport_map_action()
+		_advance_transport_session_to_route()
+		_set_hint("已完成 %d 格連續路線草案；請確認總工程費、維護費與營運設定後一次開工。" % selected_count, false)
+		return
 	var method_name := "start_transport_session_network_project" if use_session else "start_transport_project"
 	var result: Dictionary
 	if use_session:
@@ -4747,12 +4784,20 @@ func _advance_transport_session_to_route() -> void:
 	var session := _transport_session_snapshot()
 	if str(session.get("state", "")) != "network_placement":
 		return
-	var result: Dictionary = vertical_slice.call("begin_transport_session_route_edit", {})
+	var settings: Dictionary = transport_planning_panel.debug_snapshot() if transport_planning_panel != null else {}
+	var route_draft := {
+		"fleet_size": int(settings.get("fleet_size", 2)),
+		"headway_minutes": int(settings.get("headway_minutes", 10)),
+		"fare": int(settings.get("fare", 30)),
+	}
+	var result: Dictionary = vertical_slice.call("begin_transport_session_route_edit", route_draft)
 	if not bool(result.get("ok", false)):
 		_set_hint("尚無法進入路線規劃：%s" % _vertical_error_text(str(result.get("error", "unknown"))), true)
 		_refresh_transport_planning_panel()
 		return
-	if _transport_session_has_active_jobs(result.get("session", {})):
+	if _transport_session_is_route_package(result.get("session", {})):
+		_set_hint("站點與路線仍是草案；核對總包估價後才會一次扣款並開始施工。", false)
+	elif _transport_session_has_active_jobs(result.get("session", {})):
 		var waiting: Dictionary = vertical_slice.call("wait_for_transport_session_construction", "route_edit")
 		if not bool(waiting.get("ok", false)):
 			_set_hint("無法等待路網工程：%s" % _vertical_error_text(str(waiting.get("error", "unknown"))), true)
@@ -4763,6 +4808,35 @@ func _advance_transport_session_to_route() -> void:
 	_open_transport_planning()
 	_refresh_transport_planning_panel()
 	_autosave("action:transport_session_route_phase_started")
+
+
+func _confirm_transport_session_package(fleet_size: int, headway_minutes: int, fare: int) -> void:
+	if vertical_slice == null:
+		return
+	var settings_result: Dictionary = vertical_slice.call(
+		"update_transport_session_route_settings", fleet_size, headway_minutes, fare
+	)
+	if not bool(settings_result.get("ok", false)):
+		_set_hint("無法更新總包營運設定：%s" % _vertical_error_text(str(settings_result.get("error", "unknown"))), true)
+		return
+	var quote: Dictionary = vertical_slice.call("transport_session_package_quote", city_grid)
+	if not bool(quote.get("ok", false)):
+		_set_hint("交通總包估價失敗：%s" % _vertical_error_text(str(quote.get("error", "unknown"))), true)
+		_refresh_transport_planning_panel()
+		return
+	var result: Dictionary = vertical_slice.call("start_transport_session_package", city_grid)
+	if not bool(result.get("ok", false)):
+		_set_hint("交通總包無法開工：%s" % _vertical_error_text(str(result.get("error", "unknown"))), true)
+		_refresh_transport_planning_panel()
+		return
+	_consume_vertical_events(vertical_slice.drain_ui_events())
+	debug_sync_npc_navigation_obstacles()
+	_update_ui()
+	_refresh_transport_planning_panel()
+	_set_hint("交通總包已一次扣款 $%d；站點與 %d 格路線開始施工，完工後會自動驗證並啟用路線。" % [
+		int(result.get("total_cost", 0)), int(quote.get("route_tile_count", 0)),
+	], false)
+	_autosave("action:transport_route_package_started")
 
 
 func _cancel_transport_map_action(show_feedback: bool) -> void:
@@ -4877,6 +4951,18 @@ func _on_grid_pressed(index: int) -> void:
 		_hide_npc_dialogue()
 		_update_ui()
 		return
+	var planning_snapshot := _transport_session_snapshot()
+	if (
+		_is_transport_station_session_placement()
+		and _transport_session_is_route_package(planning_snapshot)
+		and _transport_session_has_station_draft(planning_snapshot, index)
+	):
+		var removed: Dictionary = vertical_slice.call("remove_transport_session_station_draft", index)
+		if bool(removed.get("ok", false)):
+			_sync_placement_banner()
+			_refresh_transport_planning_panel()
+			_set_hint("已移除這座站點草案；確認總包前仍未扣款。", false)
+		return
 	var terrain = _terrain_map()
 	if terrain != null and not terrain.is_buildable(index):
 		selected_cell_index = index
@@ -4919,7 +5005,23 @@ func _on_grid_pressed(index: int) -> void:
 		_update_ui()
 		return
 	if not bool(quote.get("can_afford", false)):
-		_set_hint("城市公庫不足：本工程需要 $%d。" % int(quote.get("total_cost", 0)), true)
+		if not (_is_transport_station_session_placement() and _transport_session_is_route_package()):
+			_set_hint("城市公庫不足：本工程需要 $%d。" % int(quote.get("total_cost", 0)), true)
+			return
+	if _is_transport_station_session_placement() and _transport_session_is_route_package():
+		var drafted: Dictionary = vertical_slice.call("draft_transport_session_station", index, workers)
+		if not bool(drafted.get("ok", false)):
+			_set_hint("站點草案無法保存：%s" % _vertical_error_text(str(drafted.get("error", "unknown"))), true)
+			return
+		selected_cell_index = index
+		_placement_preview_anchor = -1
+		_placement_preview.clear()
+		_sync_placement_banner()
+		_refresh_transport_planning_panel()
+		_set_hint("已加入第 %d 座「%s」草案；確認總包前不扣款、不建立工程。" % [
+			_transport_session_station_count(drafted.get("session", {})), placement_building_name,
+		], false)
+		_autosave("action:transport_session_station_drafted")
 		return
 	_pending_construction_tile = index
 	_pending_construction_workers = workers
@@ -5064,14 +5166,16 @@ func _sync_placement_banner() -> void:
 			var quote := _transport_project_quote(transport_plan_tiles) if not transport_plan_tiles.is_empty() else {}
 			var valid := not transport_plan_tiles.is_empty() and bool(quote.get("ok", false))
 			var can_afford := valid and bool(quote.get("can_afford", true))
-			var cost := int(quote.get("total_cost", 0))
+			var package_route := _transport_session_is_route_package(session) and transport_plan_operation == "build"
+			var route_price := TransportModesScript.route_package_price_quote(transport_plan_tiles.size())
+			var cost := int(route_price.get("construction_cost", 0)) if package_route else int(quote.get("total_cost", 0))
 			var operation_label := "興建" if transport_plan_operation == "build" else "拆除"
 			placement_label.text = L10n.text("%s步驟 2/3｜%s%s｜已選 %d 格｜預估 $%d") % [
 				session_prefix, L10n.text(operation_label), L10n.text(_transport_kind_label(transport_plan_kind)),
 				transport_plan_tiles.size(), cost,
 			]
 			if placement_confirm_button != null:
-				placement_confirm_button.text = L10n.text("確認開工")
+				placement_confirm_button.text = L10n.text("下一步：確認總包" if package_route else "確認開工")
 				placement_confirm_button.disabled = not valid or not can_afford
 		else:
 			var minimum_stops := 1 if transport_route_mode == "air" else 2

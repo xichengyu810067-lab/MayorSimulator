@@ -507,7 +507,7 @@ func transport_project_quote(
 	}
 
 
-func begin_transport_planning_session(station_blueprint_name: String) -> Dictionary:
+func begin_transport_planning_session(station_blueprint_name: String, workflow: String = "") -> Dictionary:
 	if governance.has_failed():
 		return _terminal_command_error()
 	if station_blueprint_name not in TransportModesScript.STATION_KINDS:
@@ -516,7 +516,7 @@ func begin_transport_planning_session(station_blueprint_name: String) -> Diction
 	if not bool(active.get("exists", false)):
 		return {"ok": false, "error": "approved_blueprint_required"}
 	var library_id := str(active.get("library_id", active.get("id", "")))
-	var result: Dictionary = transport_planning_session.begin(station_blueprint_name, library_id)
+	var result: Dictionary = transport_planning_session.begin(station_blueprint_name, library_id, workflow)
 	if bool(result.get("ok", false)):
 		_push_ui_event("transport_planning_session_started", result.get("session", {}))
 		_emit_changed()
@@ -563,6 +563,53 @@ func place_transport_session_station(
 	})
 	_emit_changed()
 	return placement
+
+
+func draft_transport_session_station(
+	anchor_tile_id: int,
+	worker_count: int = -1
+) -> Dictionary:
+	if governance.has_failed():
+		return _terminal_command_error()
+	if transport_planning_session == null or not transport_planning_session.is_route_package():
+		return {"ok": false, "error": "transport_session_not_route_package"}
+	var current: Dictionary = transport_planning_session.snapshot()
+	var station_name := str(current.get("station_blueprint_name", ""))
+	var active := active_blueprint_status(station_name)
+	var library_id := str(active.get("library_id", active.get("id", "")))
+	var preflight: Dictionary = transport_planning_session.can_place_station(station_name, library_id)
+	if not bool(preflight.get("ok", false)):
+		return preflight
+	var resolved_workers := worker_count
+	if resolved_workers <= 0:
+		resolved_workers = int(active.get("blueprint", {}).get("requested_workers", 5))
+	var placement := placement_footprint_quote(station_name, anchor_tile_id, resolved_workers)
+	if not bool(placement.get("ok", false)):
+		return placement
+	var recorded: Dictionary = transport_planning_session.record_station_draft(placement, resolved_workers)
+	if not bool(recorded.get("ok", false)):
+		return recorded
+	_push_ui_event("transport_session_station_drafted", {
+		"anchor_tile_id": anchor_tile_id,
+		"occupied_tile_ids": Array(placement.get("occupied_tile_ids", [])).duplicate(),
+		"session": transport_planning_session.snapshot(),
+	})
+	_emit_changed()
+	return {
+		"ok": true,
+		"placement": placement.duplicate(true),
+		"session": transport_planning_session.snapshot(),
+		"authoritative_changes_applied": false,
+	}
+
+
+func remove_transport_session_station_draft(anchor_tile_id: int) -> Dictionary:
+	if transport_planning_session == null:
+		return {"ok": false, "error": "transport_planning_session_unavailable"}
+	var result: Dictionary = transport_planning_session.remove_station_draft(anchor_tile_id)
+	if bool(result.get("ok", false)):
+		_emit_changed()
+	return result
 
 
 func begin_transport_session_network_placement(
@@ -621,6 +668,25 @@ func start_transport_session_network_project(
 	return started
 
 
+func draft_transport_session_network(
+	network_kind: String,
+	tile_ids: Array,
+	worker_count: int = 5
+) -> Dictionary:
+	if transport_planning_session == null or not transport_planning_session.is_route_package():
+		return {"ok": false, "error": "transport_session_not_route_package"}
+	var draft := {
+		"kind": network_kind,
+		"operation": "build",
+		"tile_ids": tile_ids.duplicate(),
+		"worker_count": worker_count,
+	}
+	var result: Dictionary = transport_planning_session.update_network_draft(network_kind, draft)
+	if bool(result.get("ok", false)):
+		_emit_changed()
+	return result
+
+
 func begin_transport_session_route_edit(draft: Dictionary = {}) -> Dictionary:
 	if governance.has_failed():
 		return _terminal_command_error()
@@ -629,6 +695,340 @@ func begin_transport_session_route_edit(draft: Dictionary = {}) -> Dictionary:
 		_push_ui_event("transport_session_route_edit", result.get("session", {}))
 		_emit_changed()
 	return result
+
+
+func update_transport_session_route_settings(fleet_size: int, headway_minutes: int, fare: int) -> Dictionary:
+	if transport_planning_session == null or not transport_planning_session.is_route_package():
+		return {"ok": false, "error": "transport_session_not_route_package"}
+	var result: Dictionary = transport_planning_session.update_route_draft({
+		"fleet_size": clampi(fleet_size, 1, 40),
+		"headway_minutes": clampi(headway_minutes, 1, 60),
+		"fare": clampi(fare, 0, 500),
+	})
+	if bool(result.get("ok", false)):
+		_emit_changed()
+	return result
+
+
+func transport_session_package_quote(city_grid: Array = []) -> Dictionary:
+	if transport_planning_session == null or not transport_planning_session.is_route_package():
+		return {"ok": false, "error": "transport_session_not_route_package"}
+	var current: Dictionary = transport_planning_session.snapshot()
+	if str(current.get("state", "")) != TransportPlanningSessionScript.STATE_ROUTE_EDIT:
+		return {"ok": false, "error": "transport_session_not_editing_route"}
+	var route_draft: Dictionary = current.get("route_draft", {})
+	var placements: Array = Array(route_draft.get("station_placements", [])).duplicate(true)
+	var minimum_stops := int(TransportModesScript.route_spec(str(current.get("mode", ""))).get("minimum_stops", 2))
+	if placements.size() < minimum_stops:
+		return {"ok": false, "error": "transport_session_requires_more_stations", "required": minimum_stops}
+	var occupied_station_tiles: Array[int] = []
+	var station_cost := 0
+	var normalized_placements: Array = []
+	for placement_value: Variant in placements:
+		if not placement_value is Dictionary:
+			return {"ok": false, "error": "invalid_station_draft"}
+		var placement: Dictionary = placement_value
+		var workers := int(placement.get("worker_count", 0))
+		var refreshed := placement_footprint_quote(
+			str(current.get("station_blueprint_name", "")),
+			int(placement.get("anchor_tile_id", -1)),
+			workers
+		)
+		if not bool(refreshed.get("ok", false)):
+			return refreshed
+		if str(refreshed.get("library_id", "")) != str(placement.get("library_id", "")):
+			return {"ok": false, "error": "transport_session_station_blueprint_changed"}
+		for tile_value: Variant in refreshed.get("occupied_tile_ids", []):
+			var tile_id := int(tile_value)
+			if occupied_station_tiles.has(tile_id):
+				return {"ok": false, "error": "station_draft_overlap"}
+			occupied_station_tiles.append(tile_id)
+		station_cost += int(refreshed.get("total_cost", 0))
+		var normalized := placement.duplicate(true)
+		normalized["blueprint"] = Dictionary(refreshed.get("blueprint", {})).duplicate(true)
+		normalized["building_cost"] = int(refreshed.get("total_cost", 0))
+		normalized["duration_days"] = int(refreshed.get("duration_days", 0))
+		normalized_placements.append(normalized)
+	var network_draft: Dictionary = current.get("network_draft", {})
+	var network_kind := str(network_draft.get("kind", ""))
+	var route_tiles: Array = Array(network_draft.get("tile_ids", [])).duplicate()
+	if route_tiles.is_empty():
+		return {"ok": false, "error": "transport_session_network_required"}
+	var plan := _transport_plan_for_tiles(network_kind, "build", route_tiles)
+	if plan.is_empty():
+		return {"ok": false, "error": "invalid_transport_kind"}
+	var route_price := TransportModesScript.route_package_price_quote(route_tiles.size())
+	var segments: Array = Array(plan.get("segments", [])).duplicate(true)
+	if not segments.is_empty() and segments[0] is Dictionary:
+		var segment: Dictionary = segments[0]
+		segment["price_model"] = TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL
+		segment["route_construction_cost"] = int(route_price.get("construction_cost", 0))
+		segment["route_monthly_maintenance"] = int(route_price.get("monthly_maintenance", 0))
+		segments[0] = segment
+		plan["segments"] = segments
+	var occupied_tiles: Array[int] = _transport_occupied_tile_ids(city_grid)
+	for station_tile: int in occupied_station_tiles:
+		if not occupied_tiles.has(station_tile):
+			occupied_tiles.append(station_tile)
+	var model_quote: Dictionary = transport.quote_project(
+		"build", plan, terrain_map, occupied_tiles, _transport_construction_tile_ids()
+	)
+	if not bool(model_quote.get("ok", false)):
+		return _transport_public_quote_error(model_quote)
+	plan = Dictionary(model_quote.get("plan", {})).duplicate(true)
+	var crossing_tiles: Array = Array(model_quote.get("crossing_tile_ids", [])).duplicate()
+	var crossing_cost := crossing_tiles.size() * TransportModesScript.LEVEL_CROSSING_BUILD_COST
+	var support_plans: Array = []
+	var support_cost := 0
+	var support_maintenance := 0
+	var mode_spec := TransportModesScript.route_spec(str(current.get("mode", "")))
+	var depot_kind := str(mode_spec.get("required_depot_kind", ""))
+	if not depot_kind.is_empty() and not _transport_package_has_connected_support(depot_kind, network_kind, route_tiles, plan, occupied_tiles):
+		var support_tile := _transport_package_support_tile(route_tiles, occupied_tiles)
+		if support_tile < 0:
+			return {"ok": false, "error": "transport_package_support_tile_required", "support_kind": depot_kind}
+		var support_plan := _transport_plan_for_tiles(depot_kind, "build", [support_tile])
+		var support_quote: Dictionary = transport.quote_project(
+			"build", support_plan, terrain_map, occupied_tiles, _transport_construction_tile_ids()
+		)
+		if not bool(support_quote.get("ok", false)):
+			return _transport_public_quote_error(support_quote)
+		support_plan = Dictionary(support_quote.get("plan", {})).duplicate(true)
+		support_plans.append({"kind": depot_kind, "plan": support_plan, "tile_ids": [support_tile]})
+		support_cost += int(support_quote.get("total_cost", 0))
+		support_maintenance += int(TransportModesScript.facility_spec(depot_kind).get("monthly_maintenance", 0))
+	var route_construction_cost := int(route_price.get("construction_cost", 0))
+	var route_monthly_maintenance := int(route_price.get("monthly_maintenance", 0))
+	var total_cost := station_cost + route_construction_cost + support_cost + crossing_cost
+	var crossing_maintenance := crossing_tiles.size() * TransportModesScript.LEVEL_CROSSING_MONTHLY_MAINTENANCE
+	var available_workers := int(construction.available_workers())
+	var workers_per_network_job := int(network_draft.get("worker_count", 5))
+	var requested_workers := workers_per_network_job * (1 + support_plans.size())
+	for placement: Dictionary in normalized_placements:
+		requested_workers += int(placement.get("worker_count", 0))
+	return {
+		"ok": true,
+		"workflow": TransportPlanningSessionScript.WORKFLOW_ROUTE_PACKAGE_V1,
+		"price_model": TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL,
+		"mode": str(current.get("mode", "")),
+		"network_kind": network_kind,
+		"route_tile_ids": route_tiles,
+		"route_tile_count": route_tiles.size(),
+		"station_placements": normalized_placements,
+		"route_project_plan": plan,
+		"support_plans": support_plans,
+		"worker_count": workers_per_network_job,
+		"available_workers": available_workers,
+		"requested_workers": requested_workers,
+		"station_building_cost": station_cost,
+		"route_construction_cost": route_construction_cost,
+		"support_facility_cost": support_cost,
+		"level_crossing_cost": crossing_cost,
+		"total_cost": total_cost,
+		"route_monthly_maintenance": route_monthly_maintenance,
+		"support_monthly_maintenance": support_maintenance,
+		"level_crossing_monthly_maintenance": crossing_maintenance,
+		"total_monthly_maintenance": route_monthly_maintenance + support_maintenance + crossing_maintenance,
+		"crossing_tile_ids": crossing_tiles,
+		"can_afford": treasury_balance() >= total_cost,
+		"can_start": treasury_balance() >= total_cost and available_workers >= requested_workers,
+	}
+
+
+func start_transport_session_package(city_grid: Array = []) -> Dictionary:
+	if governance.has_failed():
+		return _terminal_command_error()
+	var quote := transport_session_package_quote(city_grid)
+	if not bool(quote.get("ok", false)):
+		return quote
+	var total_cost := int(quote.get("total_cost", 0))
+	if treasury_balance() < total_cost:
+		return {"ok": false, "error": "insufficient_treasury", "required": total_cost}
+	if int(quote.get("available_workers", 0)) < int(quote.get("requested_workers", 0)):
+		return {"ok": false, "error": "insufficient_workers"}
+	var candidate_envelope = session.make_envelope()
+	var candidate_metadata: Dictionary = Dictionary(candidate_envelope.state.get("metadata", {})).duplicate(true)
+	candidate_metadata["vertical_slice"] = _vertical_slice_subsystem_snapshot()
+	candidate_envelope.state["metadata"] = candidate_metadata
+	var candidate_core = GameSessionScript.new(1, 0)
+	if not candidate_core.restore_envelope(candidate_envelope):
+		return {"ok": false, "error": "transport_package_candidate_clone_failed"}
+	var candidate_construction = ConstructionSystemScript.create_from_dict(construction.to_dict())
+	var candidate_transport = TransportNetworkSystemScript.create_from_dict(transport.to_dict())
+	var candidate_planning = TransportPlanningSessionScript.create_from_dict(transport_planning_session.to_dict())
+	var candidate_blueprints = BlueprintLibraryServiceScript.new()
+	var library_snapshot := blueprint_library_service.snapshot()
+	candidate_blueprints.restore(
+		int(library_snapshot.get("next_blueprint_sequence", 1)),
+		Dictionary(library_snapshot.get("blueprint_library", {})),
+		Dictionary(library_snapshot.get("active_blueprint_by_building", {})),
+		building_definitions
+	)
+	if candidate_construction == null:
+		return {"ok": false, "error": "transport_package_construction_clone_failed"}
+	if candidate_transport == null:
+		return {"ok": false, "error": "transport_package_transport_clone_failed"}
+	if candidate_planning == null:
+		return {
+			"ok": false,
+			"error": "transport_package_planning_clone_failed",
+			"validation": TransportPlanningSessionScript.validate_snapshot(transport_planning_session.to_dict()),
+		}
+	var station_jobs: Array = []
+	var placements: Array = Array(quote.get("station_placements", [])).duplicate(true)
+	for placement_value: Variant in placements:
+		var placement: Dictionary = placement_value
+		var blueprint: Dictionary = Dictionary(placement.get("blueprint", {})).duplicate(true)
+		var library_id := str(placement.get("library_id", ""))
+		var anchor := int(placement.get("anchor_tile_id", -1))
+		var started: Dictionary = candidate_construction.start_reusable_blueprint_job(
+			library_id,
+			blueprint,
+			int(placement.get("worker_count", 0)),
+			game_day(),
+			"tile_%02d" % anchor,
+			{
+				"tile_index": anchor,
+				"anchor_tile_id": anchor,
+				"footprint_id": str(placement.get("footprint_id", "")),
+				"occupied_tile_ids": Array(placement.get("occupied_tile_ids", [])).duplicate(),
+				"building_name": str(transport_planning_session.snapshot().get("station_blueprint_name", "")),
+			}
+		)
+		if not bool(started.get("ok", false)):
+			return {"ok": false, "error": str(started.get("error", "transport_package_station_preflight_failed"))}
+		if not candidate_blueprints.record_usage(library_id, game_day()):
+			return {"ok": false, "error": "transport_package_blueprint_usage_failed"}
+		station_jobs.append(Dictionary(started.get("job", {})).duplicate(true))
+	var network_jobs: Array = []
+	var all_project_specs: Array = [{
+		"kind": str(quote.get("network_kind", "")),
+		"plan": Dictionary(quote.get("route_project_plan", {})).duplicate(true),
+	}]
+	all_project_specs.append_array(Array(quote.get("support_plans", [])).duplicate(true))
+	var candidate_occupied: Array[int] = _transport_occupied_tile_ids(city_grid)
+	var candidate_construction_tiles: Array[int] = _transport_construction_tile_ids()
+	for placement: Dictionary in placements:
+		for tile_value: Variant in placement.get("occupied_tile_ids", []):
+			var tile_id := int(tile_value)
+			if not candidate_occupied.has(tile_id):
+				candidate_occupied.append(tile_id)
+			if not candidate_construction_tiles.has(tile_id):
+				candidate_construction_tiles.append(tile_id)
+	for spec_value: Variant in all_project_specs:
+		var spec: Dictionary = spec_value
+		var kind := str(spec.get("kind", ""))
+		var plan: Dictionary = Dictionary(spec.get("plan", {})).duplicate(true)
+		var planned: Dictionary = candidate_transport.plan_project(
+			"build", plan, terrain_map, candidate_occupied, candidate_construction_tiles
+		)
+		if not bool(planned.get("ok", false)):
+			return _transport_public_quote_error(planned)
+		var project: Dictionary = planned.get("project", {})
+		var project_id := str(project.get("id", ""))
+		var project_tiles := _transport_project_tile_indices("build", Dictionary(project.get("plan", {})))
+		var started_project: Dictionary = candidate_transport.start_project(project_id)
+		if not bool(started_project.get("ok", false)):
+			return started_project
+		var job_result: Dictionary = candidate_construction.start_infrastructure_job(
+			"build", kind, project_tiles, int(quote.get("worker_count", 5)), game_day(),
+			{
+				"project_id": project_id,
+				"transport_project_id": project_id,
+				"transport_kind": kind,
+				"source_decision_id": str(project.get("plan", {}).get("source_decision_id", "")),
+			}
+		)
+		if not bool(job_result.get("ok", false)):
+			return job_result
+		var job: Dictionary = job_result.get("job", {})
+		network_jobs.append({"kind": kind, "project": Dictionary(started_project.get("project", project)).duplicate(true), "job": job.duplicate(true)})
+		for tile_id: int in project_tiles:
+			if not candidate_construction_tiles.has(tile_id):
+				candidate_construction_tiles.append(tile_id)
+	var planned_session: Dictionary = candidate_planning.record_route_package_jobs(
+		station_jobs,
+		placements,
+		network_jobs,
+		_transport_package_persisted_quote(quote)
+	)
+	if not bool(planned_session.get("ok", false)):
+		return planned_session
+	var operation_sequence := next_operation_sequence
+	var all_jobs: Array = station_jobs.duplicate(true)
+	for item: Dictionary in network_jobs:
+		all_jobs.append(Dictionary(item.get("job", {})).duplicate(true))
+	for job: Dictionary in all_jobs:
+		candidate_core.submit_command("upsert_construction", {
+			"job_id": str(job.get("id", "")),
+			"record": job,
+			"reason_tag": "construction.updated",
+		}, "transport_package_construction_%06d" % operation_sequence)
+		operation_sequence += 1
+		if not candidate_core.state.construction_jobs.has(str(job.get("id", ""))):
+			return {"ok": false, "error": "transport_package_core_job_preflight_failed"}
+	var balance_before := int(candidate_core.state.ledger.get_balance())
+	candidate_core.submit_command("ledger_post", {
+		"amount": -total_cost,
+		"reason_tag": "construction.transport_package_total",
+		"source_id": str(candidate_planning.snapshot().get("id", "transport_package")),
+		"metadata": {
+			"price_model": str(quote.get("price_model", "")),
+			"station_building_cost": int(quote.get("station_building_cost", 0)),
+			"route_construction_cost": int(quote.get("route_construction_cost", 0)),
+			"support_facility_cost": int(quote.get("support_facility_cost", 0)),
+			"level_crossing_cost": int(quote.get("level_crossing_cost", 0)),
+			"route_monthly_maintenance": int(quote.get("route_monthly_maintenance", 0)),
+		},
+		"allow_overdraft": false,
+	}, "transport_package_ledger_%06d" % operation_sequence)
+	operation_sequence += 1
+	if int(candidate_core.state.ledger.get_balance()) != balance_before - total_cost:
+		return {"ok": false, "error": "transport_package_ledger_preflight_failed"}
+	# The complete candidate has passed every terrain, occupancy, worker,
+	# construction, topology, route-draft, and treasury check. Replace all live
+	# authorities only now, so no error path can leave a partial package behind.
+	session = candidate_core
+	construction = candidate_construction
+	transport = candidate_transport
+	transport_planning_session = candidate_planning
+	blueprint_library_service = candidate_blueprints
+	next_operation_sequence = operation_sequence
+	for job: Dictionary in all_jobs:
+		_push_ui_event("construction_started", {"job": job.duplicate(true), "transport_package": true})
+	_push_ui_event("transport_package_started", {
+		"session": transport_planning_session.snapshot(),
+		"total_cost": total_cost,
+		"quote": quote.duplicate(true),
+	})
+	_emit_changed()
+	return {
+		"ok": true,
+		"session": transport_planning_session.snapshot(),
+		"quote": quote.duplicate(true),
+		"jobs": all_jobs,
+		"total_cost": total_cost,
+	}
+
+
+func _transport_package_persisted_quote(quote: Dictionary) -> Dictionary:
+	return {
+		"workflow": str(quote.get("workflow", "")),
+		"price_model": str(quote.get("price_model", "")),
+		"mode": str(quote.get("mode", "")),
+		"network_kind": str(quote.get("network_kind", "")),
+		"route_tile_count": int(quote.get("route_tile_count", 0)),
+		"station_building_cost": int(quote.get("station_building_cost", 0)),
+		"route_construction_cost": int(quote.get("route_construction_cost", 0)),
+		"support_facility_cost": int(quote.get("support_facility_cost", 0)),
+		"level_crossing_cost": int(quote.get("level_crossing_cost", 0)),
+		"total_cost": int(quote.get("total_cost", 0)),
+		"route_monthly_maintenance": int(quote.get("route_monthly_maintenance", 0)),
+		"support_monthly_maintenance": int(quote.get("support_monthly_maintenance", 0)),
+		"level_crossing_monthly_maintenance": int(quote.get("level_crossing_monthly_maintenance", 0)),
+		"total_monthly_maintenance": int(quote.get("total_monthly_maintenance", 0)),
+		"crossing_tile_ids": Array(quote.get("crossing_tile_ids", [])).duplicate(),
+	}
 
 
 func materialize_transport_session_route(
@@ -789,7 +1189,8 @@ func create_transport_route(
 	fleet_size: int,
 	headway_minutes: int,
 	fare: int,
-	_city_grid: Array = []
+	_city_grid: Array = [],
+	route_metadata: Dictionary = {}
 ) -> Dictionary:
 	if governance.has_failed():
 		return _terminal_command_error()
@@ -806,6 +1207,9 @@ func create_transport_route(
 		"fare": fare,
 		"enabled": true,
 	}
+	for field_name: String in ["price_model", "route_tile_count", "route_construction_cost", "route_monthly_maintenance"]:
+		if route_metadata.has(field_name):
+			route_plan[field_name] = route_metadata[field_name]
 	var validation: Dictionary = transport.route_quote(route_plan)
 	if not bool(validation.get("ok", false)):
 		return validation
@@ -830,6 +1234,49 @@ func create_transport_route(
 	_push_ui_event("transport_route_created", route)
 	_emit_changed()
 	return {"ok": true, "valid": true, "route": route.duplicate(true)}
+
+
+func _try_materialize_completed_transport_package() -> Dictionary:
+	if transport_planning_session == null or not transport_planning_session.is_route_package():
+		return {"ok": false, "error": "transport_session_not_route_package"}
+	var current: Dictionary = transport_planning_session.snapshot()
+	if (
+		str(current.get("state", "")) != TransportPlanningSessionScript.STATE_ROUTE_EDIT
+		or transport_planning_session.has_active_jobs()
+		or not Array(current.get("route_refs", [])).is_empty()
+	):
+		return {"ok": false, "error": "transport_package_not_ready"}
+	var route_draft: Dictionary = current.get("route_draft", {})
+	var station_tiles: Array = []
+	for placement_value: Variant in route_draft.get("station_placements", []):
+		if placement_value is Dictionary:
+			station_tiles.append(int((placement_value as Dictionary).get("anchor_tile_id", -1)))
+	var package_quote: Dictionary = route_draft.get("package_quote", {})
+	var created := create_transport_route(
+		str(current.get("mode", "")),
+		station_tiles,
+		int(route_draft.get("fleet_size", 2)),
+		int(route_draft.get("headway_minutes", 10)),
+		int(route_draft.get("fare", 30)),
+		[],
+		{
+			"price_model": str(package_quote.get("price_model", "")),
+			"route_tile_count": int(package_quote.get("route_tile_count", 0)),
+			"route_construction_cost": int(package_quote.get("route_construction_cost", 0)),
+			"route_monthly_maintenance": int(package_quote.get("route_monthly_maintenance", 0)),
+		}
+	)
+	if not bool(created.get("ok", false)) or not bool(created.get("valid", false)):
+		_push_ui_event("transport_package_route_activation_failed", created.duplicate(true))
+		return created
+	var recorded: Dictionary = transport_planning_session.record_route(Dictionary(created.get("route", {})))
+	if not bool(recorded.get("ok", false)):
+		return recorded
+	_push_ui_event("transport_package_materialized", {
+		"route": Dictionary(created.get("route", {})).duplicate(true),
+		"session": transport_planning_session.snapshot(),
+	})
+	return {"ok": true, "route": Dictionary(created.get("route", {})).duplicate(true), "session": transport_planning_session.snapshot()}
 
 
 func set_transport_route_enabled(route_id: String, enabled: bool, _city_grid: Array = []) -> Dictionary:
@@ -905,7 +1352,7 @@ func transport_view_model(city_grid: Array = []) -> Dictionary:
 	var project_models: Array[Dictionary] = []
 	for project_id in _sorted_keys(transport.projects):
 		project_models.append(Dictionary(transport.projects[project_id]).duplicate(true))
-	return {
+	var result := {
 		"planning_unlocked": true,
 		"routes": route_models,
 		"projects": project_models,
@@ -918,6 +1365,11 @@ func transport_view_model(city_grid: Array = []) -> Dictionary:
 		"private_road_traffic": transport.has_private_road_traffic(city_grid, terrain_map),
 		"network": transport.network_snapshot(),
 	}
+	if transport_planning_session != null and transport_planning_session.is_route_package():
+		var planning_state := str(transport_planning_session.snapshot().get("state", ""))
+		if planning_state == TransportPlanningSessionScript.STATE_ROUTE_EDIT:
+			result["package_quote"] = transport_session_package_quote(city_grid)
+	return result
 
 
 func transport_visual_snapshot(city_grid: Array) -> Dictionary:
@@ -1814,6 +2266,7 @@ func _handle_construction_fact(event: Dictionary) -> bool:
 			var completed_project: Dictionary = completion.get("project", {})
 			if transport_planning_session != null:
 				transport_planning_session.mark_job_completed(job_id, project_id)
+			_try_materialize_completed_transport_package()
 			_record_fact({
 				"type": "transport_project_completed",
 				"subject_id": project_id,
@@ -1883,6 +2336,7 @@ func _handle_construction_fact(event: Dictionary) -> bool:
 		_register_transport_station_for_building(record)
 		if transport_planning_session != null:
 			transport_planning_session.mark_job_completed(job_id, instance_id)
+		_try_materialize_completed_transport_package()
 		_push_ui_event("building_completed", record)
 	elif operation == "demolish":
 		var target_id := str(job.get("target_id", ""))
@@ -2121,8 +2575,12 @@ func _sync_governance_to_core(reason_tag: String) -> void:
 	}, _operation_id("governance"))
 
 func _stash_subsystems() -> void:
+	session.state.metadata["vertical_slice"] = _vertical_slice_subsystem_snapshot()
+
+
+func _vertical_slice_subsystem_snapshot() -> Dictionary:
 	var blueprint_snapshot: Dictionary = blueprint_library_service.snapshot()
-	session.state.metadata["vertical_slice"] = {
+	return {
 		"schema_version": SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION,
 		"construction": construction.to_dict(),
 		"durability": durability.to_dict(),
@@ -2272,7 +2730,6 @@ func _transport_plan_for_tiles(kind: String, operation: String, tile_ids: Array)
 				"stations": [],
 			}
 		return {}
-
 	var selected_set: Dictionary = {}
 	for tile_id: int in normalized_tiles:
 		selected_set[tile_id] = true
@@ -2300,6 +2757,48 @@ func _transport_plan_for_tiles(kind: String, operation: String, tile_ids: Array)
 		"facility_ids": facility_ids,
 		"station_ids": [],
 	}
+
+
+func _transport_package_has_connected_support(
+	depot_kind: String,
+	network_kind: String,
+	route_tiles: Array,
+	route_plan: Dictionary,
+	occupied_tiles: Array[int]
+) -> bool:
+	var candidate = TransportNetworkSystemScript.create_from_dict(transport.to_dict())
+	if candidate == null:
+		return false
+	var started: Dictionary = candidate.start_project(
+		"build", route_plan, terrain_map, occupied_tiles, _transport_construction_tile_ids()
+	)
+	if not bool(started.get("ok", false)):
+		return false
+	var project_id := str(started.get("project", {}).get("id", ""))
+	if not bool(candidate.complete_project(project_id).get("ok", false)):
+		return false
+	return bool(candidate.call("_has_connected_depot", depot_kind, network_kind, route_tiles))
+
+
+func _transport_package_support_tile(route_tiles: Array, occupied_tiles: Array[int]) -> int:
+	var unavailable: Dictionary = {}
+	for tile_value: Variant in route_tiles:
+		unavailable[int(tile_value)] = true
+	for tile_id: int in occupied_tiles:
+		unavailable[tile_id] = true
+	for tile_id: int in _transport_construction_tile_ids():
+		unavailable[tile_id] = true
+	for route_tile_value: Variant in route_tiles:
+		var coordinate: Vector2i = terrain_map.coordinate_for_tile_id(int(route_tile_value))
+		for offset: Vector2i in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
+			var candidate_tile := int(terrain_map.tile_id_for_coordinate(coordinate + offset))
+			if (
+				candidate_tile >= 0
+				and not unavailable.has(candidate_tile)
+				and terrain_map.is_buildable(candidate_tile)
+			):
+				return candidate_tile
+	return -1
 
 
 func _transport_project_tile_indices(operation: String, plan: Dictionary) -> Array[int]:

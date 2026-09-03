@@ -84,32 +84,27 @@ func _run() -> void:
 	var first_tile := int(fixture["first_station"])
 	var second_tile := int(fixture["second_station"])
 	var funds_before: int = int(main.vertical_slice.treasury_balance())
+	var negative_ledger_before := _negative_ledger_count(main)
 	_place_station(main, first_tile)
 	session = main.vertical_slice.transport_planning_session_snapshot()
 	_check(main.placement_mode_active and main.placement_building_name == "公車站", "first station incorrectly ends continuous placement")
-	_check(str(session.get("id", "")) == session_id and Array(session.get("station_refs", [])).size() == 1, "first station changed session identity or did not register")
+	_check(str(session.get("id", "")) == session_id and _station_draft_count(session) == 1, "first station changed session identity or did not retain its draft")
 	_check(main.placement_banner.is_visible_in_tree() and main.placement_label.text.contains("1/3"), "first-station checkpoint lacks its visible placement banner")
 	_check(main.placement_label.text.contains("公車路線") and main.placement_label.text.contains("公車站") and not main.placement_label.text.contains("transport_planning_"), "station checkpoint exposes its internal session id or lacks a player-facing route/station name")
 	await _capture_checkpoint("station-placement", "01-station-placement.png", capture_dir)
 	_place_station(main, second_tile)
 	session = main.vertical_slice.transport_planning_session_snapshot()
 	_check(main.placement_mode_active and str(session.get("id", "")) == session_id, "second station recreated or closed the session")
-	_check(Array(session.get("station_refs", [])).size() == 2, "same session does not retain both station jobs")
-	_check(main.vertical_slice.treasury_balance() < funds_before, "station confirmations did not use authoritative construction funding")
-	_check(main.vertical_slice.construction.jobs.size() == 2, "two station confirmations created duplicate or missing construction jobs")
+	_check(_station_draft_count(session) == 2 and Array(session.get("station_refs", [])).is_empty(), "same session does not retain both station drafts before package confirmation")
+	_check(int(main.vertical_slice.treasury_balance()) == funds_before, "station drafts charged construction funding before package confirmation")
+	_check(main.vertical_slice.construction.jobs.size() == jobs_before_session, "station drafts created construction jobs before package confirmation")
 
 	_press_map_confirm(main, "station next-step")
 	await process_frame
 	session = main.vertical_slice.transport_planning_session_snapshot()
-	_check(str(session.get("state", "")) == "waiting_construction" and str(session.get("resume_state", "")) == "network_placement", "station next-step did not wait for construction and retain network resume")
+	_check(str(session.get("state", "")) == "network_placement", "station next-step did not advance the same draft to network placement")
 	_check(main.municipal_overlay.is_open() and main.municipal_overlay.current_page() == "transport_planning", "station next-step did not return to the same transport page")
-	var waiting_session_card := main.transport_planning_panel.find_child("TransportPlanningSessionCard", true, false) as Control
-	_check(waiting_session_card != null and waiting_session_card.is_visible_in_tree(), "waiting checkpoint lacks its visible session card")
-	await _capture_checkpoint("waiting-construction", "02-waiting-construction.png", capture_dir)
-	_advance_all_active_jobs(main)
-	session = main.vertical_slice.transport_planning_session_snapshot()
-	_check(str(session.get("state", "")) == "network_placement" and str(session.get("id", "")) == session_id, "station completion did not automatically resume the same session at network placement")
-	_check(main.municipal_overlay.is_open() and main.municipal_overlay.current_page() == "transport_planning", "station completion did not keep the transport page open for its automatic network handoff")
+	_check(int(main.vertical_slice.treasury_balance()) == funds_before and main.vertical_slice.construction.jobs.size() == jobs_before_session, "advancing to the network draft changed authoritative construction state")
 
 	var road_button := main.transport_planning_panel.find_child("InfrastructureAdd_road", true, false) as Button
 	_check(road_button != null and not road_button.disabled, "network phase does not expose the same-mode guideway")
@@ -122,72 +117,44 @@ func _run() -> void:
 		_check(main.transport_plan_tiles.size() == road_index + 1, "road map input did not append the next adjacent tile")
 		_check(main.transport_plan_tiles[road_index] == int(road_tiles[road_index]), "road map input changed the player-selected path order")
 	_check(main.placement_confirm_button.visible and not main.placement_confirm_button.disabled, "road quote did not enable the visible confirmation control")
-	var jobs_before_road: int = int(main.vertical_slice.construction.jobs.size())
-	var funds_before_road := int(main.vertical_slice.treasury_balance())
-	_press_map_confirm(main, "road project")
+	_check(main.placement_confirm_button.text.contains("確認總包"), "road draft does not identify the package-confirmation handoff")
+	_press_map_confirm(main, "road draft")
 	await process_frame
 	session = main.vertical_slice.transport_planning_session_snapshot()
-	_check(str(session.get("state", "")) == "network_placement" and Array(session.get("network_refs", [])).size() == 1, "first network project incorrectly advances or leaves the session")
-	_check(main.municipal_overlay.is_open() and main.municipal_overlay.current_page() == "transport_planning", "network project did not return to the same planning page")
+	_check(str(session.get("state", "")) == "route_edit" and Array(session.get("network_refs", [])).is_empty(), "route draft did not advance to one package confirmation without authoritative projects")
+	_check(main.municipal_overlay.is_open() and main.municipal_overlay.current_page() == "transport_planning", "route draft did not return to the same planning page")
 	_check(main.map_action_mode == "inspect" and main.transport_plan_tiles.is_empty(), "road confirmation did not clear the completed map draft")
-	_check(main.vertical_slice.construction.jobs.size() == jobs_before_road + 1, "road confirmation created duplicate or missing construction jobs")
-	_check(int(main.vertical_slice.treasury_balance()) < funds_before_road, "road confirmation did not apply exactly one funded project")
-
-	var depot_button := main.transport_planning_panel.find_child("InfrastructureAdd_bus_depot", true, false) as Button
-	_check(depot_button != null and not depot_button.disabled, "network phase cannot add its required facility after guideway confirmation")
-	if depot_button != null:
-		depot_button.pressed.emit()
-	_check(main.map_action_mode == "transport_infrastructure" and main.transport_plan_kind == "bus_depot", "depot action did not enter the real infrastructure map mode")
-	main._on_grid_pressed(int(fixture["depot_tile"]))
-	_check(main.transport_plan_tiles == [int(fixture["depot_tile"])], "depot map input did not select exactly its clicked tile")
-	_check(main.placement_confirm_button.visible and not main.placement_confirm_button.disabled, "depot quote did not enable the visible confirmation control")
-	var jobs_before_depot: int = int(main.vertical_slice.construction.jobs.size())
-	var funds_before_depot := int(main.vertical_slice.treasury_balance())
-	_press_map_confirm(main, "depot project")
-	await process_frame
-	session = main.vertical_slice.transport_planning_session_snapshot()
-	_check(str(session.get("state", "")) == "network_placement" and Array(session.get("network_refs", [])).size() == 2, "second network project did not remain in the same planning phase")
-	_check(str(session.get("id", "")) == session_id, "multiple network projects recreated the planning session")
-	_check(main.map_action_mode == "inspect" and main.transport_plan_tiles.is_empty(), "depot confirmation did not clear the completed map draft")
-	_check(main.vertical_slice.construction.jobs.size() == jobs_before_depot + 1, "depot confirmation created duplicate or missing construction jobs")
-	_check(int(main.vertical_slice.treasury_balance()) < funds_before_depot, "depot confirmation did not apply exactly one funded project")
-
+	_check(int(main.vertical_slice.treasury_balance()) == funds_before and main.vertical_slice.construction.jobs.size() == jobs_before_session, "route draft changed authoritative construction state before package confirmation")
 	continue_button = main.transport_planning_panel.find_child("TransportPlanningSessionContinue", true, false) as Button
-	_check(continue_button != null and continue_button.text.contains("規劃路線"), "network phase lacks the explicit route-step command")
+	_check(continue_button != null and continue_button.text.contains("確認總包") and not continue_button.disabled, "route-edit phase lacks an enabled one-step package confirmation")
+	var package_detail := main.transport_planning_panel.find_child("TransportPlanningSessionDetail", true, false) as Label
+	_check(package_detail != null and package_detail.text.contains("總工程費") and package_detail.text.contains("路線 5 格") and package_detail.text.contains("月維護"), "package confirmation does not expose its route-length cost breakdown")
+	var route_button := main.transport_planning_panel.find_child("PlanRoute_bus", true, false) as Button
+	_check(route_button == null or route_button.disabled, "package workflow still requires a second route-stop planning pass")
+	await _capture_checkpoint("package-confirmation", "02-package-confirmation.png", capture_dir)
 	if continue_button != null:
 		continue_button.pressed.emit()
 	await process_frame
 	session = main.vertical_slice.transport_planning_session_snapshot()
-	_check(str(session.get("state", "")) == "waiting_construction" and str(session.get("resume_state", "")) == "route_edit", "explicit route step did not wait for active network projects")
+	_check(str(session.get("state", "")) == "waiting_construction" and str(session.get("resume_state", "")) == "route_edit", "package confirmation did not start its construction jobs in the same session")
+	_check(str(session.get("id", "")) == session_id and Array(session.get("station_refs", [])).size() == 2, "package confirmation lost its session or authoritative station job references")
+	_check(Array(session.get("network_refs", [])).size() >= 2, "package confirmation did not retain route and required support project references")
+	_check(main.vertical_slice.construction.jobs.size() == jobs_before_session + 4, "package confirmation did not create exactly two station, route and support jobs")
+	_check(int(main.vertical_slice.treasury_balance()) < funds_before and _negative_ledger_count(main) == negative_ledger_before + 1, "package confirmation did not apply one authoritative debit")
+	_check(main.vertical_slice.transport.routes.is_empty(), "route activated before package construction completed")
+	var waiting_session_card := main.transport_planning_panel.find_child("TransportPlanningSessionCard", true, false) as Control
+	_check(waiting_session_card != null and waiting_session_card.is_visible_in_tree(), "waiting package lacks its visible session card")
+	await _capture_checkpoint("waiting-construction", "03-waiting-construction.png", capture_dir)
 	_advance_all_active_jobs(main)
 	session = main.vertical_slice.transport_planning_session_snapshot()
-	_check(str(session.get("state", "")) == "route_edit" and str(session.get("id", "")) == session_id, "network completion did not automatically resume route edit")
-	_check(main.municipal_overlay.is_open() and main.municipal_overlay.current_page() == "transport_planning", "network completion did not keep the transport page open for its automatic route handoff")
-	_check(main.vertical_slice.transport.segments.size() == 1 and main.vertical_slice.transport.facilities.size() == 1, "completed network projects materialized duplicate or missing topology")
-
-	var route_button := main.transport_planning_panel.find_child("PlanRoute_bus", true, false) as Button
-	_check(route_button != null and route_button.is_visible_in_tree() and not route_button.disabled, "route-edit phase does not expose its matching visible route command")
-	await _capture_checkpoint("route-edit", "03-route-edit.png", capture_dir)
-	if route_button != null:
-		route_button.pressed.emit()
-	_check(main.map_action_mode == "transport_route_stops" and main.transport_route_mode == "bus", "route action did not enter the real station-selection map mode")
-	main._on_grid_pressed(first_tile)
-	_check(main.transport_route_station_tiles == [first_tile], "first station click did not establish route order")
-	main._on_grid_pressed(second_tile)
-	_check(main.transport_route_station_tiles == [first_tile, second_tile], "second station click did not append route order")
-	_check(main.placement_confirm_button.visible and not main.placement_confirm_button.disabled, "valid station order did not enable the visible route confirmation")
-	var funds_before_route := int(main.vertical_slice.treasury_balance())
-	var jobs_before_route: int = int(main.vertical_slice.construction.jobs.size())
-	var routes_before: int = int(main.vertical_slice.transport.routes.size())
-	_press_map_confirm(main, "route materialization")
-	await process_frame
-	session = main.vertical_slice.transport_planning_session_snapshot()
-	_check(str(session.get("state", "")) == "materialized" and str(session.get("id", "")) == session_id, "route did not materialize through the same session")
+	_check(str(session.get("state", "")) == "materialized" and str(session.get("id", "")) == session_id, "construction completion did not automatically materialize the same package session")
 	_check(Array(session.get("route_refs", [])).size() == 1, "materialized session does not retain one authoritative route identity")
-	_check(main.map_action_mode == "inspect" and main.transport_route_station_tiles.is_empty(), "route confirmation did not clear the completed station draft")
-	_check(main.vertical_slice.transport.routes.size() == routes_before + 1, "route confirmation created duplicate or missing topology identities")
-	_check(main.vertical_slice.construction.jobs.size() == jobs_before_route, "route confirmation unexpectedly created another construction job")
-	_check(int(main.vertical_slice.treasury_balance()) == funds_before_route, "route confirmation unexpectedly charged construction funds")
+	_check(main.vertical_slice.transport.routes.size() == 1, "construction completion created duplicate or missing route identities")
+	_check(main.vertical_slice.transport.segments.size() == 1 and main.vertical_slice.transport.facilities.size() == 1, "completed package materialized duplicate or missing topology")
+	var route: Dictionary = main.vertical_slice.transport.routes.values()[0]
+	_check(str(route.get("status", "")) == "operational" and str(route.get("price_model", "")) == "route_package_v1", "automatically materialized route is not operational with versioned pricing")
+	_check(_negative_ledger_count(main) == negative_ledger_before + 1, "construction completion introduced another package debit")
+	_check(main.map_action_mode == "inspect" and main.transport_route_station_tiles.is_empty(), "automatic route activation left a stale route-selection action")
 
 	var close_button := main.transport_planning_panel.find_child("TransportPlanningSessionClose", true, false) as Button
 	_check(close_button != null and close_button.visible, "materialized summary lacks an explicit close command")
@@ -206,19 +173,24 @@ func _run() -> void:
 
 
 func _place_station(main, tile_id: int) -> void:
+	var funds_before := int(main.vertical_slice.treasury_balance())
+	var jobs_before := int(main.vertical_slice.construction.jobs.size())
 	main._on_grid_pressed(tile_id)
-	_check(
-		main._pending_construction_tile == tile_id,
-		"station placement did not produce a direct quote for tile %d: %s" % [tile_id, main.hint_label.text]
-	)
-	if main._pending_construction_tile != tile_id:
-		return
-	_check(main.construction_confirmation.is_open(), "station quote did not open the player-facing confirmation overlay")
-	var confirm_button := main.construction_confirmation.find_child("ConfirmConstructionButton", true, false) as Button
-	_check(confirm_button != null and not confirm_button.disabled, "station quote did not expose an enabled construction confirmation")
-	if confirm_button != null:
-		confirm_button.pressed.emit()
-	_check(not main.construction_confirmation.is_open(), "station confirmation overlay did not close after the player command")
+	_check(main._pending_construction_tile < 0 and not main.construction_confirmation.is_open(), "station draft opened the legacy per-building confirmation")
+	_check(int(main.vertical_slice.treasury_balance()) == funds_before and main.vertical_slice.construction.jobs.size() == jobs_before, "station draft mutated authoritative construction state")
+	_check(main.hint_label.text.contains("草案") and main.hint_label.text.contains("不扣款"), "station draft lacks explicit zero-charge feedback: %s" % main.hint_label.text)
+
+
+func _station_draft_count(session: Dictionary) -> int:
+	return Array(Dictionary(session.get("route_draft", {})).get("station_placements", [])).size()
+
+
+func _negative_ledger_count(main) -> int:
+	var result := 0
+	for entry: Dictionary in main.vertical_slice.session.state.ledger.get_entries():
+		if int(entry.get("amount", 0)) < 0:
+			result += 1
+	return result
 
 
 func _press_map_confirm(main, phase: String) -> void:

@@ -48,6 +48,7 @@ var _new_plan_buttons: Array[Button] = []
 var _pagers: Array[Control] = []
 var _route_models: Dictionary = {}
 var _planning_session: Dictionary = {"state": "inactive"}
+var _package_quote: Dictionary = {}
 
 var _content: VBoxContainer
 var _unlock_label: Label
@@ -83,6 +84,7 @@ func set_view_model(snapshot: Dictionary) -> void:
 	_view_model = snapshot.duplicate(true)
 	var session_value: Variant = snapshot.get("planning_session", {"state": "inactive"})
 	_planning_session = Dictionary(session_value).duplicate(true) if session_value is Dictionary else {"state": "inactive"}
+	_package_quote = Dictionary(snapshot.get("package_quote", {})).duplicate(true) if snapshot.get("package_quote", {}) is Dictionary else {}
 	_planning_unlocked = bool(snapshot.get("planning_unlocked", snapshot.get("unlocked", true)))
 	_unlock_label.text = (
 		L10n.text("交通規劃已解鎖｜可繼續既有站點規劃、路網與營運決策。")
@@ -144,6 +146,7 @@ func debug_snapshot() -> Dictionary:
 		"infrastructure_choices": INFRASTRUCTURE_CHOICES.duplicate(true),
 		"route_modes": ROUTE_MODES.duplicate(true),
 		"planning_session": _planning_session.duplicate(true),
+		"package_quote": _package_quote.duplicate(true),
 		"session_visible": _session_card.visible if _session_card != null else false,
 		"session_status": _session_status_label.text if _session_status_label != null else "",
 		"session_detail": _session_detail_label.text if _session_detail_label != null else "",
@@ -508,16 +511,33 @@ func _render_planning_session() -> void:
 	if not visible:
 		return
 	var station_name := str(_planning_session.get("station_blueprint_name", "交通站點"))
-	var station_count := _non_cancelled_reference_count(_planning_session.get("station_refs", []))
+	var is_package := str(_planning_session.get("workflow", "")) == TransportPlanningSessionScript.WORKFLOW_ROUTE_PACKAGE_V1
+	var station_count := (
+		_array_size(Dictionary(_planning_session.get("route_draft", {})).get("station_placements", []))
+		if is_package
+		else _non_cancelled_reference_count(_planning_session.get("station_refs", []))
+	)
 	var completed_station_count := _completed_reference_count(_planning_session.get("station_refs", []))
 	var network_count := _non_cancelled_reference_count(_planning_session.get("network_refs", []))
+	if is_package and network_count == 0 and not Array(Dictionary(_planning_session.get("network_draft", {})).get("tile_ids", [])).is_empty():
+		network_count = 1
 	var route_count := _array_size(_planning_session.get("route_refs", []))
 	_session_status_label.text = L10n.text("進行中規劃｜%s｜%s") % [L10n.text(station_name), _session_state_label(state)]
-	_session_detail_label.text = L10n.text("%s｜站點 %d（完工 %d）｜路網工程 %d｜路線 %d") % [
-		L10n.text(station_name), station_count, completed_station_count, network_count, route_count,
-	]
+	if is_package and state == "route_edit" and bool(_package_quote.get("ok", false)):
+		_session_detail_label.text = L10n.text("總包估價｜站點 $%d＋路線 %d 格 $%d＋支援 $%d＋平交道 $%d＝總工程費 $%d｜路線月維護 $%d") % [
+			int(_package_quote.get("station_building_cost", 0)), int(_package_quote.get("route_tile_count", 0)),
+			int(_package_quote.get("route_construction_cost", 0)), int(_package_quote.get("support_facility_cost", 0)),
+			int(_package_quote.get("level_crossing_cost", 0)), int(_package_quote.get("total_cost", 0)),
+			int(_package_quote.get("route_monthly_maintenance", 0)),
+		]
+	else:
+		_session_detail_label.text = L10n.text("%s｜站點 %d（完工 %d）｜路網工程 %d｜路線 %d") % [
+			L10n.text(station_name), station_count, completed_station_count, network_count, route_count,
+		]
 	_session_continue_button.visible = state != "materialized"
-	_session_continue_button.disabled = state == "waiting_construction"
+	_session_continue_button.disabled = state == "waiting_construction" or (
+		is_package and state == "route_edit" and not bool(_package_quote.get("can_start", false))
+	)
 	_session_continue_button.text = L10n.text(_session_continue_label(state))
 	_session_close_button.text = L10n.text("結束規劃")
 
@@ -547,6 +567,7 @@ func _refresh_new_plan_button_states() -> void:
 	var state := str(_planning_session.get("state", "inactive"))
 	var session_active := state not in ["inactive", "closed"]
 	var session_mode := str(_planning_session.get("mode", ""))
+	var is_package := str(_planning_session.get("workflow", "")) == TransportPlanningSessionScript.WORKFLOW_ROUTE_PACKAGE_V1
 	for button: Button in _new_plan_buttons:
 		if not is_instance_valid(button):
 			continue
@@ -560,7 +581,7 @@ func _refresh_new_plan_button_states() -> void:
 				"infrastructure_remove":
 					disabled = true
 				"route":
-					disabled = state != "route_edit" or str(button.get_meta("transport_mode", "")) != session_mode
+					disabled = is_package or state != "route_edit" or str(button.get_meta("transport_mode", "")) != session_mode
 		button.disabled = disabled
 
 
@@ -576,6 +597,11 @@ func _session_state_label(state: String) -> String:
 
 
 func _session_continue_label(state: String) -> String:
+	if (
+		str(_planning_session.get("workflow", "")) == TransportPlanningSessionScript.WORKFLOW_ROUTE_PACKAGE_V1
+		and state == "route_edit"
+	):
+		return "確認總包並開工"
 	return {
 		"station_placement": "繼續放置站點",
 		"network_placement": "下一步：規劃路線",
