@@ -4196,6 +4196,8 @@ func _on_service_input_focus_exited(service_key: String) -> void:
 	_commit_number_input("service", service_key, service_inputs[service_key].text)
 
 func _toggle_policy(enabled: bool, policy_name: String) -> void:
+	if lower_council_stage != null:
+		lower_council_stage.set_catalog_focus("policy_selected", policy_name)
 	active_policies[policy_name] = enabled
 	_record_major_event(
 		"policy_enabled" if enabled else "policy_disabled",
@@ -4212,6 +4214,8 @@ func _toggle_policy(enabled: bool, policy_name: String) -> void:
 	_autosave("action:policy_toggled")
 
 func _submit_bill(bill_name: String) -> void:
+	if lower_council_stage != null:
+		lower_council_stage.set_catalog_focus("bill_selected", bill_name)
 	var bill_id := _governance_bill_id(bill_name)
 	var result: Dictionary = vertical_slice.submit_bill(bill_id, _vertical_city_context())
 	if bool(result.get("ok", false)):
@@ -4221,6 +4225,8 @@ func _submit_bill(bill_name: String) -> void:
 		_set_hint("法案無法送審：%s" % _vertical_error_text(str(result.get("error", "unknown"))), true)
 	_update_ui()
 	if bool(result.get("ok", false)):
+		if lower_council_stage != null:
+			lower_council_stage.set_catalog_focus("bill_review", bill_name)
 		_select_governance_status("review")
 		_autosave("action:bill_submitted")
 

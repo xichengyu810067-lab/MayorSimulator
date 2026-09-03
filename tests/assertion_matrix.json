@@ -28,6 +28,7 @@
     { "id": "locale_switch_state_preservation", "script": "res://tests/integration/locale_switch_state_preservation_test.gd", "success_pattern": "LOCALE_SWITCH_STATE_PRESERVATION_TEST_PASSED", "timeout_seconds": 240 },
     { "id": "localized_runtime_view_model", "script": "res://tests/integration/localized_runtime_view_model_test.gd", "success_pattern": "Localized runtime view-model test passed." },
     { "id": "lower_council_self", "script": "res://tests/unit/governance/lower_council_self_test.gd", "success_pattern": "Lower council self-test passed." },
+    { "id": "lower_council_scene_first", "script": "res://tests/ui/lower_council_scene_first_test.gd", "success_pattern": "Lower council scene-first test passed." },
     { "id": "lower_council_deliberation_flow", "script": "res://tests/integration/lower_council_deliberation_flow_test.gd", "success_pattern": "Lower council deliberation flow test passed.", "timeout_seconds": 240 },
     { "id": "main_integration", "script": "res://tests/integration/main_integration_test.gd", "success_pattern": "Mayor Simulator main integration test passed.", "timeout_seconds": 240 },
     { "id": "modal_click_through", "script": "res://tests/ui/modal_click_through_regression_test.gd", "success_pattern": "Modal click-through regression passed." },

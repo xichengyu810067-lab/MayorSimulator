@@ -160,6 +160,7 @@ func _run() -> void:
 func _validate_hearing(signature: Dictionary) -> bool:
 	if (
 		not bool(signature.get("visible", false))
+		or str(signature.get("stage_state", "")) != "hearing"
 		or not bool(signature.get("background_loaded", false))
 		or int(signature.get("seat_count", 0)) != 30
 		or int(signature.get("rendered_seat_count", 0)) != 30
@@ -186,6 +187,7 @@ func _validate_final(signature: Dictionary, autosaves_before: int, vote_history_
 		or not str(main._last_autosave_reason).begins_with("event:bill_")
 		or vote_history_delta != 30
 		or int(signature.get("seat_count", 0)) != 30
+		or str(signature.get("stage_state", "")) != "final_vote"
 		or int(signature.get("majority_threshold", 0)) != 16
 		or not bool(signature.get("authority_contract_valid", false))
 		or int(signature.get("vote_reveal_step_count", 0)) != 30

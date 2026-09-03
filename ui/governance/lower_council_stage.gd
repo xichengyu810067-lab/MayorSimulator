@@ -34,6 +34,7 @@ var _authority_seat_count := SEAT_COUNT
 var _authority_majority_threshold := MAJORITY_THRESHOLD
 var _authority_contract_valid := true
 var _layout_columns := 10
+var _stage_state := "idle"
 
 
 func _init() -> void:
@@ -42,7 +43,7 @@ func _init() -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	add_theme_constant_override("separation", 10)
 	_build_stage()
-	hide()
+	_show_idle()
 
 
 func refresh(pending_bill: Dictionary, bill_definition: Dictionary, latest_decision: Dictionary = {}) -> void:
@@ -52,7 +53,21 @@ func refresh(pending_bill: Dictionary, bill_definition: Dictionary, latest_decis
 	if not latest_decision.is_empty():
 		_show_final_decision(latest_decision)
 		return
-	hide()
+	_show_idle()
+
+
+func set_catalog_focus(focus_state: String, focus_text: String) -> void:
+	if focus_state not in ["policy_selected", "bill_selected", "bill_review"]:
+		return
+	_stage_state = focus_state
+	show()
+	_status_label.text = L10n.text("下議院議事廳｜%s") % L10n.text(focus_text)
+	_question_label.text = L10n.text("議員席正在準備下一項市政議程；所有政策與法案仍依既有權威流程處理。")
+	_preview_label.text = L10n.text("目前為議程導覽，不會建立票史或變更法案狀態。")
+	_response_row.hide()
+	confirm_button.hide()
+	_apply_vote_snapshot([], true)
+	_play_ambient_motion()
 
 
 func set_preview(preview: Dictionary) -> void:
@@ -112,6 +127,7 @@ func debug_signature() -> Dictionary:
 		"revealed_seat_count": _revealed_seat_count,
 		"animation_generation": _animation_generation,
 		"animation_running": _active_tween != null and _active_tween.is_valid(),
+		"stage_state": _stage_state,
 		"decision_signature": _latest_decision_signature,
 	}
 
@@ -204,6 +220,7 @@ func _build_stage() -> void:
 
 
 func _show_hearing(pending_bill: Dictionary, bill_definition: Dictionary) -> void:
+	_stage_state = "hearing"
 	show()
 	var hearing: Dictionary = pending_bill.get("lower_house_hearing", {})
 	_update_authority_values(
@@ -227,6 +244,7 @@ func _show_hearing(pending_bill: Dictionary, bill_definition: Dictionary) -> voi
 
 
 func _show_final_decision(decision: Dictionary) -> void:
+	_stage_state = "final_vote"
 	show()
 	_selected_response_id = ""
 	_latest_preview.clear()
@@ -252,6 +270,18 @@ func _show_final_decision(decision: Dictionary) -> void:
 	if decision_signature != _latest_decision_signature:
 		_latest_decision_signature = decision_signature
 		_play_vote_reveal(final_vote.get("votes", []))
+
+
+func _show_idle() -> void:
+	_stage_state = "idle"
+	show()
+	_status_label.text = L10n.text("下議院議事廳｜議程待命")
+	_question_label.text = L10n.text("選擇政策或法案後，議事廳會持續呈現審議與表決狀態。")
+	_preview_label.text = L10n.text("30 席下議院｜法案通過門檻 16 票｜尚未建立表決。")
+	_response_row.hide()
+	confirm_button.hide()
+	_apply_vote_snapshot([], true)
+	_play_ambient_motion()
 
 
 func _rebuild_response_buttons(options: Array) -> void:
@@ -329,6 +359,19 @@ func _play_vote_reveal(votes_variant: Variant) -> void:
 		var vote: Dictionary = votes[index]
 		_active_tween.tween_interval(0.035)
 		_active_tween.tween_callback(_reveal_seat.bind(index, str(vote.get("choice", "abstain"))))
+
+
+func _play_ambient_motion() -> void:
+	if _active_tween != null and _active_tween.is_valid():
+		_active_tween.kill()
+	_animation_generation += 1
+	_active_tween = create_tween().set_loops()
+	_active_tween.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	for seat: PanelContainer in _seats:
+		seat.modulate = Color(0.88, 0.94, 0.96, 0.62)
+		_active_tween.parallel().tween_property(seat, "modulate:a", 0.82, 0.68)
+		_active_tween.parallel().tween_property(seat, "position:y", seat.position.y - 2.0, 0.68)
+		_active_tween.parallel().tween_property(seat, "position:y", seat.position.y, 0.68)
 
 
 func _reveal_seat(index: int, choice: String) -> void:
