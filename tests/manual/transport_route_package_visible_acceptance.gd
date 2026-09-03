@@ -146,8 +146,8 @@ func _run() -> void:
 		return
 	var existing_building_button := main.grid_buttons[existing_building_tile] as Button
 	var building_visual: Dictionary = existing_building_button.call("get_visual_animation_debug_snapshot") if existing_building_button != null else {}
-	var existing_building_rect := existing_building_button.get_global_rect() if existing_building_button != null else Rect2()
-	var placement_banner_rect := main.placement_banner.get_global_rect() if main.placement_banner != null else Rect2()
+	var existing_building_rect: Rect2 = existing_building_button.get_global_rect() if existing_building_button != null else Rect2()
+	var placement_banner_rect: Rect2 = main.placement_banner.get_global_rect() if main.placement_banner != null else Rect2()
 	var existing_building_unobscured_by_planning_ui := _existing_building_is_unobscured_by_planning_ui(existing_building_button)
 	var network_debug: Dictionary = main.transport_network_layer.debug_snapshot()
 	var station_draft_ghost_count := 0
@@ -467,7 +467,7 @@ func _existing_building_is_unobscured_by_planning_ui(building_button: Control) -
 	if building_button == null or not building_button.is_visible_in_tree():
 		return false
 	var building_rect := building_button.get_global_rect()
-	var viewport_rect := main.get_viewport().get_visible_rect()
+	var viewport_rect: Rect2 = main.get_viewport().get_visible_rect()
 	if building_rect.size.x <= 0.0 or building_rect.size.y <= 0.0 or not viewport_rect.encloses(building_rect):
 		return false
 	for overlay_value: Variant in [main.status_hud, main.placement_banner, main.action_dock]:
