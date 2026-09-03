@@ -1375,12 +1375,12 @@ func _validate_visual_data(overlay, expected_page: String) -> bool:
 				push_error("Judicial page must expose one layered courtroom scene; found %d." % courtroom_scenes.size())
 				return false
 		else:
-			var function_pictures: Array = []
-			for node in overlay.find_children("FunctionIllustration", "TextureRect", true, false):
+			var oversight_scenes: Array = []
+			for node in overlay.find_children("OversightHearingStage", "Control", true, false):
 				if node.is_visible_in_tree():
-					function_pictures.append(node)
-			if function_pictures.size() != 1:
-				push_error("Page '%s' must expose one dominant function illustration; found %d." % [expected_page, function_pictures.size()])
+					oversight_scenes.append(node)
+			if oversight_scenes.size() != 1:
+				push_error("Oversight page must expose one layered hearing scene; found %d." % oversight_scenes.size())
 				return false
 		var defense_actions: Node = null
 		for node in overlay.find_children("DefenseActions", "HBoxContainer", true, false):

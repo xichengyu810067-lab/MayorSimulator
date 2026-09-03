@@ -1,7 +1,7 @@
 extends ScrollContainer
 
-const UiIconCatalog = preload("res://ui/theme/ui_icon_catalog.gd")
 const CourtroomStageScript = preload("res://ui/governance/courtroom_stage.gd")
+const OversightHearingStageScript = preload("res://ui/governance/oversight_hearing_stage.gd")
 
 signal defense_submitted(mode: String, case_id: String, defense_id: String, result: Dictionary)
 
@@ -66,6 +66,7 @@ var _case_page_label: Label
 var _previous_case_button: Button
 var _next_case_button: Button
 var _courtroom_stage
+var _oversight_hearing_stage
 var _procedure_labels: Dictionary = {}
 var _next_step_label: Label
 var _bench_label: Label
@@ -125,6 +126,8 @@ func submit_current_defense(template_id: String) -> Dictionary:
 		result = _system.submit_oversight_defense(case_id, template_id)
 	if bool(result.get("ok", false)):
 		refresh(_system)
+		if mode == MODE_OVERSIGHT and _oversight_hearing_stage != null:
+			_oversight_hearing_stage.play_defense(template_id)
 	defense_submitted.emit(mode, case_id, template_id, result)
 	return result
 
@@ -150,14 +153,8 @@ func _build_content() -> void:
 		_courtroom_stage = CourtroomStageScript.new()
 		content.add_child(_courtroom_stage)
 	else:
-		var picture := TextureRect.new()
-		picture.name = "FunctionIllustration"
-		picture.texture = UiIconCatalog.texture(str(_config()["icon"]))
-		picture.custom_minimum_size = Vector2(220, 220)
-		picture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		picture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		picture.tooltip_text = str(_config()["purpose"])
-		content.add_child(picture)
+		_oversight_hearing_stage = OversightHearingStageScript.new()
+		content.add_child(_oversight_hearing_stage)
 
 	_case_panel = PanelContainer.new()
 	_case_panel.name = "DefenseCasePanel"
@@ -353,6 +350,8 @@ func _refresh_case() -> void:
 		if mode == MODE_JUDICIAL:
 			_courtroom_stage.show_empty()
 			_refresh_procedure_timeline({})
+		elif mode == MODE_OVERSIGHT and _oversight_hearing_stage != null:
+			_oversight_hearing_stage.show_empty()
 		for button_variant in _defense_buttons.values():
 			(button_variant as Button).disabled = true
 			(button_variant as Button).text = L10n.text(str((button_variant as Button).get_meta("semantic_label", "辯護")))
@@ -379,6 +378,8 @@ func _refresh_case() -> void:
 			int(active_case.get("evidence_strength", 0)),
 			"、".join(localized_allegations),
 		]
+		if _oversight_hearing_stage != null:
+			_oversight_hearing_stage.set_case(active_case)
 	if _system.has_method("is_terminal_locked") and bool(_system.is_terminal_locked()):
 		var failure_reason := str(_system.terminal_failure_reason())
 		_defense_status.text = L10n.text("遊戲失敗：%s") % L10n.text(str(FAILURE_REASON_LABELS.get(failure_reason, "狀態未知")))
