@@ -118,11 +118,13 @@ func _run() -> void:
 	await _settle(6)
 	var captures: Array[Dictionary] = []
 	var scoped_snapshot: Dictionary = main.transport_planning_panel.debug_snapshot()
+	var visible_metro_infra := main.transport_planning_panel.find_child("InfrastructureAdd_metro_track", true, false) as Button
+	var visible_train_route := main.transport_planning_panel.find_child("PlanRoute_train", true, false) as Button
 	if (
 		Array(scoped_snapshot.get("scoped_infrastructure_choice_ids", [])) != ["road", "bus_depot"]
 		or Array(scoped_snapshot.get("scoped_route_mode_ids", [])) != ["bus"]
-		or main.transport_planning_panel.find_child("InfrastructureAdd_metro_track", true, false) != null
-		or main.transport_planning_panel.find_child("PlanRoute_train", true, false) != null
+		or (visible_metro_infra != null and visible_metro_infra.is_visible_in_tree())
+		or (visible_train_route != null and visible_train_route.is_visible_in_tree())
 	):
 		_fail("active bus session still exposes foreign infrastructure or route cards: %s" % scoped_snapshot)
 		return
@@ -320,6 +322,7 @@ func _run() -> void:
 			"visible_infrastructure_choice_ids": scoped_snapshot.get("scoped_infrastructure_choice_ids", []),
 			"visible_route_mode_ids": scoped_snapshot.get("scoped_route_mode_ids", []),
 			"foreign_mode_cards_absent": true,
+			"foreign_mode_cards_hidden": true,
 			"existing_building_tile_id": existing_building_tile,
 			"existing_building_visible_during_route_placement": true,
 			"station_draft_ghost_count": station_draft_ghost_count,

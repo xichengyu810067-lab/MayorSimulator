@@ -217,9 +217,30 @@ func _run() -> void:
 	var metro_add := panel.find_child("InfrastructureAdd_metro_track", true, false) as Button
 	_check(heavy_rail_add != null and not heavy_rail_add.disabled, "train session cannot add its guideway")
 	_check(rail_signal_add != null and not rail_signal_add.disabled, "train session cannot add mode-compatible rail signals")
-	_check(metro_add == null, "train session still renders cross-mode metro infrastructure")
-	_check(panel.find_child("PlanRoute_train", true, false) is Button, "train session hides its matching route card")
-	_check(panel.find_child("PlanRoute_bus", true, false) == null, "train session still renders a foreign bus route card")
+	_check(heavy_rail_add != null and heavy_rail_add.is_visible_in_tree(), "train session hides its matching infrastructure card")
+	_check(rail_signal_add != null and rail_signal_add.is_visible_in_tree(), "train session hides its matching signal card")
+	_check(metro_add != null and not metro_add.is_visible_in_tree(), "train session still renders cross-mode metro infrastructure")
+	panel.set_view_model({
+		"planning_unlocked": true,
+		"planning_session": {
+			"id": "transport_plan_ui_1",
+			"state": "route_edit",
+			"mode": "train",
+			"station_blueprint_name": "火車站",
+			"station_refs": [
+				{"job_id": "station_1", "status": "completed"},
+				{"job_id": "station_2", "status": "active"},
+			],
+			"network_refs": [{"job_id": "track_1", "status": "active"}],
+			"route_refs": [],
+		},
+		"routes": [],
+	})
+	await process_frame
+	var matching_train_route_button_edit := panel.find_child("PlanRoute_train", true, false) as Button
+	_check(matching_train_route_button_edit != null and matching_train_route_button_edit.is_inside_tree() and matching_train_route_button_edit.is_visible_in_tree(), "train session hides its matching route card during route edit")
+	var foreign_train_route_button_edit := panel.find_child("PlanRoute_bus", true, false) as Button
+	_check(foreign_train_route_button_edit != null and foreign_train_route_button_edit.is_inside_tree() and not foreign_train_route_button_edit.is_visible_in_tree(), "train session still renders a foreign bus route card during route edit")
 	panel.set_view_model({
 		"planning_unlocked": true,
 		"planning_session": {
@@ -239,10 +260,26 @@ func _run() -> void:
 	var road_add := panel.find_child("InfrastructureAdd_road", true, false) as Button
 	_check(runway_add != null and not runway_add.disabled, "air session cannot add its runway guideway")
 	_check(taxiway_add != null and not taxiway_add.disabled, "air session cannot add taxiway in the same network phase")
-	_check(road_add == null, "air session still renders a cross-mode road project")
-	_check(panel.find_child("PlanRoute_air", true, false) is Button, "air session hides its matching route card")
-	_check(panel.find_child("PlanRoute_train", true, false) == null, "air session still renders a foreign train route card")
-	_check_mode_scoped_catalogs(panel)
+	_check(road_add != null and not road_add.is_visible_in_tree(), "air session still renders a cross-mode road project")
+	panel.set_view_model({
+		"planning_unlocked": true,
+		"planning_session": {
+			"id": "transport_plan_air_1",
+			"state": "route_edit",
+			"mode": "air",
+			"station_blueprint_name": "機場",
+			"station_refs": [{"job_id": "airport_1", "status": "completed"}],
+			"network_refs": [],
+			"route_refs": [],
+		},
+		"routes": [],
+	})
+	await process_frame
+	var matching_air_route_button := panel.find_child("PlanRoute_air", true, false) as Button
+	_check(matching_air_route_button != null and matching_air_route_button.is_inside_tree() and matching_air_route_button.is_visible_in_tree(), "air session hides its matching route card during route edit")
+	var foreign_air_route_button := panel.find_child("PlanRoute_train", true, false) as Button
+	_check(foreign_air_route_button != null and foreign_air_route_button.is_inside_tree() and not foreign_air_route_button.is_visible_in_tree(), "air session still renders a foreign train route card during route edit")
+	await _check_mode_scoped_catalogs(panel)
 
 	panel.set_view_model({
 		"planning_unlocked": true,
@@ -261,7 +298,11 @@ func _run() -> void:
 	_check(session_continue.disabled and session_continue.text.contains("等待施工"), "waiting session exposes a premature continue command")
 	_check(sections_ready and not infrastructure_section.visible and not operations_section.visible and not route_list_section.visible, "waiting phase exposes controls the player cannot use")
 
-	panel.set_view_model({"planning_unlocked": false, "routes": []})
+	panel.set_view_model({
+		"planning_unlocked": false,
+		"planning_session": {"state": "inactive"},
+		"routes": [],
+	})
 	await process_frame
 	var plan_action := panel.find_child("PlanRoute_bus", true, false) as Button
 	var empty_label := panel.find_child("TransportRouteEmpty", true, false) as Label
@@ -270,8 +311,12 @@ func _run() -> void:
 	_check(empty_label != null and empty_label.visible, "empty route state is not rendered")
 	_check(sections_ready and infrastructure_section.visible and operations_section.visible and route_list_section.visible, "inactive planning does not restore the network and route surfaces")
 	_check(int(panel.debug_snapshot().get("route_count", -1)) == 0, "route cards were not cleared with an empty snapshot")
-	_check(panel.find_child("InfrastructureAdd_road", true, false) is Button and panel.find_child("InfrastructureAdd_runway", true, false) is Button, "inactive management surface does not restore all infrastructure modes")
-	_check(panel.find_child("PlanRoute_bus", true, false) is Button and panel.find_child("PlanRoute_air", true, false) is Button, "inactive management surface does not restore all route modes")
+	for infra_id: String in ["road", "metro_track", "heavy_rail", "runway", "taxiway", "bus_depot", "metro_depot", "rail_depot", "rail_signal"]:
+		var infra_button := panel.find_child("InfrastructureAdd_%s" % infra_id, true, false) as Button
+		_check(infra_button != null and infra_button.is_inside_tree(), "inactive management surface does not restore infrastructure card: %s" % infra_id)
+	for route_mode: String in ["bus", "metro", "train", "air"]:
+		var route_button := panel.find_child("PlanRoute_%s" % route_mode, true, false) as Button
+		_check(route_button != null and route_button.is_inside_tree(), "inactive management surface does not restore all route modes: %s" % route_mode)
 
 	var exit_code := 1 if _failed else 0
 	if not _failed:
@@ -338,6 +383,7 @@ func _check_mode_scoped_catalogs(panel: Control) -> void:
 			},
 			"routes": [],
 		})
+		await process_frame
 		var snapshot: Dictionary = panel.debug_snapshot()
 		var actual_infrastructure: Array = snapshot.get("scoped_infrastructure_choice_ids", [])
 		var actual_routes: Array = snapshot.get("scoped_route_mode_ids", [])
@@ -345,7 +391,45 @@ func _check_mode_scoped_catalogs(panel: Control) -> void:
 		_check(actual_routes == [mode], "%s session route catalog leaked another mode: %s" % [mode, actual_routes])
 		for foreign_mode: String in ["bus", "metro", "train", "air"]:
 			var route_button := panel.find_child("PlanRoute_%s" % foreign_mode, true, false) as Button
-			_check((route_button != null) == (foreign_mode == mode), "%s session rendered the wrong route card: %s" % [mode, foreign_mode])
+			_check(route_button != null and route_button.is_inside_tree(), "%s session lost a route card from tree: %s" % [mode, foreign_mode])
+			_check(not route_button.is_visible_in_tree(), "%s session rendered a non-editable route card: %s" % [mode, foreign_mode])
+		for infra_id: String in ["road", "metro_track", "heavy_rail", "runway", "taxiway", "bus_depot", "metro_depot", "rail_depot", "rail_signal"]:
+			var infra_button := panel.find_child("InfrastructureAdd_%s" % infra_id, true, false) as Button
+			var normalized_infra_id := "rail_track" if infra_id == "heavy_rail" else infra_id
+			if infra_id in expected_infrastructure[mode]:
+				_check(infra_button != null and infra_button.is_inside_tree(), "%s session moved required infrastructure card out of tree: %s" % [mode, infra_id])
+				_check(infra_button.is_visible_in_tree(), "%s session hid the correct infrastructure card: %s" % [mode, infra_id])
+			else:
+				if normalized_infra_id in expected_infrastructure[mode]:
+					_check(infra_button != null and infra_button.is_inside_tree(), "%s session moved a required alias out of tree: %s" % [mode, infra_id])
+					_check(infra_button.is_visible_in_tree(), "%s session hid the corrected infrastructure alias: %s" % [mode, infra_id])
+				else:
+					_check(infra_button != null and infra_button.is_inside_tree(), "%s session dropped a non-applicable infrastructure card: %s" % [mode, infra_id])
+					_check(not infra_button.is_visible_in_tree(), "%s session rendered the wrong infrastructure card: %s" % [mode, infra_id])
+		panel.set_view_model({
+			"planning_unlocked": true,
+			"planning_session": {
+				"id": "transport_mode_scope_%s_route_edit" % mode,
+				"workflow": "route_package_v1" if mode != "air" else "",
+				"state": "route_edit",
+				"mode": mode,
+				"station_blueprint_name": {"bus": "公車站", "metro": "捷運站", "train": "火車站", "air": "機場"}[mode],
+				"station_refs": [],
+				"network_refs": [],
+				"route_refs": [],
+			},
+			"routes": [],
+		})
+		await process_frame
+		var matching_route_button := panel.find_child("PlanRoute_%s" % mode, true, false) as Button
+		_check(matching_route_button != null and matching_route_button.is_inside_tree(), "%s route-edit session dropped its matching route card from tree: %s" % [mode, mode])
+		_check(matching_route_button.is_visible_in_tree(), "%s route-edit session hid its matching route card: %s" % [mode, mode])
+		for foreign_mode: String in ["bus", "metro", "train", "air"]:
+			if foreign_mode == mode:
+				continue
+			var route_button := panel.find_child("PlanRoute_%s" % foreign_mode, true, false) as Button
+			_check(route_button != null and route_button.is_inside_tree(), "%s session dropped a foreign route card from tree: %s" % [mode, foreign_mode])
+			_check(not route_button.is_visible_in_tree(), "%s session rendered the wrong route card: %s" % [mode, foreign_mode])
 
 
 func _check_progressive_groups(snapshot: Dictionary) -> void:

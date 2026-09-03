@@ -51,6 +51,7 @@ var _infrastructure_choice_cards: Dictionary = {}
 var _route_mode_cards: Dictionary = {}
 var _planning_session: Dictionary = {"state": "inactive"}
 var _package_quote: Dictionary = {}
+var _choice_stash: Control
 
 var _content: VBoxContainer
 var _unlock_label: Label
@@ -267,6 +268,8 @@ func _build_content() -> void:
 	_route_pager.name = "TransportRoutePager"
 	_register_pager(_route_pager)
 	route_section.add_child(_route_pager)
+	_choice_stash = _choice_stash_container()
+	_content.add_child(_choice_stash)
 	_route_empty_label = _label("目前沒有路線。請先從建設與藍圖核准交通站點，再完成基礎路網規劃。", BODY_FONT_SIZE)
 	_route_empty_label.name = "TransportRouteEmpty"
 	_route_empty_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -577,10 +580,15 @@ func _apply_session_focus_layout(state: String, session_visible: bool) -> void:
 
 
 func _refresh_session_scoped_choices() -> void:
+	if _choice_stash == null:
+		_choice_stash = _choice_stash_container()
+		_content.add_child(_choice_stash)
 	if _infrastructure_pager == null or _route_mode_pager == null:
 		return
 	_infrastructure_pager.call("clear_choices", false)
 	_route_mode_pager.call("clear_choices", false)
+	_stash_scoped_cards(_infrastructure_choice_cards)
+	_stash_scoped_cards(_route_mode_cards)
 	var state := str(_planning_session.get("state", "inactive"))
 	var session_active := state not in ["inactive", "closed"]
 	var session_mode := str(_planning_session.get("mode", ""))
@@ -590,15 +598,36 @@ func _refresh_session_scoped_choices() -> void:
 		if session_active and not TransportPlanningSessionScript.network_kind_matches_mode(session_mode, normalized_kind):
 			continue
 		var card := _infrastructure_choice_cards.get(choice_id) as Control
-		if card != null:
+		if card != null and is_instance_valid(card):
+			card.visible = true
 			_infrastructure_pager.call("add_choice", card)
 	for mode: Dictionary in ROUTE_MODES:
 		var mode_id := str(mode.get("id", ""))
 		if session_active and mode_id != session_mode:
 			continue
 		var card := _route_mode_cards.get(mode_id) as Control
-		if card != null:
+		if card != null and is_instance_valid(card):
+			card.visible = true
 			_route_mode_pager.call("add_choice", card)
+
+
+func _stash_scoped_cards(cards: Dictionary) -> void:
+	for choice in cards.values():
+		var card := choice as Control
+		if card == null or not is_instance_valid(card):
+			continue
+		if card.get_parent() != null and card.get_parent() != _choice_stash:
+			card.get_parent().remove_child(card)
+		if card.get_parent() == null:
+			_choice_stash.add_child(card)
+
+
+func _choice_stash_container() -> Control:
+	var stash := Control.new()
+	stash.name = "TransportChoiceStash"
+	stash.visible = false
+	stash.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return stash
 
 
 func _scoped_infrastructure_choice_ids() -> Array[String]:
