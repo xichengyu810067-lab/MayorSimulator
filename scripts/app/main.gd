@@ -1148,6 +1148,32 @@ func _build_placement_banner() -> PanelContainer:
 	row.add_child(placement_cancel_button)
 	return panel
 
+
+func _set_placement_banner_layout(compact_transport_layout: bool) -> void:
+	if placement_banner == null:
+		return
+	if compact_transport_layout:
+		# Route planning keeps the map in view for a longer continuous session.
+		# Dock its controls beside the map rather than spanning its centre, while
+		# retaining the established button sizes and two-line instruction label.
+		placement_banner.anchor_left = 1.0
+		placement_banner.anchor_top = 0.0
+		placement_banner.anchor_right = 1.0
+		placement_banner.anchor_bottom = 0.0
+		placement_banner.offset_left = -732.0
+		placement_banner.offset_top = UI_STATUS_HEIGHT + 20.0
+		placement_banner.offset_right = -UI_HUD_EDGE_INSET
+		placement_banner.offset_bottom = UI_STATUS_HEIGHT + 112.0
+		return
+	placement_banner.anchor_left = 0.5
+	placement_banner.anchor_top = 0.0
+	placement_banner.anchor_right = 0.5
+	placement_banner.anchor_bottom = 0.0
+	placement_banner.offset_left = -470.0
+	placement_banner.offset_top = 140.0
+	placement_banner.offset_right = 470.0
+	placement_banner.offset_bottom = 214.0
+
 func _build_action_dock() -> PanelContainer:
 	var panel := _panel(Color(0.04, 0.12, 0.19, 0.94), 12, UI_HUD_PANEL_PADDING)
 	panel.name = "ActionDock"
@@ -5179,6 +5205,8 @@ func _sync_placement_banner() -> void:
 	if placement_banner == null or placement_label == null:
 		return
 	var transport_active := _is_transport_map_action_active()
+	var compact_transport_layout := transport_active or _is_transport_station_session_placement()
+	_set_placement_banner_layout(compact_transport_layout)
 	placement_banner.visible = placement_mode_active or transport_active
 	if placement_level_button != null:
 		placement_level_button.visible = false

@@ -39,6 +39,26 @@ function Get-PngRecord {
     }
 }
 
+function Test-MayorRectDisjoint {
+    param(
+        [Parameter(Mandatory = $true)] $First,
+        [Parameter(Mandatory = $true)] $Second
+    )
+    foreach ($rect in @($First, $Second)) {
+        if ($null -eq $rect.position -or $null -eq $rect.size) { return $false }
+        if ([double]$rect.size.x -le 0 -or [double]$rect.size.y -le 0) { return $false }
+    }
+    $firstLeft = [double]$First.position.x
+    $firstTop = [double]$First.position.y
+    $firstRight = $firstLeft + [double]$First.size.x
+    $firstBottom = $firstTop + [double]$First.size.y
+    $secondLeft = [double]$Second.position.x
+    $secondTop = [double]$Second.position.y
+    $secondRight = $secondLeft + [double]$Second.size.x
+    $secondBottom = $secondTop + [double]$Second.size.y
+    return $firstRight -le $secondLeft -or $secondRight -le $firstLeft -or $firstBottom -le $secondTop -or $secondBottom -le $firstTop
+}
+
 $GodotExe = (Resolve-Path -LiteralPath $GodotExe).Path
 $fixtureScript = 'res://tests/manual/transport_route_package_visible_acceptance.gd'
 $fixturePath = Join-Path $projectRoot ($fixtureScript.Substring('res://'.Length).Replace('/', '\'))
@@ -230,6 +250,8 @@ try {
         (@($result.ux_regressions.visible_route_mode_ids) -join ',') -cne 'bus' -or
         -not [bool]$result.ux_regressions.foreign_mode_cards_absent -or
         -not [bool]$result.ux_regressions.existing_building_visible_during_route_placement -or
+        -not [bool]$result.ux_regressions.existing_building_unobscured_by_planning_ui -or
+        -not (Test-MayorRectDisjoint -First $result.ux_regressions.existing_building_global_rect -Second $result.ux_regressions.placement_banner_global_rect) -or
         [int]$result.ux_regressions.station_draft_ghost_count -ne 2 -or
         -not [bool]$result.ux_regressions.station_drafts_remain_outside_live_authority -or
         -not [bool]$result.ux_regressions.building_layer_above_route_preview -or

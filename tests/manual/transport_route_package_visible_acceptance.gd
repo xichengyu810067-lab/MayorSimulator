@@ -76,9 +76,15 @@ func _run() -> void:
 	if fixture.is_empty():
 		_fail("could not find a visible buildable 11-tile L-turn bus package fixture")
 		return
+	station_action.pressed.emit()
+	await _settle(4)
+	var session: Dictionary = main.vertical_slice.transport_planning_session_snapshot()
+	if str(session.get("workflow", "")) != "route_package_v1" or str(session.get("state", "")) != "station_placement":
+		_fail("actual Main did not start route_package_v1 station placement")
+		return
 	var existing_building_tile := _find_existing_building_tile(fixture)
 	if existing_building_tile < 0:
-		_fail("could not find an independent existing-building visibility fixture")
+		_fail("could not find an independent existing-building fixture outside the planning UI")
 		return
 	main.city_grid[existing_building_tile] = "住宅"
 	main.building_customizations[existing_building_tile] = {"variant": 1, "roof": 2, "wall": 3}
@@ -98,12 +104,6 @@ func _run() -> void:
 	var network_before: Dictionary = main.vertical_slice.transport.to_dict()
 	var city_grid_before: Array = main.city_grid.duplicate()
 	var negative_ledger_before := _negative_ledger_count()
-	station_action.pressed.emit()
-	await _settle(4)
-	var session: Dictionary = main.vertical_slice.transport_planning_session_snapshot()
-	if str(session.get("workflow", "")) != "route_package_v1" or str(session.get("state", "")) != "station_placement":
-		_fail("actual Main did not start route_package_v1 station placement")
-		return
 	for station_tile: int in [int(fixture["station_a"]), int(fixture["station_b"])]:
 		main._on_grid_pressed(station_tile)
 		await _settle(2)
@@ -146,6 +146,9 @@ func _run() -> void:
 		return
 	var existing_building_button := main.grid_buttons[existing_building_tile] as Button
 	var building_visual: Dictionary = existing_building_button.call("get_visual_animation_debug_snapshot") if existing_building_button != null else {}
+	var existing_building_rect := existing_building_button.get_global_rect() if existing_building_button != null else Rect2()
+	var placement_banner_rect := main.placement_banner.get_global_rect() if main.placement_banner != null else Rect2()
+	var existing_building_unobscured_by_planning_ui := _existing_building_is_unobscured_by_planning_ui(existing_building_button)
 	var network_debug: Dictionary = main.transport_network_layer.debug_snapshot()
 	var station_draft_ghost_count := 0
 	for station_tile: int in [int(fixture["station_a"]), int(fixture["station_b"])]:
@@ -170,6 +173,7 @@ func _run() -> void:
 		or not existing_building_button.is_visible_in_tree()
 		or str(building_visual.get("building_name", "")) != "住宅"
 		or existing_building_button.get_parent() != main.tile_layer
+		or not existing_building_unobscured_by_planning_ui
 		or main.tile_layer.get_index() <= main.transport_network_layer.get_index()
 		or main.npc_layer.get_index() <= main.tile_layer.get_index()
 		or station_draft_ghost_count != 2
@@ -325,6 +329,9 @@ func _run() -> void:
 			"foreign_mode_cards_hidden": true,
 			"existing_building_tile_id": existing_building_tile,
 			"existing_building_visible_during_route_placement": true,
+			"existing_building_unobscured_by_planning_ui": existing_building_unobscured_by_planning_ui,
+			"existing_building_global_rect": _rect_record(existing_building_rect),
+			"placement_banner_global_rect": _rect_record(placement_banner_rect),
 			"station_draft_ghost_count": station_draft_ghost_count,
 			"station_drafts_remain_outside_live_authority": true,
 			"building_layer_above_route_preview": true,
@@ -444,9 +451,38 @@ func _find_existing_building_tile(fixture: Dictionary) -> int:
 	reserved.append(int(fixture.get("station_a", -1)))
 	reserved.append(int(fixture.get("station_b", -1)))
 	for tile_id in range(main.city_grid.size()):
-		if tile_id not in reserved and _route_tile_available(tile_id):
+		if tile_id not in reserved and _route_tile_available(tile_id) and _existing_building_tile_is_unobscured_by_planning_ui(tile_id):
 			return tile_id
 	return -1
+
+
+func _existing_building_tile_is_unobscured_by_planning_ui(tile_id: int) -> bool:
+	if tile_id < 0 or tile_id >= main.grid_buttons.size():
+		return false
+	var tile_button := main.grid_buttons[tile_id] as Control
+	return _existing_building_is_unobscured_by_planning_ui(tile_button)
+
+
+func _existing_building_is_unobscured_by_planning_ui(building_button: Control) -> bool:
+	if building_button == null or not building_button.is_visible_in_tree():
+		return false
+	var building_rect := building_button.get_global_rect()
+	var viewport_rect := main.get_viewport().get_visible_rect()
+	if building_rect.size.x <= 0.0 or building_rect.size.y <= 0.0 or not viewport_rect.encloses(building_rect):
+		return false
+	for overlay_value: Variant in [main.status_hud, main.placement_banner, main.action_dock]:
+		var overlay := overlay_value as Control
+		if overlay != null and overlay.is_visible_in_tree() and building_rect.intersects(overlay.get_global_rect()):
+			return false
+	return true
+
+
+func _rect_record(rect: Rect2) -> Dictionary:
+	return {
+		"position": {"x": snappedf(rect.position.x, 0.1), "y": snappedf(rect.position.y, 0.1)},
+		"size": {"x": snappedf(rect.size.x, 0.1), "y": snappedf(rect.size.y, 0.1)},
+		"end": {"x": snappedf(rect.end.x, 0.1), "y": snappedf(rect.end.y, 0.1)},
+	}
 
 
 func _station_candidates_adjacent_to(tile_id: int, route_tiles: Array[int], excluded: Array[int]) -> Array[int]:
