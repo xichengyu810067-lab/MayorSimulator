@@ -97,6 +97,14 @@ func _run() -> void:
 	var draft_state := _validate_draft(authority_tax, authority_water, authority_stadium)
 	if draft_state.is_empty():
 		return
+	var preview_button := main.find_child("FiscalPreviewButton", true, false) as Button
+	if preview_button == null:
+		_fail("EDIT does not expose the preview action")
+		return
+	preview_button.pressed.emit()
+	await _settle(5)
+	if not _validate_preview():
+		return
 	if not await _capture_native("fiscal-draft-preview-native.png"):
 		return
 
@@ -155,16 +163,16 @@ func _validate_categories() -> Dictionary:
 	if cards.size() != 6 or int(ui.get("category_count", 0)) != 6 or not bool(ui.get("category_surface_visible", false)):
 		_fail("finance does not show the six-card category surface")
 		return {}
-	if preview == null or not preview.is_visible_in_tree() or main.find_child("FiscalCategoryTabs", true, false) != null:
-		_fail("whole-draft preview is missing or legacy nested tabs remain")
+	if preview == null or preview.is_visible_in_tree() or main.find_child("FiscalCategoryTabs", true, false) != null:
+		_fail("EDIT must hide the whole-draft preview and exclude legacy nested tabs")
 		return {}
-	if int(ui.get("responsive_columns", 0)) != 2:
-		_fail("wide actual-main fiscal layout must use 2 responsive columns")
+	if str(state.get("flow_step", "")) != "edit" or not bool(ui.get("edit_visible", false)):
+		_fail("finance must open in the EDIT surface")
 		return {}
-	if str(ui.get("preview_placement", "")) != "right":
-		_fail("wide actual-main fiscal layout must place preview right")
+	if str(ui.get("preview_placement", "")) != "exclusive":
+		_fail("finance must use an exclusive preview surface")
 		return {}
-	return {"category_count": 6, "ids": ui.get("category_ids", []), "preview_visible": true, "legacy_tabs_absent": true, "responsive_columns": ui.get("responsive_columns", 0)}
+	return {"category_count": 6, "ids": ui.get("category_ids", []), "preview_visible": false, "legacy_tabs_absent": true, "flow_step": state.get("flow_step", "")}
 
 
 func _open_custom(category_id: String) -> bool:
@@ -195,7 +203,7 @@ func _validate_draft(authority_tax: int, authority_water: int, authority_stadium
 	var ui: Dictionary = state.get("ui", {})
 	var changes := main.find_child("FiscalDraftChangeList", true, false) as Label
 	var risk := main.find_child("FiscalDraftRisk", true, false) as Label
-	var apply_button := main.find_child("FiscalApplyAllButton", true, false) as Button
+	var preview_button := main.find_child("FiscalPreviewButton", true, false) as Button
 	if (
 		int(state.get("dirty_count", -1)) != 3
 		or int(main.tax_rates["income"]) != authority_tax
@@ -203,7 +211,7 @@ func _validate_draft(authority_tax: int, authority_water: int, authority_stadium
 		or int(main.service_fees["stadium"]) != authority_stadium
 		or changes == null or not changes.text.contains("→")
 		or risk == null or risk.text.is_empty()
-		or apply_button == null or apply_button.disabled or not apply_button.text.contains("3")
+		or preview_button == null or preview_button.disabled or not preview_button.text.contains("3")
 		or int(state.get("projected_net", 0)) == int(state.get("authoritative_net", 0))
 	):
 		_fail("visible whole-draft preview contract failed")
@@ -219,6 +227,24 @@ func _validate_draft(authority_tax: int, authority_water: int, authority_stadium
 		"safety_buffer": state.get("projected_safety_buffer", 0),
 		"preview_placement": ui.get("preview_placement", ""),
 	}
+
+
+func _validate_preview() -> bool:
+	var state: Dictionary = main.call("debug_fiscal_draft_state")
+	var ui: Dictionary = state.get("ui", {})
+	var preview := main.find_child("FiscalDraftPreview", true, false) as PanelContainer
+	var execute := main.find_child("FiscalApplyAllButton", true, false) as Button
+	var return_to_edit := main.find_child("FiscalBackToEditButton", true, false) as Button
+	if (
+		str(state.get("flow_step", "")) != "preview"
+		or preview == null or not preview.is_visible_in_tree()
+		or bool(ui.get("edit_visible", true))
+		or execute == null or execute.disabled or not execute.text.contains("3")
+		or return_to_edit == null
+	):
+		_fail("PREVIEW must exclusively show complete impact and execution actions")
+		return false
+	return true
 
 
 func _capture_native(filename: String) -> bool:

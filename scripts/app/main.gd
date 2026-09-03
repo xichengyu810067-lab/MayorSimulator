@@ -217,6 +217,8 @@ var utility_inputs: Dictionary = {}
 var service_inputs: Dictionary = {}
 var fiscal_apply_button: Button
 var fiscal_discard_button: Button
+var fiscal_preview_button: Button
+var fiscal_back_to_edit_button: Button
 var fiscal_draft_status_label: Label
 var fiscal_category_surface: VBoxContainer
 var fiscal_category_grid: GridContainer
@@ -240,6 +242,9 @@ var _fiscal_draft_base_tax_rates: Dictionary = {}
 var _fiscal_draft_base_utility_fees: Dictionary = {}
 var _fiscal_draft_base_service_fees: Dictionary = {}
 var _fiscal_apply_generation := 0
+var _fiscal_flow_step := "edit"
+var _fiscal_draft_revision := 0
+var _fiscal_preview_revision := -1
 var bill_buttons: Dictionary = {}
 var governance_status_tabs: TabContainer
 var governance_status_grids: Dictionary = {}
@@ -1771,13 +1776,13 @@ func _build_fiscal_tab() -> ScrollContainer:
 	scroll.add_child(content)
 
 	content.add_child(_illustrated_section_title("funds", "稅率與公共收費"))
-	var instruction := _label("先選一個分類，再選現行、合理建議或自訂方案；所有分類會累積成同一份草稿。", 16, _theme_muted())
+	var instruction := _label("先選一個分類，再選現行、合理建議或自訂方案；完成後再預覽整份草稿。", 16, _theme_muted())
 	instruction.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	content.add_child(instruction)
 
 	fiscal_responsive_layout = GridContainer.new()
 	fiscal_responsive_layout.name = "FiscalResponsiveLayout"
-	fiscal_responsive_layout.columns = 2
+	fiscal_responsive_layout.columns = 1
 	fiscal_responsive_layout.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	fiscal_responsive_layout.add_theme_constant_override("h_separation", 14)
 	fiscal_responsive_layout.add_theme_constant_override("v_separation", 14)
@@ -1785,7 +1790,7 @@ func _build_fiscal_tab() -> ScrollContainer:
 
 	var choice_panel := _panel(_theme_panel_alt(), 9, 14)
 	choice_panel.name = "FiscalChoicePanel"
-	choice_panel.custom_minimum_size = Vector2(560, 500)
+	choice_panel.custom_minimum_size = Vector2(560, 0)
 	choice_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	choice_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	var choice_box := VBoxContainer.new()
@@ -1801,6 +1806,16 @@ func _build_fiscal_tab() -> ScrollContainer:
 	var category_help := _label("六個分類各自提供三種方案；切換分類不會清除其他草稿變更。", 15, _theme_muted())
 	category_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	fiscal_category_surface.add_child(category_help)
+	fiscal_draft_status_label = _label("正式設定｜尚未變更\n可先調整多項，再預覽一次套用。", 16, _theme_muted())
+	fiscal_draft_status_label.name = "FiscalDraftStatus"
+	fiscal_draft_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	fiscal_draft_status_label.custom_minimum_size = Vector2(0, 48)
+	fiscal_category_surface.add_child(fiscal_draft_status_label)
+	fiscal_preview_button = _button(L10n.text("預覽變更（%d）") % 0, "primary")
+	fiscal_preview_button.name = "FiscalPreviewButton"
+	fiscal_preview_button.custom_minimum_size = Vector2(0, 50)
+	fiscal_preview_button.pressed.connect(_show_fiscal_preview)
+	fiscal_category_surface.add_child(fiscal_preview_button)
 	fiscal_category_grid = GridContainer.new()
 	fiscal_category_grid.name = "FiscalCategoryCardGrid"
 	fiscal_category_grid.columns = 2
@@ -1882,33 +1897,34 @@ func _build_fiscal_tab() -> ScrollContainer:
 	var summary_panel := _panel(_theme_panel_alt(), 9, 14)
 	summary_panel.name = "FiscalDraftPreview"
 	fiscal_draft_preview = summary_panel
-	summary_panel.custom_minimum_size = Vector2(330, 0)
+	summary_panel.custom_minimum_size = Vector2(0, 0)
 	summary_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	summary_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	summary_panel.hide()
 	var summary_box := VBoxContainer.new()
 	summary_box.add_theme_constant_override("separation", 9)
 	summary_panel.add_child(summary_box)
-	var forecast_title := _section_title("整份草稿預覽")
+	var forecast_title := _section_title("預覽變更")
 	forecast_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	forecast_title.max_lines_visible = 2
 	summary_box.add_child(forecast_title)
-	var forecast_help := _label("這裡固定彙整六個分類；只有「套用全部」會寫入正式設定。", 15, _theme_muted())
+	var forecast_help := _label("核對六個分類的正式值、新草稿、預估影響與風險；只有執行才會寫入正式設定。", 15, _theme_muted())
 	forecast_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	summary_box.add_child(forecast_help)
-	fiscal_draft_status_label = _label("正式設定｜尚未變更", 16, _theme_muted())
-	fiscal_draft_status_label.name = "FiscalDraftStatus"
-	fiscal_draft_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	fiscal_draft_status_label.custom_minimum_size = Vector2(0, 48)
-	summary_box.add_child(fiscal_draft_status_label)
 	var action_row := HBoxContainer.new()
 	action_row.name = "FiscalDraftActions"
 	action_row.add_theme_constant_override("separation", 8)
+	fiscal_back_to_edit_button = _button(L10n.text("返回修改"))
+	fiscal_back_to_edit_button.name = "FiscalBackToEditButton"
+	fiscal_back_to_edit_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	fiscal_back_to_edit_button.pressed.connect(_return_to_fiscal_edit)
+	action_row.add_child(fiscal_back_to_edit_button)
 	fiscal_discard_button = _button("放棄變更")
 	fiscal_discard_button.name = "FiscalDiscardButton"
 	fiscal_discard_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	fiscal_discard_button.pressed.connect(Callable(self, "_discard_fiscal_draft").bind(true, true))
 	action_row.add_child(fiscal_discard_button)
-	fiscal_apply_button = _button("套用全部", "primary")
+	fiscal_apply_button = _button(L10n.text("執行變更（%d）") % 0, "primary")
 	fiscal_apply_button.name = "FiscalApplyAllButton"
 	fiscal_apply_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	fiscal_apply_button.pressed.connect(Callable(self, "_apply_fiscal_draft"))
@@ -3634,15 +3650,14 @@ func _fiscal_category_spec(category_id: String) -> Dictionary:
 func _layout_fiscal_surface(scroll: ScrollContainer) -> void:
 	if scroll == null or fiscal_responsive_layout == null:
 		return
-	var logical_wide := scroll.size.x >= 1040.0
-	var physical_wide := DisplayServer.window_get_size().x >= 1600
-	var wide := logical_wide or physical_wide
-	fiscal_responsive_layout.columns = 2 if wide else 1
+	fiscal_responsive_layout.columns = 1
 	if fiscal_category_grid != null:
 		fiscal_category_grid.columns = 2 if scroll.size.x >= 720.0 else 1
 
 
 func _show_fiscal_categories() -> void:
+	_fiscal_flow_step = "edit"
+	_fiscal_preview_revision = -1
 	_selected_fiscal_category = ""
 	_selected_fiscal_plan = ""
 	if fiscal_category_surface != null:
@@ -3651,11 +3666,55 @@ func _show_fiscal_categories() -> void:
 		fiscal_plan_surface.hide()
 	if fiscal_custom_editor != null:
 		fiscal_custom_editor.hide()
+	if fiscal_draft_preview != null:
+		fiscal_draft_preview.hide()
 	for page_variant in fiscal_custom_pages.values():
 		var page := page_variant as Control
 		if page != null:
 			page.hide()
 	_refresh_fiscal_draft_actions()
+
+
+func _return_to_fiscal_edit() -> void:
+	if _fiscal_flow_step != "preview":
+		return
+	_fiscal_flow_step = "edit"
+	_fiscal_preview_revision = -1
+	if fiscal_draft_preview != null:
+		fiscal_draft_preview.hide()
+	if _selected_fiscal_category.is_empty():
+		if fiscal_category_surface != null:
+			fiscal_category_surface.show()
+	else:
+		if fiscal_plan_surface != null:
+			fiscal_plan_surface.show()
+		if fiscal_custom_editor != null:
+			fiscal_custom_editor.visible = _selected_fiscal_plan == "custom"
+		for category_id_variant in fiscal_custom_pages.keys():
+			var category_id := str(category_id_variant)
+			var page := fiscal_custom_pages[category_id] as Control
+			if page != null:
+				page.visible = _selected_fiscal_plan == "custom" and category_id == _selected_fiscal_category
+	_refresh_fiscal_draft_actions()
+
+
+func _show_fiscal_preview() -> void:
+	var changed := _fiscal_dirty_count()
+	if not _fiscal_draft_active or changed == 0:
+		_set_hint("請先調整至少一項稅務或收費設定。", true)
+		return
+	_fiscal_flow_step = "preview"
+	_fiscal_preview_revision = _fiscal_draft_revision
+	if fiscal_category_surface != null:
+		fiscal_category_surface.hide()
+	if fiscal_plan_surface != null:
+		fiscal_plan_surface.hide()
+	if fiscal_custom_editor != null:
+		fiscal_custom_editor.hide()
+	if fiscal_draft_preview != null:
+		fiscal_draft_preview.show()
+	_refresh_fiscal_draft_actions()
+	_update_ui()
 
 
 func _select_fiscal_category(category_id: String) -> void:
@@ -3753,6 +3812,9 @@ func _begin_fiscal_draft() -> void:
 	_fiscal_draft_tax_rates = tax_rates.duplicate(true)
 	_fiscal_draft_utility_fees = utility_fees.duplicate(true)
 	_fiscal_draft_service_fees = service_fees.duplicate(true)
+	_fiscal_flow_step = "edit"
+	_fiscal_draft_revision = 0
+	_fiscal_preview_revision = -1
 	_sync_fiscal_controls_from_draft()
 	_show_fiscal_categories()
 	_update_ui()
@@ -3811,7 +3873,11 @@ func _set_fiscal_draft_value(kind: String, key: String, value: int, do_refresh: 
 		_begin_fiscal_draft()
 	var definition := _fiscal_definition(kind, key)
 	var normalized := clampi(value, int(definition["min"]), int(definition["max"]))
-	_fiscal_draft_dictionary(kind)[key] = normalized
+	var draft := _fiscal_draft_dictionary(kind)
+	var previous := int(draft.get(key, normalized))
+	draft[key] = normalized
+	if previous != normalized:
+		_fiscal_draft_revision += 1
 	match kind:
 		"tax":
 			tax_sliders[key].set_value_no_signal(normalized)
@@ -3846,11 +3912,14 @@ func _sync_fiscal_controls_from_draft() -> void:
 func _refresh_fiscal_draft_actions() -> void:
 	var changed := _fiscal_dirty_count()
 	if fiscal_draft_status_label != null:
-		fiscal_draft_status_label.text = "尚未套用：%d 項變更\n下方預估已包含整組草稿。" % changed if changed > 0 else "正式設定｜尚未變更\n可先調整多項，再一次套用。"
+		fiscal_draft_status_label.text = "尚未套用：%d 項變更\n可預覽整組草稿後再執行。" % changed if changed > 0 else "正式設定｜尚未變更\n可先調整多項，再預覽一次套用。"
 		fiscal_draft_status_label.add_theme_color_override("font_color", COLOR_CAUTION if changed > 0 else _theme_muted())
+	if fiscal_preview_button != null:
+		fiscal_preview_button.disabled = changed == 0 or _fiscal_flow_step != "edit"
+		fiscal_preview_button.text = L10n.text("預覽變更（%d）") % changed
 	if fiscal_apply_button != null:
-		fiscal_apply_button.disabled = changed == 0
-		fiscal_apply_button.text = "套用全部（%d）" % changed if changed > 0 else "套用全部"
+		fiscal_apply_button.disabled = changed == 0 or _fiscal_flow_step != "preview" or _fiscal_preview_revision != _fiscal_draft_revision
+		fiscal_apply_button.text = L10n.text("執行變更（%d）") % changed
 	if fiscal_discard_button != null:
 		fiscal_discard_button.disabled = changed == 0
 	_refresh_fiscal_draft_preview()
@@ -3866,8 +3935,12 @@ func _discard_fiscal_draft(explicit_action: bool = true, keep_active: bool = tru
 	_fiscal_draft_utility_fees = utility_fees.duplicate(true)
 	_fiscal_draft_service_fees = service_fees.duplicate(true)
 	_fiscal_draft_active = keep_active
+	_fiscal_flow_step = "edit"
+	_fiscal_draft_revision = 0
+	_fiscal_preview_revision = -1
 	if keep_active:
 		_sync_fiscal_controls_from_draft()
+		_show_fiscal_categories()
 	_update_ui()
 	if explicit_action:
 		_set_hint("已放棄尚未套用的稅務與收費變更。", false)
@@ -3875,11 +3948,15 @@ func _discard_fiscal_draft(explicit_action: bool = true, keep_active: bool = tru
 
 func _apply_fiscal_draft() -> void:
 	var changed := _fiscal_dirty_count()
-	if not _fiscal_draft_active or changed == 0:
+	if not _fiscal_draft_active or changed == 0 or _fiscal_flow_step != "preview" or _fiscal_preview_revision != _fiscal_draft_revision:
+		_set_hint("草稿預覽已失效；請返回修改後重新預覽。", true)
 		return
-	tax_rates = _fiscal_draft_tax_rates.duplicate(true)
-	utility_fees = _fiscal_draft_utility_fees.duplicate(true)
-	service_fees = _fiscal_draft_service_fees.duplicate(true)
+	var commit_tax := _fiscal_draft_tax_rates.duplicate(true)
+	var commit_utility := _fiscal_draft_utility_fees.duplicate(true)
+	var commit_service := _fiscal_draft_service_fees.duplicate(true)
+	tax_rates = commit_tax
+	utility_fees = commit_utility
+	service_fees = commit_service
 	tax_rate = int(tax_rates["income"])
 	_fiscal_draft_base_tax_rates = tax_rates.duplicate(true)
 	_fiscal_draft_base_utility_fees = utility_fees.duplicate(true)
@@ -3888,10 +3965,14 @@ func _apply_fiscal_draft() -> void:
 	_fiscal_draft_utility_fees = utility_fees.duplicate(true)
 	_fiscal_draft_service_fees = service_fees.duplicate(true)
 	_fiscal_apply_generation += 1
+	_fiscal_flow_step = "edit"
+	_fiscal_draft_revision = 0
+	_fiscal_preview_revision = -1
 	_recalculate_satisfaction()
 	_recalculate_score()
 	_reconcile_resident_request_completion()
 	_sync_fiscal_controls_from_draft()
+	_show_fiscal_categories()
 	_update_ui()
 	_set_hint("已一次套用 %d 項稅務與收費變更。" % changed, false)
 	_autosave("action:fiscal_draft_applied")
@@ -3937,6 +4018,9 @@ func debug_fiscal_draft_state() -> Dictionary:
 		"projected_expense": int(projected["expense"]),
 		"projected_safety_buffer": int(projected["safety_buffer"]),
 		"apply_generation": _fiscal_apply_generation,
+		"flow_step": _fiscal_flow_step,
+		"draft_revision": _fiscal_draft_revision,
+		"preview_revision": _fiscal_preview_revision,
 		"ui": {
 			"category_ids": Array(category_ids),
 			"category_count": category_ids.size(),
@@ -3947,8 +4031,9 @@ func debug_fiscal_draft_state() -> Dictionary:
 			"plan_surface_visible": fiscal_plan_surface != null and fiscal_plan_surface.visible,
 			"custom_editor_visible": fiscal_custom_editor != null and fiscal_custom_editor.visible,
 			"preview_visible": fiscal_draft_preview != null and fiscal_draft_preview.visible,
+			"edit_visible": (fiscal_category_surface != null and fiscal_category_surface.visible) or (fiscal_plan_surface != null and fiscal_plan_surface.visible),
 			"responsive_columns": fiscal_responsive_layout.columns if fiscal_responsive_layout != null else 0,
-			"preview_placement": "right" if fiscal_responsive_layout != null and fiscal_responsive_layout.columns == 2 else "below",
+			"preview_placement": "exclusive",
 			"preview_changes": fiscal_draft_change_list.text if fiscal_draft_change_list != null else "",
 			"risk_text": fiscal_draft_risk_label.text if fiscal_draft_risk_label != null else "",
 		},
@@ -6851,6 +6936,8 @@ func _rebuild_ui() -> void:
 	service_inputs.clear()
 	fiscal_apply_button = null
 	fiscal_discard_button = null
+	fiscal_preview_button = null
+	fiscal_back_to_edit_button = null
 	fiscal_draft_status_label = null
 	fiscal_category_surface = null
 	fiscal_category_grid = null
@@ -6867,6 +6954,9 @@ func _rebuild_ui() -> void:
 	_selected_fiscal_category = ""
 	_selected_fiscal_plan = ""
 	_fiscal_draft_active = false
+	_fiscal_flow_step = "edit"
+	_fiscal_draft_revision = 0
+	_fiscal_preview_revision = -1
 	bill_buttons.clear()
 	governance_status_tabs = null
 	governance_status_grids.clear()

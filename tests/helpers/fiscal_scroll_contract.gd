@@ -31,7 +31,7 @@ static func validate(tree: SceneTree, overlay: Control, _legacy_tabs: Variant, e
 		"maximum_scroll": 0.0, "reached_range_end": false, "content_moved": false,
 		"category_count": 0, "plan_count": 0, "verified_slider_count": 0,
 		"verified_slider_names": [], "expected_slider_count": expected_names.size(),
-		"expected_slider_names": expected_names, "preview_persistent": false,
+		"expected_slider_names": expected_names, "preview_hidden_in_edit": false,
 		"scroll_restored": false, "navigation_restored": false, "tabs_restored": false,
 		"errors": failures,
 	}
@@ -136,9 +136,9 @@ static func validate(tree: SceneTree, overlay: Control, _legacy_tabs: Variant, e
 	result["verified_slider_names"] = verified_names
 	if verified_names != expected_names:
 		failures.append("Fiscal card traversal did not reach the authoritative slider set: actual=%s expected=%s." % [verified_names, expected_names])
-	result["preview_persistent"] = preview.is_visible_in_tree()
-	if not bool(result["preview_persistent"]):
-		failures.append("Whole-draft preview disappeared during category traversal.")
+	result["preview_hidden_in_edit"] = not preview.is_visible_in_tree()
+	if not bool(result["preview_hidden_in_edit"]):
+		failures.append("EDIT must not show the whole-draft preview during category traversal.")
 	scroll.scroll_horizontal = original_scroll.x
 	scroll.scroll_vertical = original_scroll.y
 	await _settle(tree, 3)
