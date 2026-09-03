@@ -1,6 +1,8 @@
 class_name OversightHearingStage
 extends Control
 
+const SceneWorkflowShellScript = preload("res://ui/governance/scene_workflow_shell.gd")
+
 const BACKGROUND_PATH := "res://assets/images/ui/oversight_chamber_v1/oversight_chamber.png"
 
 var _background: TextureRect
@@ -14,16 +16,30 @@ var _case_id := ""
 var _state := "empty"
 var _animation_generation := 0
 var _background_loaded := false
+var _shell
 
 
 func _init() -> void:
 	name = "OversightHearingStage"
-	custom_minimum_size = Vector2(720, 390)
+	custom_minimum_size = Vector2(720, 420)
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	size_flags_vertical = Control.SIZE_EXPAND_FILL
 	clip_contents = true
 	_build_scene()
 	resized.connect(_layout_layers)
 	show_empty()
+
+
+func top_content() -> HBoxContainer:
+	return _shell.top_content
+
+
+func tray_content() -> VBoxContainer:
+	return _shell.tray_content
+
+
+func set_dark_mode(enabled: bool) -> void:
+	_shell.set_dark_mode(enabled)
 
 
 func show_empty() -> void:
@@ -82,6 +98,7 @@ func play_defense(defense_id: String) -> void:
 
 
 func debug_signature() -> Dictionary:
+	var shell_signature: Dictionary = _shell.debug_signature()
 	return {
 		"visible": visible,
 		"background_path": BACKGROUND_PATH,
@@ -93,27 +110,28 @@ func debug_signature() -> Dictionary:
 		"mayor_desk_visible": _mayor_desk.visible,
 		"animation_generation": _animation_generation,
 		"animation_running": _active_tween != null and _active_tween.is_valid(),
+		"root_is_scroll_container": false,
+		"top_rect": shell_signature.get("top_rect", Rect2()),
+		"tray_rect": shell_signature.get("tray_rect", Rect2()),
+		"stage_rect": get_rect(),
 	}
 
 
 func _build_scene() -> void:
-	_background = TextureRect.new()
+	_shell = SceneWorkflowShellScript.new(BACKGROUND_PATH)
+	_shell.name = "OversightWorkflowShell"
+	_shell.set_tray_height(258.0)
+	add_child(_shell)
+	_shell.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_background = _shell.background
 	_background.name = "OversightChamberBackground"
-	_background.texture = ResourceLoader.load(BACKGROUND_PATH, "Texture2D") as Texture2D
-	_background_loaded = _background.texture != null
-	_background.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_background.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	_background.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(_background)
-	_scrim = ColorRect.new()
+	_background_loaded = _shell.is_background_loaded()
+	_scrim = _shell.scrim
 	_scrim.name = "OversightChamberScrim"
-	_scrim.color = Color(0.015, 0.08, 0.09, 0.22)
-	_scrim.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(_scrim)
 	_committee = _desk("OversightCommitteeDais", "監察委員會｜行政質詢", Color(0.05, 0.34, 0.36, 0.94))
-	add_child(_committee)
+	_shell.scene_host.add_child(_committee)
 	_mayor_desk = _desk("OversightMayorDesk", "市長答辯席", Color(0.45, 0.23, 0.10, 0.94))
-	add_child(_mayor_desk)
+	_shell.scene_host.add_child(_mayor_desk)
 	_question_marker = Label.new()
 	_question_marker.name = "OversightQuestionMarker"
 	_question_marker.text = L10n.text("質詢中")
@@ -122,8 +140,10 @@ func _build_scene() -> void:
 	_question_marker.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.92))
 	_question_marker.add_theme_constant_override("shadow_offset_x", 2)
 	_question_marker.add_theme_constant_override("shadow_offset_y", 2)
+	_question_marker.custom_minimum_size = Vector2(112, 44)
+	_question_marker.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_question_marker.set_meta("l10n_skip", true)
-	add_child(_question_marker)
+	_shell.top_content.add_child(_question_marker)
 	_cue_label = Label.new()
 	_cue_label.name = "OversightHearingCue"
 	_cue_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -134,8 +154,9 @@ func _build_scene() -> void:
 	_cue_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.95))
 	_cue_label.add_theme_constant_override("shadow_offset_x", 2)
 	_cue_label.add_theme_constant_override("shadow_offset_y", 2)
+	_cue_label.custom_minimum_size = Vector2(0, 34)
 	_cue_label.set_meta("l10n_skip", true)
-	add_child(_cue_label)
+	_shell.tray_content.add_child(_cue_label)
 	call_deferred("_layout_layers")
 
 
@@ -162,18 +183,10 @@ func _desk(node_name: String, text: String, color: Color) -> PanelContainer:
 
 func _layout_layers() -> void:
 	var bounds := size
-	_background.position = Vector2.ZERO
-	_background.size = bounds
-	_scrim.position = Vector2.ZERO
-	_scrim.size = bounds
 	_committee.position = Vector2(bounds.x * 0.28, bounds.y * 0.12)
 	_committee.size = Vector2(bounds.x * 0.44, bounds.y * 0.14)
 	_mayor_desk.position = Vector2(bounds.x * 0.30, bounds.y * 0.60)
 	_mayor_desk.size = Vector2(bounds.x * 0.40, bounds.y * 0.15)
-	_question_marker.position = Vector2(bounds.x * 0.09, bounds.y * 0.31)
-	_question_marker.size = Vector2(bounds.x * 0.22, 34)
-	_cue_label.position = Vector2(bounds.x * 0.12, bounds.y - 54)
-	_cue_label.size = Vector2(bounds.x * 0.76, 40)
 
 
 func _play_idle_motion() -> void:

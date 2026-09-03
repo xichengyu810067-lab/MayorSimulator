@@ -1,6 +1,8 @@
 class_name CourtroomStage
 extends Control
 
+const SceneWorkflowShellScript = preload("res://ui/governance/scene_workflow_shell.gd")
+
 const BACKGROUND_PATH := "res://assets/images/ui/courtroom_v1/courtroom_interior.png"
 const JUDICIAL_PANEL_PATH := "res://assets/images/ui/courtroom_v1/judicial_panel.png"
 const DEFENSE_TABLE_PATH := "res://assets/images/ui/courtroom_v1/defense_table.png"
@@ -31,15 +33,44 @@ var _cue_label: Label
 var _last_case_id := ""
 var _last_stage := ""
 var _active_tween: Tween
+var _shell
 
 
 func _init() -> void:
 	name = "CourtroomStage"
-	custom_minimum_size = Vector2(720, 390)
+	custom_minimum_size = Vector2(720, 420)
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	size_flags_vertical = Control.SIZE_EXPAND_FILL
 	clip_contents = true
 	_build_scene()
 	resized.connect(_layout_layers)
+	call_deferred("_layout_layers")
+
+
+func top_content() -> HBoxContainer:
+	return _shell.top_content
+
+
+func tray_content() -> VBoxContainer:
+	return _shell.tray_content
+
+
+func set_dark_mode(enabled: bool) -> void:
+	_shell.set_dark_mode(enabled)
+
+
+func debug_signature() -> Dictionary:
+	var shell_signature: Dictionary = _shell.debug_signature()
+	return {
+		"background_path": BACKGROUND_PATH,
+		"background_loaded": _shell.is_background_loaded(),
+		"root_is_scroll_container": false,
+		"top_rect": shell_signature.get("top_rect", Rect2()),
+		"tray_rect": shell_signature.get("tray_rect", Rect2()),
+		"stage_rect": get_rect(),
+		"actor_layer_count": 3,
+		"stage": _last_stage,
+	}
 
 
 func set_case(court_case: Dictionary) -> void:
@@ -70,19 +101,19 @@ func show_empty() -> void:
 
 
 func _build_scene() -> void:
-	_background = _texture_layer(BACKGROUND_PATH)
-	_background.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	add_child(_background)
-	_scrim = ColorRect.new()
-	_scrim.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_scrim.color = Color(0.03, 0.05, 0.07, 0.12)
-	add_child(_scrim)
+	_shell = SceneWorkflowShellScript.new(BACKGROUND_PATH)
+	_shell.name = "CourtroomWorkflowShell"
+	_shell.set_tray_height(282.0)
+	add_child(_shell)
+	_shell.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_background = _shell.background
+	_scrim = _shell.scrim
 	_judges = _texture_layer(JUDICIAL_PANEL_PATH)
 	_clerk = _texture_layer(COURT_CLERK_PATH)
 	_defense = _texture_layer(DEFENSE_TABLE_PATH)
-	add_child(_judges)
-	add_child(_clerk)
-	add_child(_defense)
+	_shell.scene_host.add_child(_judges)
+	_shell.scene_host.add_child(_clerk)
+	_shell.scene_host.add_child(_defense)
 
 	_stage_badge = Label.new()
 	_stage_badge.name = "CourtroomStageBadge"
@@ -91,8 +122,13 @@ func _build_scene() -> void:
 	_stage_badge.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.9))
 	_stage_badge.add_theme_constant_override("shadow_offset_x", 2)
 	_stage_badge.add_theme_constant_override("shadow_offset_y", 2)
+	_stage_badge.custom_minimum_size = Vector2(180, 44)
+	_stage_badge.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_stage_badge.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_stage_badge.clip_text = true
+	_stage_badge.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_stage_badge.set_meta("l10n_skip", true)
-	add_child(_stage_badge)
+	_shell.top_content.add_child(_stage_badge)
 
 	_cue_label = Label.new()
 	_cue_label.name = "CourtroomStageCue"
@@ -104,8 +140,9 @@ func _build_scene() -> void:
 	_cue_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.95))
 	_cue_label.add_theme_constant_override("shadow_offset_x", 2)
 	_cue_label.add_theme_constant_override("shadow_offset_y", 2)
+	_cue_label.custom_minimum_size = Vector2(0, 34)
 	_cue_label.set_meta("l10n_skip", true)
-	add_child(_cue_label)
+	_shell.tray_content.add_child(_cue_label)
 
 
 func _texture_layer(path: String) -> TextureRect:
@@ -121,20 +158,12 @@ func _texture_layer(path: String) -> TextureRect:
 
 func _layout_layers() -> void:
 	var bounds := size
-	_background.position = Vector2.ZERO
-	_background.size = bounds
-	_scrim.position = Vector2.ZERO
-	_scrim.size = bounds
 	_judges.position = Vector2(bounds.x * 0.22, bounds.y * 0.14)
 	_judges.size = Vector2(bounds.x * 0.56, bounds.y * 0.46)
 	_clerk.position = Vector2(bounds.x * 0.55, bounds.y * 0.41)
 	_clerk.size = Vector2(bounds.x * 0.23, bounds.y * 0.34)
 	_defense.position = Vector2(bounds.x * 0.02, bounds.y * 0.50)
 	_defense.size = Vector2(bounds.x * 0.52, bounds.y * 0.46)
-	_stage_badge.position = Vector2(18, 14)
-	_stage_badge.size = Vector2(bounds.x - 36, 34)
-	_cue_label.position = Vector2(bounds.x * 0.15, bounds.y - 50)
-	_cue_label.size = Vector2(bounds.x * 0.70, 38)
 
 
 func _apply_stage_visibility(stage: String) -> void:

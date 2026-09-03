@@ -58,6 +58,13 @@ func _run() -> void:
 		return
 	if not _check_state(stage.debug_signature(), "empty", ""):
 		return
+	var layout: Dictionary = main.oversight_panel.debug_layout_signature()
+	if bool(layout.get("root_is_scroll_container", true)) or int(layout.get("positive_vertical_scroll_count", -1)) != 0:
+		_fail("oversight root still exposes positive vertical scrolling: %s" % layout)
+		return
+	if float(layout.get("minimum_interactive_extent", 0.0)) < 44.0 or not main.oversight_panel._summary_label.text.contains("10"):
+		_fail("oversight 10-member/44px stage contract failed: %s" % layout)
+		return
 	var empty_capture := _capture(EMPTY_CAPTURE)
 	if empty_capture.is_empty():
 		return
@@ -74,12 +81,17 @@ func _run() -> void:
 	var question_capture := _capture(QUESTION_CAPTURE)
 	if question_capture.is_empty():
 		return
+	var autosaves_before: int = main._autosave_count
 	var defense: Dictionary = main.oversight_panel.submit_current_defense("full_disclosure")
 	if not bool(defense.get("ok", false)):
 		_fail("oversight defense did not submit")
 		return
 	await _settle(10)
 	if not _check_state(stage.debug_signature(), "defense_submitted", case_id):
+		return
+	var autosave_delta: int = main._autosave_count - autosaves_before
+	if autosave_delta != 1 or main._last_autosave_reason != "action:oversight_defense_submitted":
+		_fail("oversight defense must autosave exactly once: delta=%d reason=%s" % [autosave_delta, main._last_autosave_reason])
 		return
 	var defense_capture := _capture(DEFENSE_CAPTURE)
 	if defense_capture.is_empty():
@@ -91,9 +103,9 @@ func _run() -> void:
 	if file == null:
 		_fail("could not write evidence result")
 		return
-	file.store_string(JSON.stringify({"status": "PASS", "actual_main": true, "scene": "res://scenes/Main.tscn", "case_id": case_id, "captures": [empty_capture, question_capture, defense_capture], "source": _source_identity()}, "\t"))
+	file.store_string(JSON.stringify({"status": "PASS", "actual_main": true, "scene": "res://scenes/Main.tscn", "case_id": case_id, "committee_capacity": 10, "root_vertical_scroll_count": 0, "minimum_interactive_extent": float(layout.get("minimum_interactive_extent", 0.0)), "autosave_delta": autosave_delta, "autosave_reason": main._last_autosave_reason, "captures": [empty_capture, question_capture, defense_capture], "source": _source_identity()}, "\t"))
 	file.close()
-	print("OVERSIGHT_HEARING_NATIVE_VISIBLE_ACCEPTANCE_PASSED captures=3 actual_main=true")
+	print("OVERSIGHT_HEARING_NATIVE_VISIBLE_ACCEPTANCE_PASSED captures=3 committee=10 autosave_delta=1 root_scroll=0 actual_main=true")
 	await TestCleanup.finish(self, [main], 0)
 
 

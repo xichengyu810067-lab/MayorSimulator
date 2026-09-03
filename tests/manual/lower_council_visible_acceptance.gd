@@ -77,9 +77,13 @@ func _run() -> void:
 	if stage == null:
 		_fail("actual Main did not create LowerCouncilStage")
 		return
+	if stage.is_class("ScrollContainer") or not stage.find_children("*", "ScrollContainer", true, false).is_empty():
+		_fail("lower-council workflow still exposes vertical page scrolling")
+		return
 	stage.select_response_for_test(0)
 	await _settle(8)
 	var hearing_signature: Dictionary = stage.debug_signature()
+	print("LOWER_COUNCIL_NATIVE_HEARING_SIGNATURE %s" % hearing_signature)
 	if not _validate_hearing(hearing_signature):
 		return
 	if main.vertical_slice.governance.lower_council_database.vote_history.size() != vote_history_before:
@@ -104,6 +108,7 @@ func _run() -> void:
 			break
 	if not _validate_final(final_signature, autosaves_before_confirmation, vote_history_before):
 		return
+	print("LOWER_COUNCIL_NATIVE_FINAL_SIGNATURE %s" % final_signature)
 	await _settle(6)
 	var final_capture := _capture_native(FINAL_CAPTURE_FILENAME, "final_vote")
 	if final_capture.is_empty():
@@ -134,6 +139,9 @@ func _run() -> void:
 			"preview_votes_for": int(hearing_signature.get("preview_votes_for", 0)),
 			"preview_votes_against": int(hearing_signature.get("preview_votes_against", 0)),
 			"columns": int(hearing_signature.get("columns", 0)),
+			"root_vertical_scroll_count": 0,
+			"visible_portrait_count": int(hearing_signature.get("visible_portrait_count", 0)),
+			"seat_surface_max_alpha": float(hearing_signature.get("seat_surface_max_alpha", 1.0)),
 		},
 		"formal_vote": {
 			"autosave_delta": main._autosave_count - autosaves_before_confirmation,
@@ -144,6 +152,10 @@ func _run() -> void:
 			"revealed_seat_count": int(final_signature.get("revealed_seat_count", 0)),
 			"animation_running": bool(final_signature.get("animation_running", true)),
 			"decision_signature": str(final_signature.get("decision_signature", "")),
+			"visible_portrait_count": int(final_signature.get("visible_portrait_count", 0)),
+			"vote_color_group_count": int(final_signature.get("vote_color_group_count", 0)),
+			"catalog_visible": bool(final_signature.get("catalog_visible", true)),
+			"catalog_header_visible": bool(final_signature.get("catalog_header_visible", true)),
 		},
 		"captures": [hearing_capture, final_capture],
 	}
@@ -170,6 +182,11 @@ func _validate_hearing(signature: Dictionary) -> bool:
 		or str(signature.get("selected_response_id", "")).is_empty()
 		or not bool(signature.get("readonly_preview", false))
 		or bool(signature.get("confirm_disabled", true))
+		or bool(signature.get("catalog_visible", true))
+		or bool(signature.get("catalog_header_visible", true))
+		or int(signature.get("visible_portrait_count", 0)) != 30
+		or float(signature.get("seat_surface_max_alpha", 1.0)) > 0.23
+		or not _seat_grid_is_bounded(signature)
 		or main.governance_catalog_title.visible
 		or main.governance_status_tabs.visible
 	):
@@ -195,10 +212,30 @@ func _validate_final(signature: Dictionary, autosaves_before: int, vote_history_
 		or int(signature.get("animation_generation", 0)) < 1
 		or bool(signature.get("animation_running", true))
 		or str(signature.get("decision_signature", "")).is_empty()
+		or bool(signature.get("catalog_visible", true))
+		or bool(signature.get("catalog_header_visible", true))
+		or main.governance_catalog_title.visible
+		or main.governance_status_tabs.visible
+		or int(signature.get("visible_portrait_count", 0)) != 30
+		or float(signature.get("seat_surface_max_alpha", 1.0)) > 0.23
+		or int(signature.get("vote_color_group_count", 0)) < 2
+		or not _seat_grid_is_bounded(signature)
 	):
 		_fail("formal vote/autosave/animation contract failed: signature=%s autosave_delta=%d vote_history_delta=%d" % [signature, autosave_delta, vote_history_delta])
 		return false
 	return true
+
+
+func _seat_grid_is_bounded(signature: Dictionary) -> bool:
+	var top_rect := signature.get("top_rect", Rect2()) as Rect2
+	var tray_rect := signature.get("tray_rect", Rect2()) as Rect2
+	var seat_grid_rect := signature.get("seat_grid_rect", Rect2()) as Rect2
+	var stage_bounds := Rect2(Vector2.ZERO, main.lower_council_stage.size)
+	return (
+		seat_grid_rect.position.y >= top_rect.end.y + 7.0
+		and seat_grid_rect.end.y <= tray_rect.position.y - 7.0
+		and stage_bounds.encloses(seat_grid_rect)
+	)
 
 
 func _capture_native(filename: String, state: String) -> Dictionary:

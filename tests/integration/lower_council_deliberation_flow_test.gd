@@ -74,8 +74,8 @@ func _test_authoritative_hearing_lifecycle() -> void:
 
 
 func _test_main_stage_and_single_autosave() -> void:
-	root.content_scale_size = Vector2i(1920, 1080)
-	root.size = Vector2i(1920, 1080)
+	root.content_scale_size = Vector2i(1280, 720)
+	root.size = Vector2i(1280, 720)
 	var main := (load("res://scenes/Main.tscn") as PackedScene).instantiate()
 	root.add_child(main)
 	await _settle(3)
@@ -102,7 +102,19 @@ func _test_main_stage_and_single_autosave() -> void:
 	_check(bool(signature.get("background_loaded", false)), "stage loads the chamber background directly without importer metadata")
 	_check(int(signature.get("seat_count", 0)) == 30 and int(signature.get("majority_threshold", 0)) == 16, "stage displays authoritative 30 seats and threshold 16")
 	_check(int(signature.get("rendered_seat_count", 0)) == 30 and bool(signature.get("authority_contract_valid", false)), "stage validates authority values against its 30-seat visual contract")
+	_check(int(signature.get("visible_portrait_count", 0)) == 30 and float(signature.get("seat_surface_max_alpha", 1.0)) <= 0.23, "stage keeps 30 portraits visible without an opaque seat wash")
+	_check(_seat_grid_is_bounded(stage, signature), "hearing seat grid stays between the top bar and action tray inside the stage: %s" % signature)
 	_check(int(signature.get("response_option_count", 0)) == 3 and not bool(signature.get("readonly_preview", true)), "stage exposes three responses before any read-only preview is selected")
+	_check(not bool(signature.get("root_is_scroll_container", true)), "1280x720 governance root is not a vertical ScrollContainer")
+	_check(stage.find_children("*", "ScrollContainer", true, false).is_empty(), "1280x720 hearing has no nested vertical scroller")
+	var page_host := main.municipal_overlay.find_child("PageHost", true, false) as Control
+	_check(page_host != null and page_host.get_global_rect().encloses(stage.get_global_rect()), "1280x720 hearing stage stays inside the actual Municipal PageHost")
+	if page_host != null:
+		for response_button: Button in stage.response_buttons:
+			var target_rect := response_button.get_global_rect().intersection(page_host.get_global_rect())
+			_check(target_rect.size.x >= 44.0 and target_rect.size.y >= 44.0, "1280x720 hearing response exposes a 44x44 target")
+		var confirm_rect: Rect2 = stage.confirm_button.get_global_rect().intersection(page_host.get_global_rect())
+		_check(confirm_rect.size.x >= 44.0 and confirm_rect.size.y >= 44.0, "1280x720 formal confirmation exposes a 44x44 target")
 	var original_scene_size: Vector2 = stage._scene.size
 	stage._scene.size = Vector2(720, 350)
 	stage._layout_scene()
@@ -130,6 +142,9 @@ func _test_main_stage_and_single_autosave() -> void:
 	_check(main.vertical_slice.governance.pending_bill.is_empty(), "UI confirmation formally resolves the authoritative pending bill")
 	var final_signature: Dictionary = stage.debug_signature()
 	_check(int(final_signature.get("vote_reveal_step_count", 0)) == 30 and int(final_signature.get("animation_generation", 0)) >= 1, "stage schedules an observable 30-seat vote reveal tween")
+	_check(not bool(final_signature.get("catalog_visible", true)) and not bool(final_signature.get("catalog_header_visible", true)), "final vote excludes catalog content from the chamber")
+	_check(int(final_signature.get("vote_color_group_count", 0)) >= 2, "formal vote exposes distinguishable result color groups")
+	_check(_seat_grid_is_bounded(stage, final_signature), "formal vote seat grid stays between the top bar and result tray inside the stage: %s" % final_signature)
 	stage.refresh(first_hearing_pending, first_bill_definition, {})
 	var second_hearing_reset: Dictionary = stage.debug_signature()
 	_check(bool(second_hearing_reset.get("response_row_visible", false)) and bool(second_hearing_reset.get("confirm_visible", false)), "same-option second hearing restores the response row and confirm button after a final result")
@@ -156,6 +171,17 @@ func _supportive_context() -> Dictionary:
 func _settle(frames: int = 2) -> void:
 	for _index in range(frames):
 		await process_frame
+
+
+func _seat_grid_is_bounded(stage, signature: Dictionary) -> bool:
+	var top_rect := signature.get("top_rect", Rect2()) as Rect2
+	var tray_rect := signature.get("tray_rect", Rect2()) as Rect2
+	var seat_grid_rect := signature.get("seat_grid_rect", Rect2()) as Rect2
+	return (
+		seat_grid_rect.position.y >= top_rect.end.y + 7.0
+		and seat_grid_rect.end.y <= tray_rect.position.y - 7.0
+		and Rect2(Vector2.ZERO, stage.size).encloses(seat_grid_rect)
+	)
 
 
 func _check(condition: bool, message: String) -> void:

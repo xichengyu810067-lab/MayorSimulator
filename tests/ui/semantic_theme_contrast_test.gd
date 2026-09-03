@@ -13,6 +13,7 @@ func _run() -> void:
 	for dark_mode in [false, true]:
 		_validate_palette_roles(dark_mode)
 	_validate_palette_wiring()
+	await _validate_lower_council_dark_mode()
 	if _failed:
 		quit(1)
 		return
@@ -53,6 +54,25 @@ func _validate_palette_wiring() -> void:
 	_check(pager_source.contains("\"action_primary_disabled\"") and pager_source.contains("\"text_disabled\""), "progressive pager distinguishes disabled navigation")
 	_check(main_source.contains("const SemanticPalette") and main_source.contains("pager.set_dark_mode(is_dark_mode)"), "Main wires the shared palette to governance pagers")
 	_check(main_source.contains("func _apply_button_style") and main_source.contains("\"border_focus\""), "Main shared buttons expose semantic focus contrast")
+
+
+func _validate_lower_council_dark_mode() -> void:
+	var stage_script := ResourceLoader.load("res://ui/governance/lower_council_stage.gd", "Script", ResourceLoader.CACHE_MODE_IGNORE) as Script
+	_check(stage_script != null and stage_script.can_instantiate(), "lower-council stage compiles for dark-mode contrast validation")
+	if stage_script == null or not stage_script.can_instantiate():
+		return
+	var stage = stage_script.new()
+	root.add_child(stage)
+	await process_frame
+	stage.set_dark_mode(true)
+	stage.set_catalog_focus("policy_selected", "公共建設政策")
+	await process_frame
+	var signature: Dictionary = stage.debug_signature()
+	_check(bool(signature.get("dark_mode", false)), "lower-council stage preserves true dark-mode state")
+	_check(int(signature.get("visible_portrait_count", 0)) == 30, "dark lower-council stage keeps all 30 portraits visible")
+	_check(float(signature.get("seat_surface_max_alpha", 1.0)) <= 0.23, "dark lower-council seat surfaces remain translucent")
+	stage.queue_free()
+	await process_frame
 
 
 func _check_ratio(first: Color, second: Color, minimum: float, label: String) -> void:

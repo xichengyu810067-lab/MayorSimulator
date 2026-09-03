@@ -1,20 +1,25 @@
 extends SceneTree
 
 const OUTPUT_PREFIX := "--fiscal-draft-output-dir="
+const DARK_MODE_ARG := "--dark-mode=true"
 const RESULT_FILENAME := "fiscal-draft-result.json"
 const SAVE_PATH := "user://mayor_simulator/tests/fiscal_draft_visible_acceptance.json"
 const TestCleanup := preload("res://tests/helpers/scene_tree_test_cleanup.gd")
+const SemanticPalette = preload("res://ui/theme/semantic_palette.gd")
 
 var output_dir := ""
 var failed := false
 var main
 var captures: Array[Dictionary] = []
+var dark_mode_requested := false
 
 
 func _initialize() -> void:
 	for argument in OS.get_cmdline_user_args():
 		if argument.begins_with(OUTPUT_PREFIX):
 			output_dir = argument.trim_prefix(OUTPUT_PREFIX)
+		elif argument == DARK_MODE_ARG:
+			dark_mode_requested = true
 	if output_dir.is_empty() or not DirAccess.dir_exists_absolute(output_dir):
 		_fail("missing existing output directory")
 		return
@@ -47,6 +52,12 @@ func _run() -> void:
 	if main.tutorial_overlay != null and main.tutorial_overlay.is_open():
 		main.tutorial_overlay.skip_button.pressed.emit()
 		await _settle(6)
+	if dark_mode_requested:
+		main._set_theme(true, false)
+		await _settle(12)
+		if not main.is_dark_mode or not _validate_dark_contrast():
+			_fail("actual Main did not enter a readable true dark mode")
+			return
 	main.municipal_button.pressed.emit()
 	await _settle(4)
 	var finance_button := main.municipal_overlay.find_child("FinanceButton", true, false) as Button
@@ -123,6 +134,11 @@ func _run() -> void:
 		return
 	if not await _capture_native("fiscal-applied-native.png"):
 		return
+	var dark_governance := {}
+	if dark_mode_requested:
+		dark_governance = await _capture_dark_governance()
+		if dark_governance.is_empty():
+			return
 
 	var result := {
 		"schema_version": 2,
@@ -131,6 +147,8 @@ func _run() -> void:
 		"actual_main": true,
 		"scene": "res://scenes/Main.tscn",
 		"capture_surface_kind": "native_fullscreen_root",
+		"dark_mode": bool(main.is_dark_mode),
+		"dark_contrast": _dark_contrast_signature() if dark_mode_requested else {},
 		"source": {
 			"worktree": OS.get_environment("MAYOR_ACCEPTANCE_WORKTREE"),
 			"branch": OS.get_environment("MAYOR_ACCEPTANCE_BRANCH"),
@@ -143,6 +161,7 @@ func _run() -> void:
 		"category_surface": categories_state,
 		"draft_preview": draft_state,
 		"apply_all": {"committed_count": 3, "autosave_delta": 1, "dirty_after_apply": 0},
+		"dark_governance": dark_governance,
 		"captures": captures,
 	}
 	var result_file := FileAccess.open(output_dir.path_join(RESULT_FILENAME), FileAccess.WRITE)
@@ -151,8 +170,77 @@ func _run() -> void:
 		return
 	result_file.store_string(JSON.stringify(result, "\t"))
 	result_file.close()
-	print("FISCAL_DRAFT_NATIVE_VISIBLE_ACCEPTANCE_PASSED captures=4 categories=6 plans=3 draft=3 apply_once=true actual_main=true")
+	print("FISCAL_DRAFT_NATIVE_VISIBLE_ACCEPTANCE_PASSED captures=%d categories=6 plans=3 draft=3 apply_once=true actual_main=true dark_mode=%s governance_capture=%d" % [captures.size(), str(main.is_dark_mode).to_lower(), 1 if dark_mode_requested else 0])
 	await TestCleanup.finish(self, [main], 0)
+
+
+func _capture_dark_governance() -> Dictionary:
+	main._submit_bill("環境保護法案")
+	var pending: Dictionary = main.vertical_slice.governance.pending_bill
+	var decision_day := int(pending.get("decision_day", -1))
+	if decision_day < main.vertical_slice.game_day():
+		_fail("dark-mode governance setup did not create a valid decision day")
+		return {}
+	var hearing_events: Array[Dictionary] = main.vertical_slice.advance_days(
+		decision_day - main.vertical_slice.game_day(),
+		_supportive_context(),
+		false
+	)
+	main._consume_vertical_events(hearing_events)
+	main._update_ui()
+	main.municipal_overlay.open_page("governance")
+	await _settle(12)
+	var stage = main.lower_council_stage
+	if stage == null:
+		_fail("dark-mode Actual Main did not create the governance stage")
+		return {}
+	stage.select_response_for_test(0)
+	await _settle(8)
+	var signature: Dictionary = stage.debug_signature()
+	if (
+		not main.is_dark_mode
+		or not bool(signature.get("dark_mode", false))
+		or str(signature.get("stage_state", "")) != "hearing"
+		or int(signature.get("visible_portrait_count", 0)) != 30
+		or float(signature.get("seat_surface_max_alpha", 1.0)) > 0.23
+		or bool(signature.get("catalog_visible", true))
+		or bool(signature.get("catalog_header_visible", true))
+	):
+		_fail("dark-mode governance stage is not visibly exclusive/readable: %s" % signature)
+		return {}
+	if not await _capture_native("lower-council-dark-hearing-native.png"):
+		return {}
+	return {
+		"stage_state": signature.get("stage_state", ""),
+		"dark_mode": signature.get("dark_mode", false),
+		"visible_portrait_count": signature.get("visible_portrait_count", 0),
+		"seat_surface_max_alpha": signature.get("seat_surface_max_alpha", 1.0),
+		"catalog_visible": signature.get("catalog_visible", true),
+		"catalog_header_visible": signature.get("catalog_header_visible", true),
+	}
+
+
+func _validate_dark_contrast() -> bool:
+	var signature := _dark_contrast_signature()
+	return float(signature.get("primary_text_ratio", 0.0)) >= 4.5 and float(signature.get("primary_action_ratio", 0.0)) >= 4.5
+
+
+func _dark_contrast_signature() -> Dictionary:
+	return {
+		"primary_text_ratio": SemanticPalette.contrast_ratio(SemanticPalette.color_for(true, "text_primary"), SemanticPalette.color_for(true, "surface_base")),
+		"primary_action_ratio": SemanticPalette.contrast_ratio(SemanticPalette.color_for(true, "text_on_accent"), SemanticPalette.color_for(true, "action_primary")),
+	}
+
+
+func _supportive_context() -> Dictionary:
+	return {
+		"public_support": 72,
+		"economic_health": 64,
+		"budget_health": 61,
+		"environment_health": 43,
+		"feasibility": 58,
+		"regional_support": {"north": 70, "east": 66, "south": 74, "west": 68},
+	}
 
 
 func _validate_categories() -> Dictionary:

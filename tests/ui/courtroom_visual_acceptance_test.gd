@@ -9,14 +9,14 @@ var _failed := false
 
 func _initialize() -> void:
 	var viewport := SubViewport.new()
-	viewport.size = Vector2i(1280, 800)
+	viewport.size = Vector2i(1280, 720)
 	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	root.add_child(viewport)
 
 	var backdrop := ColorRect.new()
 	backdrop.color = Color(0.98, 0.96, 0.90)
 	backdrop.position = Vector2.ZERO
-	backdrop.size = Vector2(1280, 800)
+	backdrop.size = Vector2(1280, 720)
 	viewport.add_child(backdrop)
 
 	var panel_script := ResourceLoader.load(PANEL_PATH, "Script", ResourceLoader.CACHE_MODE_IGNORE) as Script
@@ -26,8 +26,8 @@ func _initialize() -> void:
 		return
 	var panel = panel_script.new("judicial")
 	panel.set_dark_mode(false)
-	panel.position = Vector2(24, 18)
-	panel.size = Vector2(1232, 764)
+	panel.position = Vector2(166, 97)
+	panel.size = Vector2(948, 526)
 	backdrop.add_child(panel)
 
 	var system = JusticeScript.new(20_260_803)
@@ -38,6 +38,8 @@ func _initialize() -> void:
 	system.advance_judicial_procedures(int(court_case.get("hearing_day", 1)))
 	_check(bool(system.submit_defense(case_id, "safety_emergency").get("ok", false)), "hearing accepts the prepared defense")
 	panel.refresh(system)
+	await process_frame
+	await process_frame
 
 	var stage = panel._courtroom_stage
 	if DisplayServer.get_name().to_lower() == "headless":
@@ -47,6 +49,10 @@ func _initialize() -> void:
 		await create_timer(0.45).timeout
 		await RenderingServer.frame_post_draw
 	_check(stage != null and stage.visible and not stage.is_queued_for_deletion(), "layered courtroom is present and enabled")
+	var layout: Dictionary = panel.debug_layout_signature()
+	_check(not bool(layout.get("root_is_scroll_container", true)) and int(layout.get("positive_vertical_scroll_count", -1)) == 0, "1280x720 courtroom root has no positive vertical scroller: %s" % layout)
+	_check(float(layout.get("minimum_interactive_extent", 0.0)) >= 44.0, "1280x720 courtroom actions keep 44x44 targets: %s" % layout)
+	_check(int(layout.get("actor_layer_count", 0)) == 3, "courtroom keeps all three actor layers inside the same scene workspace")
 	_check(str(system.judicial_cases[case_id].get("procedural_stage", "")) == "hearing", "case is captured during the hearing")
 	_check(stage._judges.modulate.a > 0.95, "judicial panel is seated during the hearing")
 	_check(stage._clerk.modulate.a > 0.95, "court clerk is present during the hearing")

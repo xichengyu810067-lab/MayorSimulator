@@ -7,6 +7,8 @@ var _failed := false
 
 
 func _initialize() -> void:
+	root.content_scale_size = Vector2i(1280, 720)
+	root.size = Vector2i(1280, 720)
 	var panel_script := ResourceLoader.load(PANEL_PATH, "Script", ResourceLoader.CACHE_MODE_IGNORE) as Script
 	_check(panel_script != null and panel_script.can_instantiate(), "oversight panel compiles")
 	if panel_script == null or not panel_script.can_instantiate():
@@ -16,14 +18,19 @@ func _initialize() -> void:
 	_check(bool(system.initialize().get("ok", false)), "justice system initializes")
 	_check(bool(system.register_administrative_official("official_mayor", "現任市長", "mayor", "市長").get("ok", false)), "mayor registers")
 	var panel = panel_script.new("oversight")
+	panel.size = Vector2(948, 526)
 	root.add_child(panel)
 	panel.refresh(system)
+	await process_frame
 	var stage = panel._oversight_hearing_stage
 	_check(stage != null, "oversight panel creates the dedicated hearing stage")
 	var empty: Dictionary = stage.debug_signature()
 	_check(bool(empty.get("background_loaded", false)), "oversight background loads")
 	_check(str(empty.get("state", "")) == "empty", "empty oversight state is explicit")
 	_check(bool(empty.get("animation_running", false)), "empty oversight state has ambient animation")
+	var layout: Dictionary = panel.debug_layout_signature()
+	_check(not bool(layout.get("root_is_scroll_container", true)) and int(layout.get("positive_vertical_scroll_count", -1)) == 0, "1280x720 oversight root has no positive vertical scroller")
+	_check(float(layout.get("minimum_interactive_extent", 0.0)) >= 44.0, "1280x720 oversight actions keep 44x44 targets")
 	var opened: Dictionary = system.open_oversight_case("official_mayor", ["行政失職"], 65, 3)
 	_check(bool(opened.get("ok", false)), "oversight case opens")
 	var case_data: Dictionary = opened.get("case", {})

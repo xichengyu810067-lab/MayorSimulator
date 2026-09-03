@@ -1340,7 +1340,7 @@ func _build_management_overlay() -> Control:
 	return overlay
 
 
-func _build_judicial_tab() -> ScrollContainer:
+func _build_judicial_tab() -> Control:
 	judicial_panel = JusticeOversightPanelScript.new("judicial")
 	judicial_panel.set_dark_mode(is_dark_mode)
 	judicial_panel.defense_submitted.connect(Callable(self, "_on_defense_submitted"))
@@ -1349,7 +1349,7 @@ func _build_judicial_tab() -> ScrollContainer:
 	return judicial_panel
 
 
-func _build_oversight_tab() -> ScrollContainer:
+func _build_oversight_tab() -> Control:
 	oversight_panel = JusticeOversightPanelScript.new("oversight")
 	oversight_panel.set_dark_mode(is_dark_mode)
 	oversight_panel.defense_submitted.connect(Callable(self, "_on_defense_submitted"))
@@ -1956,68 +1956,55 @@ func _build_fiscal_tab() -> ScrollContainer:
 
 	return scroll
 
-func _build_bill_tab() -> ScrollContainer:
-	var scroll := ScrollContainer.new()
-	scroll.name = "政策與法案"
-	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-
-	var content := VBoxContainer.new()
-	content.custom_minimum_size = Vector2(0, 0)
-	content.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	content.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	content.add_theme_constant_override("separation", 10)
-	scroll.add_child(content)
-
-	governance_catalog_title = _illustrated_section_title("governance", "政策與法案")
-	content.add_child(governance_catalog_title)
-	var legend := HFlowContainer.new()
-	legend.name = "GovernanceTagLegend"
-	legend.add_theme_constant_override("separation", 8)
-	legend.add_child(_governance_tag_chip("政策", Color(0.05, 0.43, 0.70), "LegendPolicyTag"))
-	legend.add_child(_governance_tag_chip("法案", Color(0.78, 0.49, 0.08), "LegendBillTag"))
-	var legend_note := _label("先查看已實施項目，再選擇尚未實施的政策與法案。", 15, _theme_muted())
-	legend_note.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	legend.add_child(legend_note)
-	content.add_child(legend)
-	governance_catalog_legend = legend
-
-	bill_status_label = _label("", 16, _theme_text())
-	bill_status_label.name = "GovernanceStatusSummary"
-	bill_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	bill_status_label.custom_minimum_size = Vector2(0, 34)
-	content.add_child(bill_status_label)
+func _build_bill_tab() -> Control:
 	lower_council_stage = LowerCouncilStageScript.new()
 	lower_council_stage.response_selected.connect(_on_lower_council_response_selected)
 	lower_council_stage.response_confirmed.connect(_on_lower_council_response_confirmed)
-	content.add_child(lower_council_stage)
+	lower_council_stage.set_dark_mode(is_dark_mode)
+	var content := lower_council_stage.catalog_host() as VBoxContainer
+	var catalog_header := lower_council_stage.catalog_header_host() as HBoxContainer
+	governance_catalog_title = _label("政策與法案目錄", 18, _theme_text())
+	governance_catalog_title.name = "GovernanceCatalogTitle"
+	governance_catalog_title.custom_minimum_size = Vector2(140, 44)
+	governance_catalog_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	catalog_header.add_child(governance_catalog_title)
+	var legend := HFlowContainer.new()
+	legend.name = "GovernanceTagLegend"
+	legend.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	legend.add_theme_constant_override("separation", 8)
+	legend.add_child(_governance_tag_chip("政策", Color(0.05, 0.43, 0.70), "LegendPolicyTag"))
+	legend.add_child(_governance_tag_chip("法案", Color(0.78, 0.49, 0.08), "LegendBillTag"))
+	catalog_header.add_child(legend)
+	governance_catalog_legend = legend
+
+	bill_status_label = _label("", 15, _theme_text())
+	bill_status_label.name = "GovernanceStatusSummary"
+	bill_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	bill_status_label.max_lines_visible = 1
+	bill_status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bill_status_label.custom_minimum_size = Vector2(180, 44)
+	bill_status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	catalog_header.add_child(bill_status_label)
 
 	governance_status_tabs = TabContainer.new()
 	governance_status_tabs.name = "GovernanceStatusTabs"
 	governance_status_tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	governance_status_tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	governance_status_tabs.custom_minimum_size = Vector2(0, 380)
-	governance_status_tabs.add_theme_font_size_override("font_size", 19)
+	governance_status_tabs.custom_minimum_size = Vector2(0, 154)
+	governance_status_tabs.add_theme_font_size_override("font_size", 17)
 	_style_tabs(governance_status_tabs)
 	content.add_child(governance_status_tabs)
 	for status_id: String in GOVERNANCE_STATUS_ORDER:
-		var page_scroll := ScrollContainer.new()
-		page_scroll.name = str(GOVERNANCE_STATUS_TITLES[status_id])
-		page_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-		page_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		page_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		page_scroll.set_meta("status_id", status_id)
 		var page_content := VBoxContainer.new()
+		page_content.name = str(GOVERNANCE_STATUS_TITLES[status_id])
 		page_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		page_content.add_theme_constant_override("separation", 12)
-		page_scroll.add_child(page_content)
+		page_content.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		page_content.add_theme_constant_override("separation", 4)
+		page_content.set_meta("status_id", status_id)
 		var empty_label := _label("此分類目前沒有項目。", 17, _theme_muted())
 		empty_label.name = "GovernanceEmpty_%s" % status_id
 		empty_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		empty_label.custom_minimum_size = Vector2(0, 86)
+		empty_label.custom_minimum_size = Vector2(0, 44)
 		page_content.add_child(empty_label)
 		governance_status_empty_labels[status_id] = empty_label
 		var kind_tabs := TabContainer.new()
@@ -2043,7 +2030,7 @@ func _build_bill_tab() -> ScrollContainer:
 			governance_status_grids[key] = grid
 			governance_status_pagers[key] = pager
 			governance_status_sections[key] = section
-		governance_status_tabs.add_child(page_scroll)
+		governance_status_tabs.add_child(page_content)
 
 	for policy_name in policies.keys():
 		var policy: Dictionary = policies[policy_name]
@@ -2078,10 +2065,11 @@ func _build_bill_tab() -> ScrollContainer:
 	governance_force_button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	governance_force_button.pressed.connect(Callable(self, "_force_latest_rejected_bill"))
 	force_row.add_child(governance_force_button)
+	force_panel.visible = false
 	content.add_child(force_panel)
 	_refresh_governance_catalog()
 
-	return scroll
+	return lower_council_stage
 
 
 func _build_governance_policy_card(policy_name: String, policy: Dictionary) -> PanelContainer:
@@ -2208,6 +2196,16 @@ func _refresh_governance_catalog() -> void:
 			var section := governance_status_sections.get("%s:%s" % [tab_status_id, kind_id]) as VBoxContainer
 			if pager != null and section:
 				section.visible = int(pager.call("choice_count")) > 0
+	if is_instance_valid(governance_force_panel):
+		var force_available: bool = (
+			vertical_slice != null
+			and vertical_slice.governance != null
+			and not vertical_slice.governance.rejected_bills.is_empty()
+			and vertical_slice.governance.pending_bill.is_empty()
+		)
+		governance_force_panel.visible = force_available
+		if is_instance_valid(governance_catalog_legend):
+			governance_catalog_legend.visible = not force_available
 
 
 func _refresh_lower_council_stage() -> void:
@@ -2215,20 +2213,24 @@ func _refresh_lower_council_stage() -> void:
 		return
 	var pending: Dictionary = vertical_slice.governance.pending_bill
 	var hearing_active := str(pending.get("status", "")) == "awaiting_mayor_response"
-	for catalog_control in [
-		governance_catalog_title,
-		governance_catalog_legend,
-		bill_status_label,
-		governance_status_tabs,
-		governance_force_panel,
-	]:
-		if is_instance_valid(catalog_control):
-			(catalog_control as Control).visible = not hearing_active
-	var bill_id := str(pending.get("bill_id", ""))
-	var definition: Dictionary = vertical_slice.governance.bill_definitions.get(bill_id, {})
+	var force_available: bool = not vertical_slice.governance.rejected_bills.is_empty() and pending.is_empty()
 	var latest_decision: Dictionary = {}
 	if pending.is_empty() and not vertical_slice.governance.legislative_history.is_empty():
 		latest_decision = vertical_slice.governance.legislative_history.back().duplicate(true)
+	var workflow_active := hearing_active or not latest_decision.is_empty()
+	for catalog_control in [
+		governance_catalog_title,
+		bill_status_label,
+		governance_status_tabs,
+	]:
+		if is_instance_valid(catalog_control):
+			(catalog_control as Control).visible = not workflow_active
+	if is_instance_valid(governance_catalog_legend):
+		governance_catalog_legend.visible = not workflow_active and not force_available
+	if is_instance_valid(governance_force_panel):
+		governance_force_panel.visible = not workflow_active and force_available
+	var bill_id := str(pending.get("bill_id", ""))
+	var definition: Dictionary = vertical_slice.governance.bill_definitions.get(bill_id, {})
 	lower_council_stage.refresh(pending, definition, latest_decision)
 
 
