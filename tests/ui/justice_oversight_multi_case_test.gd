@@ -60,11 +60,16 @@ func _initialize() -> void:
 	_check(str(system.oversight_cases[first_oversight_id].get("defense_template_id", "")) == "due_process", "defense is written to the selected oversight case")
 	_check(str(oversight_panel._oversight_hearing_stage.debug_signature().get("state", "")) == "defense_submitted", "success feedback follows only the accepted oversight defense")
 	_check(str(system.oversight_cases[second_oversight_id].get("defense_template_id", "")).is_empty(), "unselected oversight case is unchanged")
+	oversight_panel.refresh(system)
+	_check(str(oversight_panel._oversight_hearing_stage.debug_signature().get("state", "")) == "defense_submitted", "refresh preserves the submitted-defense projection")
+	_check(oversight_panel.select_case_by_id(second_oversight_id), "player can select the untouched second oversight case")
+	_check(str(oversight_panel._oversight_hearing_stage.debug_signature().get("state", "")) == "questioning", "untouched second case remains in questioning state")
+	_check(oversight_panel.select_case_by_id(first_oversight_id), "player can return to the submitted first oversight case")
 
 	system.set_terminal_failure("municipal_trust_below_40")
 	judicial_panel.refresh(system)
 	oversight_panel.refresh(system)
-	_check(str(oversight_panel._oversight_hearing_stage.debug_signature().get("state", "")) == "questioning", "terminal state keeps the selected case visible without playing success feedback")
+	_check(str(oversight_panel._oversight_hearing_stage.debug_signature().get("state", "")) == "defense_submitted", "terminal state preserves the selected submitted-defense projection without replaying success feedback")
 	for button_variant in judicial_panel._defense_buttons.values():
 		_check((button_variant as Button).disabled, "terminal state disables every judicial defense command")
 	_check(not bool(judicial_panel.submit_current_defense("safety_emergency").get("ok", false)), "terminal justice mutation is rejected")

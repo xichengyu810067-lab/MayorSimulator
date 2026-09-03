@@ -41,9 +41,9 @@ func set_case(oversight_case: Dictionary) -> void:
 	if next_case_id.is_empty():
 		show_empty()
 		return
+	var has_submitted_defense := not str(oversight_case.get("defense_template_id", "")).is_empty()
 	var changed := _case_id != next_case_id or _state != "questioning"
 	_case_id = next_case_id
-	_state = "questioning"
 	_committee.modulate = Color.WHITE
 	_mayor_desk.modulate = Color.WHITE
 	_question_marker.show()
@@ -51,6 +51,15 @@ func set_case(oversight_case: Dictionary) -> void:
 	var allegations: Array = oversight_case.get("allegations", [])
 	var allegation_text := L10n.text(str(allegations.front())) if not allegations.is_empty() else L10n.text("行政調查")
 	(_mayor_desk.get_node("DeskLabel") as Label).text = L10n.text("%s答辯席") % target_name
+	if has_submitted_defense:
+		# The justice system remains the authority. Repeated UI refreshes project
+		# its submitted defense instead of resetting the scene to questioning.
+		_state = "defense_submitted"
+		_question_marker.text = L10n.text("答辯已遞交")
+		_cue_label.text = L10n.text("答辯資料已遞交監察委員會，案件將依原定日期進入表決。")
+		return
+	_state = "questioning"
+	_question_marker.text = L10n.text("質詢中")
 	_cue_label.text = L10n.text("監察委員質詢：%s｜請於表決日前提出答辯。") % allegation_text
 	if changed:
 		_play_question_animation()
@@ -60,6 +69,7 @@ func play_defense(defense_id: String) -> void:
 	if _case_id.is_empty() or defense_id.is_empty():
 		return
 	_state = "defense_submitted"
+	_question_marker.text = L10n.text("答辯已遞交")
 	_cue_label.text = L10n.text("答辯資料已遞交監察委員會，案件將依原定日期進入表決。")
 	if _active_tween != null and _active_tween.is_valid():
 		_active_tween.kill()

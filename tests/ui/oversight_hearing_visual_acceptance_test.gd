@@ -39,6 +39,10 @@ func _initialize() -> void:
 	_check(bool(defense.get("ok", false)), "successful defense is submitted through authority")
 	_check(str(stage.debug_signature().get("state", "")) == "defense_submitted", "only successful defense triggers the visual success feedback")
 	_check(int(stage.debug_signature().get("animation_generation", 0)) > before_defense, "successful defense starts a new feedback animation")
+	var submitted_generation := int(stage.debug_signature().get("animation_generation", 0))
+	panel.refresh(system)
+	_check(str(stage.debug_signature().get("state", "")) == "defense_submitted", "repeated refresh projects the authority submitted-defense state")
+	_check(int(stage.debug_signature().get("animation_generation", 0)) == submitted_generation, "repeated refresh does not replay submitted-defense feedback")
 	if _failed:
 		quit(1)
 	else:
