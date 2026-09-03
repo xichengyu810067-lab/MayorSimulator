@@ -2349,7 +2349,7 @@ func _transport_tile_centers() -> Dictionary:
 	return centers
 
 
-func _update_transport_runtime() -> void:
+func _update_transport_runtime(refresh_tile_overlays: bool = true) -> void:
 	if vertical_slice == null:
 		return
 	var runtime: Dictionary = {}
@@ -2374,6 +2374,53 @@ func _update_transport_runtime() -> void:
 		transport_network_layer.set_network_snapshot(preview_runtime, centers)
 	if transport_vehicle_controller != null:
 		transport_vehicle_controller.set_runtime_snapshot(runtime, centers)
+	if refresh_tile_overlays and grid_buttons.size() == CELL_COUNT:
+		for tile_index in CELL_COUNT:
+			_update_tile_visual(tile_index, city_grid[tile_index])
+
+
+func _transport_planning_overlay_for_tile(tile_index: int) -> Dictionary:
+	var session := _transport_session_snapshot()
+	if (
+		_transport_session_is_route_package(session)
+		and str(session.get("state", "")) in ["station_placement", "network_placement", "route_edit", "paused"]
+	):
+		var placements: Array = Dictionary(session.get("route_draft", {})).get("station_placements", [])
+		for placement_index in range(placements.size()):
+			var placement_value: Variant = placements[placement_index]
+			if not placement_value is Dictionary:
+				continue
+			var placement: Dictionary = placement_value
+			var occupied_tile_ids: Array = placement.get("occupied_tile_ids", [])
+			var footprint_index := occupied_tile_ids.find(tile_index)
+			if footprint_index < 0:
+				continue
+			return {
+				"kind": "station_draft",
+				"non_authoritative": true,
+				"building_name": str(session.get("station_blueprint_name", "交通站點")),
+				"mode": str(session.get("mode", "")),
+				"draft_order": placement_index + 1,
+				"anchor_tile_id": int(placement.get("anchor_tile_id", -1)),
+				"footprint_index": footprint_index,
+				"footprint_count": occupied_tile_ids.size(),
+				"footprint_role": "anchor" if tile_index == int(placement.get("anchor_tile_id", -1)) else "secondary",
+			}
+	if map_action_mode == "transport_infrastructure" and tile_index in transport_plan_tiles:
+		return {
+			"kind": "route_draft",
+			"non_authoritative": true,
+			"route_kind": transport_plan_kind,
+			"draft_order": transport_plan_tiles.find(tile_index) + 1,
+		}
+	if map_action_mode == "transport_route_stops" and tile_index in transport_route_station_tiles:
+		return {
+			"kind": "route_stop",
+			"non_authoritative": true,
+			"mode": transport_route_mode,
+			"draft_order": transport_route_station_tiles.find(tile_index) + 1,
+		}
+	return {}
 
 
 func _apply_transport_preview(runtime: Dictionary) -> void:
@@ -4960,6 +5007,7 @@ func _on_grid_pressed(index: int) -> void:
 		var removed: Dictionary = vertical_slice.call("remove_transport_session_station_draft", index)
 		if bool(removed.get("ok", false)):
 			_sync_placement_banner()
+			_update_transport_runtime()
 			_refresh_transport_planning_panel()
 			_set_hint("已移除這座站點草案；確認總包前仍未扣款。", false)
 		return
@@ -5017,6 +5065,7 @@ func _on_grid_pressed(index: int) -> void:
 		_placement_preview_anchor = -1
 		_placement_preview.clear()
 		_sync_placement_banner()
+		_update_transport_runtime()
 		_refresh_transport_planning_panel()
 		_set_hint("已加入第 %d 座「%s」草案；確認總包前不扣款、不建立工程。" % [
 			_transport_session_station_count(drafted.get("session", {})), placement_building_name,
@@ -6590,7 +6639,7 @@ func _update_ui() -> void:
 	for i in CELL_COUNT:
 		var item := city_grid[i]
 		_update_tile_visual(i, item)
-	_update_transport_runtime()
+	_update_transport_runtime(false)
 	_refresh_transport_planning_panel()
 
 	for building_name in building_buttons.keys():
@@ -7154,6 +7203,7 @@ func _update_tile_visual(index: int, building_name: String) -> void:
 			"footprint_id": footprint_id,
 			"owner_anchor_tile_id": owner_anchor_tile_id,
 			"placement_preview": preview,
+			"transport_planning_overlay": _transport_planning_overlay_for_tile(index),
 		})
 	else:
 		cell.text = _tile_text(building_name, index)

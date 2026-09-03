@@ -98,6 +98,7 @@ var footprint_count := 1
 var footprint_id := ""
 var owner_anchor_tile_id := -1
 var placement_preview: Dictionary = {}
+var transport_planning_overlay: Dictionary = {}
 var transport_activity_profile: Dictionary = {}
 var ambient_animation_profile: Dictionary = {}
 var _animation_time := 0.0
@@ -162,6 +163,7 @@ func set_tile(data: Dictionary) -> void:
 	footprint_id = str(data.get("footprint_id", ""))
 	owner_anchor_tile_id = int(data.get("owner_anchor_tile_id", tile_index))
 	placement_preview = Dictionary(data.get("placement_preview", {})).duplicate(true)
+	transport_planning_overlay = Dictionary(data.get("transport_planning_overlay", {})).duplicate(true)
 	_refresh_animation_profiles()
 	text = ""
 	if not construction_job.is_empty():
@@ -244,6 +246,10 @@ func get_footprint_visual_snapshot() -> Dictionary:
 		"placement_preview_count": int(placement_preview.get("footprint_count", 0)),
 		"placement_preview_valid": bool(placement_preview.get("can_place", false)),
 	}
+
+
+func get_transport_planning_overlay_snapshot() -> Dictionary:
+	return transport_planning_overlay.duplicate(true)
 
 
 func get_visual_animation_debug_snapshot() -> Dictionary:
@@ -347,9 +353,53 @@ func _draw() -> void:
 			_draw_placement_indicator()
 		else:
 			_draw_blocked_placement_indicator()
+	if not transport_planning_overlay.is_empty():
+		_draw_transport_planning_overlay()
 
 	if is_hovered() or selected:
 		_draw_selection()
+
+
+func _draw_transport_planning_overlay() -> void:
+	var overlay_kind := str(transport_planning_overlay.get("kind", ""))
+	var order := int(transport_planning_overlay.get("draft_order", 0))
+	if overlay_kind == "station_draft":
+		var cyan := Color(0.22, 0.90, 0.96, 0.68)
+		var footprint_index_value := int(transport_planning_overlay.get("footprint_index", 0))
+		var footprint_count_value := maxi(1, int(transport_planning_overlay.get("footprint_count", 1)))
+		var left := 4.0 if footprint_index_value == 0 else 0.0
+		var right := size.x - 4.0 if footprint_index_value == footprint_count_value - 1 else size.x
+		var ghost_base := Rect2(Vector2(left, size.y * 0.54), Vector2(right - left, size.y * 0.30))
+		draw_rect(ghost_base, Color(cyan, 0.24), true)
+		draw_rect(ghost_base, cyan, false, 2.5)
+		if str(transport_planning_overlay.get("footprint_role", "anchor")) == "anchor":
+			var center := size * 0.5
+			var body := Rect2(center + Vector2(-23, -9), Vector2(46, 31))
+			draw_rect(body, Color(0.12, 0.62, 0.72, 0.46), true)
+			draw_colored_polygon(PackedVector2Array([
+				center + Vector2(-29, -9),
+				center + Vector2(0, -31),
+				center + Vector2(29, -9),
+			]), Color(0.16, 0.78, 0.86, 0.52))
+			draw_line(center + Vector2(-31, -18), center + Vector2(-31, 25), Color(cyan, 0.78), 3.0, true)
+			draw_circle(center + Vector2(-31, -23), 7.0, Color(0.98, 0.84, 0.20, 0.70))
+			draw_string(
+				ThemeDB.fallback_font,
+				center + Vector2(-19, 37),
+				"%s %d" % [L10n.text("草案"), order],
+				HORIZONTAL_ALIGNMENT_LEFT,
+				-1,
+				12,
+				Color(0.88, 1.0, 1.0, 0.96)
+			)
+		return
+	var accent := Color(1.0, 0.82, 0.18, 0.92)
+	var inset := Rect2(Vector2(5, 5), size - Vector2(10, 10))
+	draw_rect(inset, Color(accent, 0.10), true)
+	draw_rect(inset, accent, false, 3.0)
+	if order > 0:
+		draw_circle(Vector2(size.x - 15, 15), 11.0, Color(0.04, 0.10, 0.14, 0.88))
+		draw_string(ThemeDB.fallback_font, Vector2(size.x - 19, 20), str(order), HORIZONTAL_ALIGNMENT_CENTER, 8, 12, accent)
 
 
 func _is_primary_footprint_cell() -> bool:

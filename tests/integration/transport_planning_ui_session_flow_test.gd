@@ -48,6 +48,28 @@ func _run() -> void:
 	_check(main.municipal_overlay.current_page() == "blueprint" and main.selected_building == "公車站", "station building card did not open its blueprint directly")
 	var station_button := main.vertical_slice_panel.find_child("SubmitBlueprintButton", true, false) as Button
 	_check(station_button != null and not station_button.disabled and station_button.text.contains("連續站點"), "approved station blueprint does not expose the continuous-planning entry")
+	var fixture := _find_bus_fixture(main)
+	_check(not fixture.is_empty(), "layout 3 has no flat connected bus-session fixture outside the HUD safe area")
+	if fixture.is_empty():
+		await TestCleanup.finish(self, [main], 1)
+		return
+	var existing_building_tile := _find_existing_building_tile(main, fixture)
+	_check(existing_building_tile >= 0, "bus-session fixture has no independent tile for an existing-building visibility check")
+	if existing_building_tile < 0:
+		await TestCleanup.finish(self, [main], 1)
+		return
+	main.city_grid[existing_building_tile] = "住宅"
+	main.building_customizations[existing_building_tile] = {"variant": 1, "roof": 2, "wall": 3}
+	var existing_building_record: Dictionary = main.vertical_slice.register_existing_building(
+		existing_building_tile,
+		"住宅",
+		main.building_customizations[existing_building_tile]
+	)
+	main._update_tile_visual(existing_building_tile, "住宅")
+	await process_frame
+	var existing_building_button := main.grid_buttons[existing_building_tile] as Button
+	_check(not existing_building_record.is_empty(), "actual Main could not register the pre-existing building fixture")
+	_check(existing_building_button != null and existing_building_button.is_visible_in_tree(), "pre-existing building visual is absent before transport planning")
 	var funds_before_session := int(main.vertical_slice.treasury_balance())
 	var jobs_before_session := int(main.vertical_slice.construction.jobs.size())
 	if station_button != null:
@@ -76,11 +98,6 @@ func _run() -> void:
 	_check(str(session.get("id", "")) == session_id, "continue recreated the authoritative planning session")
 	_check(int(main.vertical_slice.treasury_balance()) == funds_before_session and main.vertical_slice.construction.jobs.size() == jobs_before_session, "continue charged funds or created construction before confirmation")
 
-	var fixture := _find_bus_fixture(main)
-	_check(not fixture.is_empty(), "layout 3 has no flat connected bus-session fixture outside the HUD safe area")
-	if fixture.is_empty():
-		await TestCleanup.finish(self, [main], 1)
-		return
 	var first_tile := int(fixture["first_station"])
 	var second_tile := int(fixture["second_station"])
 	var funds_before: int = int(main.vertical_slice.treasury_balance())
@@ -98,6 +115,7 @@ func _run() -> void:
 	_check(_station_draft_count(session) == 2 and Array(session.get("station_refs", [])).is_empty(), "same session does not retain both station drafts before package confirmation")
 	_check(int(main.vertical_slice.treasury_balance()) == funds_before, "station drafts charged construction funding before package confirmation")
 	_check(main.vertical_slice.construction.jobs.size() == jobs_before_session, "station drafts created construction jobs before package confirmation")
+	_check_station_draft_ghosts(main, [first_tile, second_tile], "station placement")
 
 	_press_map_confirm(main, "station next-step")
 	await process_frame
@@ -105,9 +123,16 @@ func _run() -> void:
 	_check(str(session.get("state", "")) == "network_placement", "station next-step did not advance the same draft to network placement")
 	_check(main.municipal_overlay.is_open() and main.municipal_overlay.current_page() == "transport_planning", "station next-step did not return to the same transport page")
 	_check(int(main.vertical_slice.treasury_balance()) == funds_before and main.vertical_slice.construction.jobs.size() == jobs_before_session, "advancing to the network draft changed authoritative construction state")
+	_check_station_draft_ghosts(main, [first_tile, second_tile], "network planning")
 
 	var road_button := main.transport_planning_panel.find_child("InfrastructureAdd_road", true, false) as Button
 	_check(road_button != null and not road_button.disabled, "network phase does not expose the same-mode guideway")
+	_check(main.transport_planning_panel.find_child("InfrastructureAdd_bus_depot", true, false) is Button, "bus package does not expose its compatible depot")
+	_check(main.transport_planning_panel.find_child("InfrastructureAdd_metro_track", true, false) == null, "bus package still renders metro infrastructure")
+	_check(main.transport_planning_panel.find_child("InfrastructureAdd_heavy_rail", true, false) == null, "bus package still renders rail infrastructure")
+	_check(main.transport_planning_panel.find_child("InfrastructureAdd_runway", true, false) == null, "bus package still renders air infrastructure")
+	_check(main.transport_planning_panel.find_child("PlanRoute_bus", true, false) is Button, "bus package hides its matching route card")
+	_check(main.transport_planning_panel.find_child("PlanRoute_metro", true, false) == null and main.transport_planning_panel.find_child("PlanRoute_train", true, false) == null and main.transport_planning_panel.find_child("PlanRoute_air", true, false) == null, "bus package still renders a foreign route card")
 	if road_button != null:
 		road_button.pressed.emit()
 	_check(main.map_action_mode == "transport_infrastructure" and main.transport_plan_kind == "road", "road action did not enter the real infrastructure map mode")
@@ -116,6 +141,15 @@ func _run() -> void:
 		main._on_grid_pressed(int(road_tiles[road_index]))
 		_check(main.transport_plan_tiles.size() == road_index + 1, "road map input did not append the next adjacent tile")
 		_check(main.transport_plan_tiles[road_index] == int(road_tiles[road_index]), "road map input changed the player-selected path order")
+	_check(existing_building_button != null and existing_building_button.is_visible_in_tree(), "route placement hides a pre-existing building visual")
+	if existing_building_button != null:
+		var building_visual: Dictionary = existing_building_button.call("get_visual_animation_debug_snapshot")
+		_check(str(building_visual.get("building_name", "")) == "住宅", "route placement clears the pre-existing building renderer")
+		_check(existing_building_button.get_parent() == main.tile_layer, "route placement moves the building away from the authoritative tile layer")
+	_check(not main.vertical_slice.get_building_by_tile(existing_building_tile).is_empty(), "route placement mutates pre-existing building occupancy")
+	_check(main.tile_layer.get_index() > main.transport_network_layer.get_index(), "route preview no longer remains beneath building visuals")
+	_check(main.npc_layer.get_index() > main.tile_layer.get_index(), "route preview changed the established NPC/building layer authority")
+	_check_station_draft_ghosts(main, [first_tile, second_tile], "route placement")
 	_check(main.placement_confirm_button.visible and not main.placement_confirm_button.disabled, "road quote did not enable the visible confirmation control")
 	_check(main.placement_confirm_button.text.contains("確認總包"), "road draft does not identify the package-confirmation handoff")
 	_press_map_confirm(main, "road draft")
@@ -183,6 +217,18 @@ func _place_station(main, tile_id: int) -> void:
 
 func _station_draft_count(session: Dictionary) -> int:
 	return Array(Dictionary(session.get("route_draft", {})).get("station_placements", [])).size()
+
+
+func _check_station_draft_ghosts(main, station_tiles: Array[int], phase: String) -> void:
+	for order in range(station_tiles.size()):
+		var tile_id := station_tiles[order]
+		var button := main.grid_buttons[tile_id] as Button
+		var overlay: Dictionary = button.call("get_transport_planning_overlay_snapshot") if button != null else {}
+		_check(button != null and button.is_visible_in_tree(), "%s hides station draft %d" % [phase, order + 1])
+		_check(str(overlay.get("kind", "")) == "station_draft", "%s does not render station draft %d as a ghost" % [phase, order + 1])
+		_check(bool(overlay.get("non_authoritative", false)), "%s station draft %d is not explicitly marked non-authoritative" % [phase, order + 1])
+		_check(str(overlay.get("building_name", "")) == "公車站" and int(overlay.get("draft_order", 0)) == order + 1, "%s station ghost %d lost its mode or placement order" % [phase, order + 1])
+		_check(main.city_grid[tile_id] == "" and main.vertical_slice.get_building_by_tile(tile_id).is_empty(), "%s station ghost %d leaked into live building authority" % [phase, order + 1])
 
 
 func _negative_ledger_count(main) -> int:
@@ -292,6 +338,24 @@ func _find_bus_fixture(main) -> Dictionary:
 					"second_station": second_station,
 				}
 	return {}
+
+
+func _find_existing_building_tile(main, fixture: Dictionary) -> int:
+	var reserved: Array[int] = []
+	for tile_value: Variant in fixture.get("road_tiles", []):
+		reserved.append(int(tile_value))
+	for field_name: String in ["depot_tile", "first_station", "second_station"]:
+		reserved.append(int(fixture.get(field_name, -1)))
+	for tile_id in range(main.city_grid.size()):
+		if (
+			tile_id not in reserved
+			and main.vertical_slice.terrain_map.is_buildable(tile_id)
+			and bool(main._is_tile_inside_hud_safe_area(tile_id))
+			and main.vertical_slice.get_building_by_tile(tile_id).is_empty()
+			and main.vertical_slice.active_construction_for_tile(tile_id).is_empty()
+		):
+			return tile_id
+	return -1
 
 
 func _tile(main, x: int, y: int) -> int:

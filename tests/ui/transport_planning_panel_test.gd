@@ -217,7 +217,9 @@ func _run() -> void:
 	var metro_add := panel.find_child("InfrastructureAdd_metro_track", true, false) as Button
 	_check(heavy_rail_add != null and not heavy_rail_add.disabled, "train session cannot add its guideway")
 	_check(rail_signal_add != null and not rail_signal_add.disabled, "train session cannot add mode-compatible rail signals")
-	_check(metro_add != null and metro_add.disabled, "train session accepts cross-mode infrastructure")
+	_check(metro_add == null, "train session still renders cross-mode metro infrastructure")
+	_check(panel.find_child("PlanRoute_train", true, false) is Button, "train session hides its matching route card")
+	_check(panel.find_child("PlanRoute_bus", true, false) == null, "train session still renders a foreign bus route card")
 	panel.set_view_model({
 		"planning_unlocked": true,
 		"planning_session": {
@@ -237,7 +239,10 @@ func _run() -> void:
 	var road_add := panel.find_child("InfrastructureAdd_road", true, false) as Button
 	_check(runway_add != null and not runway_add.disabled, "air session cannot add its runway guideway")
 	_check(taxiway_add != null and not taxiway_add.disabled, "air session cannot add taxiway in the same network phase")
-	_check(road_add != null and road_add.disabled, "air session accepts a cross-mode road project")
+	_check(road_add == null, "air session still renders a cross-mode road project")
+	_check(panel.find_child("PlanRoute_air", true, false) is Button, "air session hides its matching route card")
+	_check(panel.find_child("PlanRoute_train", true, false) == null, "air session still renders a foreign train route card")
+	_check_mode_scoped_catalogs(panel)
 
 	panel.set_view_model({
 		"planning_unlocked": true,
@@ -265,6 +270,8 @@ func _run() -> void:
 	_check(empty_label != null and empty_label.visible, "empty route state is not rendered")
 	_check(sections_ready and infrastructure_section.visible and operations_section.visible and route_list_section.visible, "inactive planning does not restore the network and route surfaces")
 	_check(int(panel.debug_snapshot().get("route_count", -1)) == 0, "route cards were not cleared with an empty snapshot")
+	_check(panel.find_child("InfrastructureAdd_road", true, false) is Button and panel.find_child("InfrastructureAdd_runway", true, false) is Button, "inactive management surface does not restore all infrastructure modes")
+	_check(panel.find_child("PlanRoute_bus", true, false) is Button and panel.find_child("PlanRoute_air", true, false) is Button, "inactive management surface does not restore all route modes")
 
 	var exit_code := 1 if _failed else 0
 	if not _failed:
@@ -307,6 +314,38 @@ func _check_readability(panel: Control) -> void:
 	for input_name: String in ["TransportFleetSize", "TransportHeadwayMinutes", "TransportRouteFare"]:
 		var input := panel.find_child(input_name, true, false) as SpinBox
 		_check(input != null and input.get_line_edit().get_theme_font_size("font_size") >= 18, "route input is not readable: %s" % input_name)
+
+
+func _check_mode_scoped_catalogs(panel: Control) -> void:
+	var expected_infrastructure := {
+		"bus": ["road", "bus_depot"],
+		"metro": ["metro_track", "metro_depot"],
+		"train": ["rail_track", "rail_depot", "rail_signal"],
+		"air": ["runway", "taxiway"],
+	}
+	for mode: String in ["bus", "metro", "train", "air"]:
+		panel.set_view_model({
+			"planning_unlocked": true,
+			"planning_session": {
+				"id": "transport_mode_scope_%s" % mode,
+				"workflow": "route_package_v1" if mode != "air" else "",
+				"state": "network_placement",
+				"mode": mode,
+				"station_blueprint_name": {"bus": "公車站", "metro": "捷運站", "train": "火車站", "air": "機場"}[mode],
+				"station_refs": [],
+				"network_refs": [],
+				"route_refs": [],
+			},
+			"routes": [],
+		})
+		var snapshot: Dictionary = panel.debug_snapshot()
+		var actual_infrastructure: Array = snapshot.get("scoped_infrastructure_choice_ids", [])
+		var actual_routes: Array = snapshot.get("scoped_route_mode_ids", [])
+		_check(actual_infrastructure == expected_infrastructure[mode], "%s session infrastructure catalog leaked another mode: %s" % [mode, actual_infrastructure])
+		_check(actual_routes == [mode], "%s session route catalog leaked another mode: %s" % [mode, actual_routes])
+		for foreign_mode: String in ["bus", "metro", "train", "air"]:
+			var route_button := panel.find_child("PlanRoute_%s" % foreign_mode, true, false) as Button
+			_check((route_button != null) == (foreign_mode == mode), "%s session rendered the wrong route card: %s" % [mode, foreign_mode])
 
 
 func _check_progressive_groups(snapshot: Dictionary) -> void:

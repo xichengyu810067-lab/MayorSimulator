@@ -71,6 +71,39 @@ func _run() -> void:
 		_check(Vector2(access_segment.get("from", Vector2.INF)).is_equal_approx(centers["0"]), "station connector did not start at the authoritative road center")
 		_check(Vector2(access_segment.get("to", Vector2.INF)).is_equal_approx(centers["1"]), "station connector did not end at the authoritative station center")
 
+	var turn_center := Vector2(180, 120)
+	var turn_contract: Dictionary = NetworkLayerScript.connected_junction_contract(turn_center, "road", ["w", "s"])
+	_check(bool(turn_contract.get("filled_center", false)), "a square-grid L-turn does not render a filled center junction")
+	_check(bool(turn_contract.get("has_perpendicular_turn", false)), "the renderer does not classify perpendicular road strokes as one continuous turn")
+	_check(Vector2(turn_contract.get("center", Vector2.INF)).is_equal_approx(turn_center), "the L-turn junction moved away from the authoritative tile center")
+	_check(Array(turn_contract.get("directions", [])) == ["s", "w"], "the render-only junction changed or invented connection directions")
+	_check(NetworkLayerScript.connected_junction_contract(turn_center, "road", ["w"]).is_empty(), "a terminal cap was misreported as a multi-edge junction")
+	var turn_snapshot := {
+		"tile_states": {
+			"0": {"segments": ["road"], "facilities": [], "connections": {"road": ["e"]}, "neighbours": {"e": 1}, "crossing": ""},
+			"1": {"segments": ["road"], "facilities": [], "connections": {"road": ["w", "s"]}, "neighbours": {"w": 0, "s": 2}, "crossing": ""},
+			"2": {"segments": ["road"], "facilities": [], "connections": {"road": ["n"]}, "neighbours": {"n": 1}, "crossing": ""},
+		},
+		"operational_lines": [],
+		"private_road_paths": [],
+		"crossings": {},
+		"station_access_edges": [],
+	}
+	var turn_topology_before: Dictionary = turn_snapshot.duplicate(true)
+	ground.set_network_snapshot(turn_snapshot, {
+		"0": Vector2(80, 120),
+		"1": turn_center,
+		"2": Vector2(180, 220),
+	})
+	var turn_debug: Dictionary = ground.debug_snapshot()
+	_check(turn_snapshot == turn_topology_before, "L-turn rendering mutated its caller-owned topology snapshot")
+	_check(int(turn_debug.get("tile_state_count", 0)) == 3, "L-turn rendering changed the number of authoritative topology tiles")
+	var connected_junctions: Array = turn_debug.get("connected_junctions", [])
+	_check(connected_junctions.size() == 1, "L-turn fixture did not project exactly one render-only junction")
+	if connected_junctions.size() == 1:
+		var projected_turn: Dictionary = connected_junctions[0]
+		_check(int(projected_turn.get("tile_id", -1)) == 1 and bool(projected_turn.get("has_perpendicular_turn", false)), "render-only junction was not attached to the authoritative L-turn tile")
+
 	var operational_snapshot := isolated_snapshot.duplicate(true)
 	operational_snapshot["tile_states"] = {
 		"0": {"segments": ["rail_track"], "facilities": [], "connections": {"rail_track": ["e"]}, "neighbours": {"e": 1}, "crossing": ""},

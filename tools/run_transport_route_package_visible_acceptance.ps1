@@ -79,6 +79,8 @@ $godotLogPath = Join-Path $OutputRoot 'godot.log'
 $summaryPath = Join-Path $OutputRoot 'summary.json'
 $resultPath = Join-Path $OutputRoot 'transport-route-package-result.json'
 $captureNames = @(
+    'transport-route-package-bus-only-native.png',
+    'transport-route-package-route-map-native.png',
     'transport-route-package-draft-native.png',
     'transport-route-package-construction-native.png',
     'transport-route-package-operational-native.png'
@@ -169,7 +171,7 @@ foreach ($captureName in $captureNames) {
     try { $captures.Add((Get-PngRecord -Path (Join-Path $OutputRoot $captureName))) }
     catch { $failures.Add($_.Exception.Message) }
 }
-if (@($captures | ForEach-Object { $_.sha256 } | Sort-Object -Unique).Count -ne 3) { $failures.Add('Three distinct PNG hashes are required.') }
+if (@($captures | ForEach-Object { $_.sha256 } | Sort-Object -Unique).Count -ne 5) { $failures.Add('Five distinct PNG hashes are required.') }
 $result = $null
 try {
     $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json -Depth 30
@@ -180,7 +182,7 @@ try {
         $result.scene -cne 'res://scenes/Main.tscn' -or
         $result.capture_surface_kind -cne 'native_fullscreen_root' -or
         $result.display.server -notmatch '(?i)windows' -or
-        $result.captures.Count -ne 3
+        $result.captures.Count -ne 5
     ) { throw 'Result does not prove an actual-Main Windows native acceptance.' }
     if (
         $result.source.worktree -cne $projectRoot -or
@@ -222,6 +224,19 @@ try {
         $result.materialized_route.price_model -cne 'route_package_v1' -or
         [int]$result.materialized_route.route_tile_count -ne 11
     ) { throw 'Automatic route materialization evidence is incomplete.' }
+    if (
+        $result.ux_regressions.session_mode -cne 'bus' -or
+        (@($result.ux_regressions.visible_infrastructure_choice_ids) -join ',') -cne 'road,bus_depot' -or
+        (@($result.ux_regressions.visible_route_mode_ids) -join ',') -cne 'bus' -or
+        -not [bool]$result.ux_regressions.foreign_mode_cards_absent -or
+        -not [bool]$result.ux_regressions.existing_building_visible_during_route_placement -or
+        [int]$result.ux_regressions.station_draft_ghost_count -ne 2 -or
+        -not [bool]$result.ux_regressions.station_drafts_remain_outside_live_authority -or
+        -not [bool]$result.ux_regressions.building_layer_above_route_preview -or
+        -not [bool]$result.ux_regressions.npc_layer_order_preserved -or
+        -not [bool]$result.ux_regressions.l_turn_route -or
+        -not [bool]$result.ux_regressions.filled_l_turn_junction
+    ) { throw 'Transport mode scope, building visibility, or L-turn evidence is incomplete.' }
     for ($index = 0; $index -lt $captures.Count; $index++) {
         $fixtureCapture = $result.captures[$index]
         $validatedCapture = $captures[$index]

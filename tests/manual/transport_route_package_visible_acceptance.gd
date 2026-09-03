@@ -3,6 +3,8 @@ extends SceneTree
 const OUTPUT_PREFIX := "--transport-route-package-output-dir="
 const RESULT_FILENAME := "transport-route-package-result.json"
 const SAVE_PATH := "user://mayor_simulator/tests/transport_route_package_visible_acceptance.json"
+const MODE_SCOPE_CAPTURE := "transport-route-package-bus-only-native.png"
+const ROUTE_MAP_CAPTURE := "transport-route-package-route-map-native.png"
 const DRAFT_CAPTURE := "transport-route-package-draft-native.png"
 const CONSTRUCTION_CAPTURE := "transport-route-package-construction-native.png"
 const OPERATIONAL_CAPTURE := "transport-route-package-operational-native.png"
@@ -70,6 +72,26 @@ func _run() -> void:
 	if station_action == null or station_action.disabled or not station_action.text.contains("連續站點"):
 		_fail("actual Main approved bus-station blueprint lacks continuous planning")
 		return
+	var fixture := _find_eleven_tile_fixture()
+	if fixture.is_empty():
+		_fail("could not find a visible buildable 11-tile L-turn bus package fixture")
+		return
+	var existing_building_tile := _find_existing_building_tile(fixture)
+	if existing_building_tile < 0:
+		_fail("could not find an independent existing-building visibility fixture")
+		return
+	main.city_grid[existing_building_tile] = "住宅"
+	main.building_customizations[existing_building_tile] = {"variant": 1, "roof": 2, "wall": 3}
+	var building_record: Dictionary = main.vertical_slice.register_existing_building(
+		existing_building_tile,
+		"住宅",
+		main.building_customizations[existing_building_tile]
+	)
+	main._update_tile_visual(existing_building_tile, "住宅")
+	await _settle(3)
+	if building_record.is_empty():
+		_fail("actual Main could not register the existing-building visibility fixture")
+		return
 
 	var funds_before := int(main.vertical_slice.treasury_balance())
 	var jobs_before: Dictionary = main.vertical_slice.construction.to_dict()
@@ -82,11 +104,6 @@ func _run() -> void:
 	if str(session.get("workflow", "")) != "route_package_v1" or str(session.get("state", "")) != "station_placement":
 		_fail("actual Main did not start route_package_v1 station placement")
 		return
-	var fixture := _find_eleven_tile_fixture()
-	if fixture.is_empty():
-		_fail("could not find a visible buildable 11-tile bus package fixture")
-		return
-
 	for station_tile: int in [int(fixture["station_a"]), int(fixture["station_b"])]:
 		main._on_grid_pressed(station_tile)
 		await _settle(2)
@@ -99,6 +116,20 @@ func _run() -> void:
 		return
 	main.placement_confirm_button.pressed.emit()
 	await _settle(6)
+	var captures: Array[Dictionary] = []
+	var scoped_snapshot: Dictionary = main.transport_planning_panel.debug_snapshot()
+	if (
+		Array(scoped_snapshot.get("scoped_infrastructure_choice_ids", [])) != ["road", "bus_depot"]
+		or Array(scoped_snapshot.get("scoped_route_mode_ids", [])) != ["bus"]
+		or main.transport_planning_panel.find_child("InfrastructureAdd_metro_track", true, false) != null
+		or main.transport_planning_panel.find_child("PlanRoute_train", true, false) != null
+	):
+		_fail("active bus session still exposes foreign infrastructure or route cards: %s" % scoped_snapshot)
+		return
+	var mode_scope_capture := _capture_native(MODE_SCOPE_CAPTURE, "bus_only_choices")
+	if mode_scope_capture.is_empty():
+		return
+	captures.append(mode_scope_capture)
 	var road_button := main.transport_planning_panel.find_child("InfrastructureAdd_road", true, false) as Button
 	if road_button == null or road_button.disabled:
 		_fail("network phase does not expose road planning")
@@ -111,6 +142,43 @@ func _run() -> void:
 	if main.transport_plan_tiles.size() != 11 or main.placement_confirm_button.disabled:
 		_fail("actual Main did not retain an enabled 11-tile contiguous route draft: %s" % main.hint_label.text)
 		return
+	var existing_building_button := main.grid_buttons[existing_building_tile] as Button
+	var building_visual: Dictionary = existing_building_button.call("get_visual_animation_debug_snapshot") if existing_building_button != null else {}
+	var network_debug: Dictionary = main.transport_network_layer.debug_snapshot()
+	var station_draft_ghost_count := 0
+	for station_tile: int in [int(fixture["station_a"]), int(fixture["station_b"])]:
+		var station_button := main.grid_buttons[station_tile] as Button
+		var station_overlay: Dictionary = station_button.call("get_transport_planning_overlay_snapshot") if station_button != null else {}
+		if (
+			station_button != null
+			and station_button.is_visible_in_tree()
+			and str(station_overlay.get("kind", "")) == "station_draft"
+			and bool(station_overlay.get("non_authoritative", false))
+			and main.city_grid[station_tile] == ""
+			and main.vertical_slice.get_building_by_tile(station_tile).is_empty()
+		):
+			station_draft_ghost_count += 1
+	var has_l_turn_junction := false
+	for junction_variant: Variant in network_debug.get("connected_junctions", []):
+		if junction_variant is Dictionary and bool((junction_variant as Dictionary).get("has_perpendicular_turn", false)):
+			has_l_turn_junction = true
+			break
+	if (
+		existing_building_button == null
+		or not existing_building_button.is_visible_in_tree()
+		or str(building_visual.get("building_name", "")) != "住宅"
+		or existing_building_button.get_parent() != main.tile_layer
+		or main.tile_layer.get_index() <= main.transport_network_layer.get_index()
+		or main.npc_layer.get_index() <= main.tile_layer.get_index()
+		or station_draft_ghost_count != 2
+		or not has_l_turn_junction
+	):
+		_fail("route map does not preserve the existing building, both non-authoritative station ghosts, layer order, or a continuous L-turn")
+		return
+	var route_map_capture := _capture_native(ROUTE_MAP_CAPTURE, "building_visible_continuous_l_turn")
+	if route_map_capture.is_empty():
+		return
+	captures.append(route_map_capture)
 	main.placement_confirm_button.pressed.emit()
 	await _settle(8)
 	session = main.vertical_slice.transport_planning_session_snapshot()
@@ -134,7 +202,6 @@ func _run() -> void:
 		if not detail.text.contains(token):
 			_fail("package confirmation detail is missing '%s': %s" % [token, detail.text])
 			return
-	var captures: Array[Dictionary] = []
 	var draft_capture := _capture_native(DRAFT_CAPTURE, "unconfirmed_draft")
 	if draft_capture.is_empty():
 		return
@@ -203,8 +270,8 @@ func _run() -> void:
 	var capture_hashes: Dictionary = {}
 	for capture: Dictionary in captures:
 		capture_hashes[str(capture.get("sha256", ""))] = true
-	if captures.size() != 3 or capture_hashes.size() != 3:
-		_fail("the three route-package captures are not distinct")
+	if captures.size() != 5 or capture_hashes.size() != 5:
+		_fail("the five route-package captures are not distinct")
 		return
 
 	var result := {
@@ -248,6 +315,20 @@ func _run() -> void:
 			"network_unchanged": true,
 			"city_grid_unchanged": true,
 		},
+		"ux_regressions": {
+			"session_mode": "bus",
+			"visible_infrastructure_choice_ids": scoped_snapshot.get("scoped_infrastructure_choice_ids", []),
+			"visible_route_mode_ids": scoped_snapshot.get("scoped_route_mode_ids", []),
+			"foreign_mode_cards_absent": true,
+			"existing_building_tile_id": existing_building_tile,
+			"existing_building_visible_during_route_placement": true,
+			"station_draft_ghost_count": station_draft_ghost_count,
+			"station_drafts_remain_outside_live_authority": true,
+			"building_layer_above_route_preview": true,
+			"npc_layer_order_preserved": true,
+			"l_turn_route": true,
+			"filled_l_turn_junction": has_l_turn_junction,
+		},
 		"construction": {
 			"ledger_negative_entry_delta": ledger_delta_after_confirmation,
 			"funds_debit": funds_debit_after_confirmation,
@@ -272,7 +353,7 @@ func _run() -> void:
 		return
 	result_file.store_string(JSON.stringify(result, "\t"))
 	result_file.close()
-	print("TRANSPORT_ROUTE_PACKAGE_NATIVE_VISIBLE_ACCEPTANCE_PASSED captures=3 L=11 construction=11020 maintenance=3306 ledger_delta=1 route_status=operational actual_main=true")
+	print("TRANSPORT_ROUTE_PACKAGE_NATIVE_VISIBLE_ACCEPTANCE_PASSED captures=5 L=11 construction=11020 maintenance=3306 ledger_delta=1 route_status=operational bus_only=true building_visible=true l_turn=true actual_main=true")
 	await TestCleanup.finish(self, [main], 0)
 
 
@@ -303,54 +384,66 @@ func _validate_draft_quote(
 
 
 func _find_eleven_tile_fixture() -> Dictionary:
-	var available: Dictionary = {}
-	for tile_id in range(main.city_grid.size()):
-		if _route_tile_available(tile_id):
-			available[tile_id] = true
-	for start_value: Variant in available.keys():
-		var start := int(start_value)
-		var path: Array[int] = [start]
-		var used: Dictionary = {}
-		used[start] = true
-		if not _grow_route(path, used, available, 11):
-			continue
-		var first_candidates := _station_candidates_adjacent_to(path[0], path, [])
-		var last_candidates := _station_candidates_adjacent_to(path.back(), path, first_candidates)
-		if first_candidates.is_empty() or last_candidates.is_empty():
-			continue
-		var station_a := int(first_candidates[0])
-		var station_b := int(last_candidates[0])
-		if station_a == station_b:
-			continue
-		var reserved: Array[int] = path.duplicate()
-		reserved.append(station_a)
-		reserved.append(station_b)
-		var support_candidates: Array[int] = []
-		for route_tile: int in path:
-			for neighbour: int in _cardinal_neighbours(route_tile):
-				if not reserved.has(neighbour) and _route_tile_available(neighbour):
-					support_candidates.append(neighbour)
-		if support_candidates.is_empty():
-			continue
-		return {"route_tiles": path, "station_a": station_a, "station_b": station_b}
+	var terrain = main.vertical_slice.terrain_map
+	var size: Vector2i = terrain.grid_size()
+	for start_y in range(size.y):
+		for start_x in range(size.x):
+			for first_direction: Vector2i in [Vector2i.RIGHT, Vector2i.LEFT, Vector2i.DOWN, Vector2i.UP]:
+				var perpendicular_directions: Array[Vector2i] = [
+					Vector2i(-first_direction.y, first_direction.x),
+					Vector2i(first_direction.y, -first_direction.x),
+				]
+				for second_direction: Vector2i in perpendicular_directions:
+					var path: Array[int] = []
+					for first_step in range(6):
+						var first_coordinate := Vector2i(start_x, start_y) + first_direction * first_step
+						var first_tile := int(terrain.tile_id_for_coordinate(first_coordinate))
+						if first_tile < 0 or not _route_tile_available(first_tile):
+							path.clear()
+							break
+						path.append(first_tile)
+					if path.size() != 6:
+						continue
+					var turn_coordinate := Vector2i(start_x, start_y) + first_direction * 5
+					for second_step in range(1, 6):
+						var second_coordinate := turn_coordinate + second_direction * second_step
+						var second_tile := int(terrain.tile_id_for_coordinate(second_coordinate))
+						if second_tile < 0 or not _route_tile_available(second_tile):
+							path.clear()
+							break
+						path.append(second_tile)
+					if path.size() != 11:
+						continue
+					var first_candidates := _station_candidates_adjacent_to(path[0], path, [])
+					var last_candidates := _station_candidates_adjacent_to(path.back(), path, first_candidates)
+					if first_candidates.is_empty() or last_candidates.is_empty():
+						continue
+					var station_a := int(first_candidates[0])
+					var station_b := int(last_candidates[0])
+					if station_a == station_b:
+						continue
+					var reserved: Array[int] = path.duplicate()
+					reserved.append(station_a)
+					reserved.append(station_b)
+					var support_candidates: Array[int] = []
+					for route_tile: int in path:
+						for neighbour: int in _cardinal_neighbours(route_tile):
+							if not reserved.has(neighbour) and _route_tile_available(neighbour):
+								support_candidates.append(neighbour)
+					if support_candidates.is_empty():
+						continue
+					return {"route_tiles": path, "station_a": station_a, "station_b": station_b, "turn_tile": path[5]}
 	return {}
 
 
-func _grow_route(path: Array[int], used: Dictionary, available: Dictionary, target_size: int) -> bool:
-	if path.size() == target_size:
-		var first_coordinate: Vector2i = main.vertical_slice.terrain_map.coordinate_for_tile_id(path[0])
-		var last_coordinate: Vector2i = main.vertical_slice.terrain_map.coordinate_for_tile_id(path.back())
-		return absi(first_coordinate.x - last_coordinate.x) + absi(first_coordinate.y - last_coordinate.y) >= 5
-	for neighbour: int in _cardinal_neighbours(path.back()):
-		if not available.has(neighbour) or used.has(neighbour):
-			continue
-		path.append(neighbour)
-		used[neighbour] = true
-		if _grow_route(path, used, available, target_size):
-			return true
-		used.erase(neighbour)
-		path.pop_back()
-	return false
+func _find_existing_building_tile(fixture: Dictionary) -> int:
+	var reserved: Array[int] = Array(fixture.get("route_tiles", [])).duplicate()
+	reserved.append(int(fixture.get("station_a", -1)))
+	reserved.append(int(fixture.get("station_b", -1)))
+	for tile_id in range(main.city_grid.size()):
+		if tile_id not in reserved and _route_tile_available(tile_id):
+			return tile_id
+	return -1
 
 
 func _station_candidates_adjacent_to(tile_id: int, route_tiles: Array[int], excluded: Array[int]) -> Array[int]:

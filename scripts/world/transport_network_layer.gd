@@ -46,6 +46,7 @@ func set_dark_mode(enabled: bool) -> void:
 
 func debug_snapshot() -> Dictionary:
 	var access_segments := _project_station_access_segments()
+	var connected_junctions := _project_connected_junctions()
 	return {
 		"owned_by_player_network": true,
 		"autonomous_vehicle_generation": false,
@@ -54,6 +55,8 @@ func debug_snapshot() -> Dictionary:
 		"operational_line_count": Array(_network_snapshot.get("operational_lines", [])).size(),
 		"station_access_edge_count": Array(_network_snapshot.get("station_access_edges", [])).size(),
 		"station_access_segments": access_segments,
+		"connected_junction_count": connected_junctions.size(),
+		"connected_junctions": connected_junctions,
 		"crossing_states": _crossing_states.duplicate(true),
 	}
 
@@ -126,6 +129,72 @@ func _draw_tile_segments(tile_id: int, center: Vector2, state: Dictionary) -> vo
 			if neighbour_center == Vector2.INF:
 				continue
 			_draw_segment(kind, center, center.lerp(neighbour_center, 0.54))
+		_draw_connected_junction(center, kind, directions)
+
+
+func _project_connected_junctions() -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	var tile_states: Dictionary = _network_snapshot.get("tile_states", {})
+	var sorted_tiles: Array[int] = []
+	for key_variant: Variant in tile_states.keys():
+		sorted_tiles.append(int(str(key_variant)))
+	sorted_tiles.sort()
+	for tile_id: int in sorted_tiles:
+		var state: Dictionary = tile_states.get(str(tile_id), tile_states.get(tile_id, {}))
+		var connections: Dictionary = state.get("connections", {})
+		for kind_variant: Variant in state.get("segments", []):
+			var kind := str(kind_variant)
+			var contract := connected_junction_contract(_center_for(tile_id), kind, connections.get(kind, []))
+			if contract.is_empty():
+				continue
+			contract["tile_id"] = tile_id
+			result.append(contract)
+	return result
+
+
+static func connected_junction_contract(center: Vector2, kind: String, directions: Array) -> Dictionary:
+	if center == Vector2.INF or kind not in SEGMENT_COLORS:
+		return {}
+	var unique_directions: Array[String] = []
+	for direction_variant: Variant in directions:
+		var direction := str(direction_variant)
+		if direction in ["n", "e", "s", "w"] and direction not in unique_directions:
+			unique_directions.append(direction)
+	if unique_directions.size() < 2:
+		return {}
+	unique_directions.sort()
+	var has_horizontal := "e" in unique_directions or "w" in unique_directions
+	var has_vertical := "n" in unique_directions or "s" in unique_directions
+	return {
+		"kind": kind,
+		"center": center,
+		"directions": unique_directions,
+		"has_perpendicular_turn": has_horizontal and has_vertical,
+		"filled_center": true,
+	}
+
+
+func _draw_connected_junction(center: Vector2, kind: String, directions: Array) -> void:
+	if connected_junction_contract(center, kind, directions).is_empty():
+		return
+	var color: Color = SEGMENT_COLORS.get(kind, Color(0.25, 0.28, 0.31))
+	match kind:
+		"road":
+			draw_circle(center, 10.5, Color(0.04, 0.05, 0.06, 0.42))
+			draw_circle(center, 8.5, color)
+			draw_circle(center, 1.5, Color(0.96, 0.82, 0.28, 0.92))
+		"metro_track", "rail_track":
+			draw_circle(center, 7.0, Color(0.33, 0.27, 0.20, 0.78))
+			draw_circle(center, 5.2, color)
+			draw_circle(center, 1.5, Color(0.80, 0.88, 0.92, 0.96))
+		"runway":
+			draw_circle(center, 15.5, Color(0.04, 0.05, 0.07, 0.50))
+			draw_circle(center, 13.5, color)
+			draw_circle(center, 1.8, Color.WHITE)
+		"taxiway":
+			draw_circle(center, 8.5, Color(0.05, 0.06, 0.08, 0.42))
+			draw_circle(center, 6.5, color)
+			draw_circle(center, 1.4, Color(0.98, 0.78, 0.12, 0.96))
 
 
 func _draw_segment_stub(center: Vector2, kind: String) -> void:

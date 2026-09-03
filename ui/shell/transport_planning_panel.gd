@@ -47,6 +47,8 @@ var _spin_boxes: Array[SpinBox] = []
 var _new_plan_buttons: Array[Button] = []
 var _pagers: Array[Control] = []
 var _route_models: Dictionary = {}
+var _infrastructure_choice_cards: Dictionary = {}
+var _route_mode_cards: Dictionary = {}
 var _planning_session: Dictionary = {"state": "inactive"}
 var _package_quote: Dictionary = {}
 
@@ -86,6 +88,7 @@ func set_view_model(snapshot: Dictionary) -> void:
 	_planning_session = Dictionary(session_value).duplicate(true) if session_value is Dictionary else {"state": "inactive"}
 	_package_quote = Dictionary(snapshot.get("package_quote", {})).duplicate(true) if snapshot.get("package_quote", {}) is Dictionary else {}
 	_planning_unlocked = bool(snapshot.get("planning_unlocked", snapshot.get("unlocked", true)))
+	_refresh_session_scoped_choices()
 	_unlock_label.text = (
 		L10n.text("交通規劃已解鎖｜可繼續既有站點規劃、路網與營運決策。")
 		if _planning_unlocked
@@ -145,6 +148,8 @@ func debug_snapshot() -> Dictionary:
 		"progressive_groups": progressive_groups,
 		"infrastructure_choices": INFRASTRUCTURE_CHOICES.duplicate(true),
 		"route_modes": ROUTE_MODES.duplicate(true),
+		"scoped_infrastructure_choice_ids": _scoped_infrastructure_choice_ids(),
+		"scoped_route_mode_ids": _scoped_route_mode_ids(),
 		"planning_session": _planning_session.duplicate(true),
 		"package_quote": _package_quote.duplicate(true),
 		"session_visible": _session_card.visible if _session_card != null else false,
@@ -211,7 +216,10 @@ func _build_content() -> void:
 	_register_pager(_infrastructure_pager)
 	infrastructure_section.add_child(_infrastructure_pager)
 	for choice: Dictionary in INFRASTRUCTURE_CHOICES:
-		_infrastructure_pager.call("add_choice", _infrastructure_choice(choice))
+		var choice_id := str(choice.get("id", ""))
+		var choice_card := _infrastructure_choice(choice)
+		_infrastructure_choice_cards[choice_id] = choice_card
+		_infrastructure_pager.call("add_choice", choice_card)
 
 	var operations_section := _section_card(
 		"TransportOperationsSection",
@@ -241,7 +249,10 @@ func _build_content() -> void:
 	_register_pager(_route_mode_pager)
 	operations_section.add_child(_route_mode_pager)
 	for mode: Dictionary in ROUTE_MODES:
-		_route_mode_pager.call("add_choice", _route_mode_choice(mode))
+		var mode_id := str(mode.get("id", ""))
+		var mode_card := _route_mode_choice(mode)
+		_route_mode_cards[mode_id] = mode_card
+		_route_mode_pager.call("add_choice", mode_card)
 
 	var route_section := _section_card(
 		"TransportRouteListSection",
@@ -282,6 +293,7 @@ func _section_card(node_name: String, title_text: String, description_text: Stri
 func _infrastructure_choice(choice: Dictionary) -> PanelContainer:
 	var kind := str(choice.get("id", "infrastructure"))
 	var card := _card("TransportInfrastructureChoice_%s" % kind, true)
+	card.set_meta("transport_infrastructure_kind", "rail_track" if kind == "heavy_rail" else kind)
 	card.custom_minimum_size = Vector2(0, 172)
 	var stack := VBoxContainer.new()
 	stack.add_theme_constant_override("separation", 6)
@@ -319,6 +331,7 @@ func _infrastructure_choice(choice: Dictionary) -> PanelContainer:
 func _route_mode_choice(mode: Dictionary) -> PanelContainer:
 	var mode_id := str(mode.get("id", "route"))
 	var card := _card("TransportRouteMode_%s" % mode_id, true)
+	card.set_meta("transport_route_mode", mode_id)
 	card.custom_minimum_size = Vector2(0, 152)
 	var stack := VBoxContainer.new()
 	stack.add_theme_constant_override("separation", 6)
@@ -561,6 +574,53 @@ func _apply_session_focus_layout(state: String, session_visible: bool) -> void:
 		"materialized":
 			if _route_list_section_card != null:
 				_route_list_section_card.visible = true
+
+
+func _refresh_session_scoped_choices() -> void:
+	if _infrastructure_pager == null or _route_mode_pager == null:
+		return
+	_infrastructure_pager.call("clear_choices", false)
+	_route_mode_pager.call("clear_choices", false)
+	var state := str(_planning_session.get("state", "inactive"))
+	var session_active := state not in ["inactive", "closed"]
+	var session_mode := str(_planning_session.get("mode", ""))
+	for choice: Dictionary in INFRASTRUCTURE_CHOICES:
+		var choice_id := str(choice.get("id", ""))
+		var normalized_kind := "rail_track" if choice_id == "heavy_rail" else choice_id
+		if session_active and not TransportPlanningSessionScript.network_kind_matches_mode(session_mode, normalized_kind):
+			continue
+		var card := _infrastructure_choice_cards.get(choice_id) as Control
+		if card != null:
+			_infrastructure_pager.call("add_choice", card)
+	for mode: Dictionary in ROUTE_MODES:
+		var mode_id := str(mode.get("id", ""))
+		if session_active and mode_id != session_mode:
+			continue
+		var card := _route_mode_cards.get(mode_id) as Control
+		if card != null:
+			_route_mode_pager.call("add_choice", card)
+
+
+func _scoped_infrastructure_choice_ids() -> Array[String]:
+	var result: Array[String] = []
+	if _infrastructure_pager == null:
+		return result
+	for card_variant: Variant in _infrastructure_pager.call("choices"):
+		var card := card_variant as Control
+		if card != null:
+			result.append(str(card.get_meta("transport_infrastructure_kind", "")))
+	return result
+
+
+func _scoped_route_mode_ids() -> Array[String]:
+	var result: Array[String] = []
+	if _route_mode_pager == null:
+		return result
+	for card_variant: Variant in _route_mode_pager.call("choices"):
+		var card := card_variant as Control
+		if card != null:
+			result.append(str(card.get_meta("transport_route_mode", "")))
+	return result
 
 
 func _refresh_new_plan_button_states() -> void:
