@@ -169,7 +169,7 @@ func _build_content() -> void:
 	_case_panel = PanelContainer.new()
 	_case_panel.name = "DefenseCasePanel"
 	_case_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_case_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_case_panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	tray_host.add_child(_case_panel)
 	var case_margin := MarginContainer.new()
 	case_margin.add_theme_constant_override("margin_left", 12)
