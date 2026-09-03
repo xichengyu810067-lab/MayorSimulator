@@ -3981,23 +3981,27 @@ func _apply_fiscal_draft() -> void:
 
 
 func _fiscal_projection_snapshot(use_draft: bool) -> Dictionary:
-	var authority_tax := tax_rates
-	var authority_utility := utility_fees
-	var authority_service := service_fees
-	if use_draft and _fiscal_draft_active:
-		tax_rates = _fiscal_draft_tax_rates.duplicate(true)
-		utility_fees = _fiscal_draft_utility_fees.duplicate(true)
-		service_fees = _fiscal_draft_service_fees.duplicate(true)
-	var snapshot := {
-		"income": _projected_total_income(),
-		"expense": _projected_total_expense(),
-		"net": _projected_net_income(),
-		"safety_buffer": _fiscal_safety_buffer(),
+	var projection_tax := _fiscal_draft_tax_rates if use_draft and _fiscal_draft_active else tax_rates
+	var projection_utility := _fiscal_draft_utility_fees if use_draft and _fiscal_draft_active else utility_fees
+	var projection_service := _fiscal_draft_service_fees if use_draft and _fiscal_draft_active else service_fees
+	return _fiscal_projection_snapshot_for(projection_tax, projection_utility, projection_service)
+
+
+func _fiscal_projection_snapshot_for(projection_tax: Dictionary, projection_utility: Dictionary, projection_service: Dictionary) -> Dictionary:
+	var income := (
+		_total_tax_income_for(projection_tax)
+		+ _business_income_for(projection_tax)
+		+ _industrial_income_for(projection_tax)
+		+ _utility_income_for(projection_utility)
+		+ _service_income_for(projection_service)
+	)
+	var expense := _projected_total_expense()
+	return {
+		"income": income,
+		"expense": expense,
+		"net": income - expense,
+		"safety_buffer": maxi(100, int(ceil(float(expense) * 0.10))),
 	}
-	tax_rates = authority_tax
-	utility_fees = authority_utility
-	service_fees = authority_service
-	return snapshot
 
 
 func debug_fiscal_draft_state() -> Dictionary:
@@ -4078,15 +4082,6 @@ func _fiscal_value(kind: String, key: String) -> int:
 			return int(service_fees[key])
 	return 0
 
-func _set_fiscal_value_for_forecast(kind: String, key: String, value: int) -> void:
-	match kind:
-		"tax":
-			tax_rates[key] = value
-		"utility":
-			utility_fees[key] = value
-		"service":
-			service_fees[key] = value
-
 func _projected_total_income() -> int:
 	return _total_tax_income() + _business_income() + _industrial_income() + _utility_income() + _service_income()
 
@@ -4115,16 +4110,39 @@ func _signed_currency(value: int) -> String:
 func _fiscal_item_forecast(kind: String, key: String) -> Dictionary:
 	var definition := _fiscal_definition(kind, key)
 	var reasonable := int(definition.get("reasonable", 0))
-	var current_value := _fiscal_value(kind, key)
-	var current_net := _projected_net_income()
-	_set_fiscal_value_for_forecast(kind, key, reasonable)
-	var reference_net := _projected_net_income()
-	_set_fiscal_value_for_forecast(kind, key, current_value)
+	var projection_tax: Dictionary = _fiscal_draft_tax_rates if _fiscal_draft_active else tax_rates
+	var projection_utility: Dictionary = _fiscal_draft_utility_fees if _fiscal_draft_active else utility_fees
+	var projection_service: Dictionary = _fiscal_draft_service_fees if _fiscal_draft_active else service_fees
+	var current_values: Dictionary
+	match kind:
+		"tax":
+			current_values = projection_tax
+		"utility":
+			current_values = projection_utility
+		"service":
+			current_values = projection_service
+		_:
+			current_values = {}
+	var current_value := int(current_values.get(key, 0))
+	var current_snapshot := _fiscal_projection_snapshot_for(projection_tax, projection_utility, projection_service)
+	var reference_tax := projection_tax.duplicate(true)
+	var reference_utility := projection_utility.duplicate(true)
+	var reference_service := projection_service.duplicate(true)
+	match kind:
+		"tax":
+			reference_tax[key] = reasonable
+		"utility":
+			reference_utility[key] = reasonable
+		"service":
+			reference_service[key] = reasonable
+	var reference_snapshot := _fiscal_projection_snapshot_for(reference_tax, reference_utility, reference_service)
+	var current_net := int(current_snapshot["net"])
+	var reference_net := int(reference_snapshot["net"])
 
 	var ratio := float(current_value) / maxf(1.0, float(reasonable))
 	var net_delta := current_net - reference_net
 	var public_pressure := _fiscal_item_public_pressure(kind, current_value, reasonable)
-	var safety_buffer := _fiscal_safety_buffer()
+	var safety_buffer := int(current_snapshot["safety_buffer"])
 	var funding_gap := maxi(0, safety_buffer - current_net)
 	var contribution_gap := maxi(0, reference_net - current_net)
 	var material_gap := maxi(25, int(ceil(float(safety_buffer) / 14.0)))
@@ -6352,15 +6370,21 @@ func _recalculate_score() -> void:
 
 
 func _total_tax_income() -> int:
-	return CitySimulationServiceScript.sum_int_values(_tax_revenues())
+	return _total_tax_income_for(tax_rates)
+
+func _total_tax_income_for(projection_tax: Dictionary) -> int:
+	return CitySimulationServiceScript.sum_int_values(_tax_revenues_for(projection_tax))
 
 func _tax_revenues() -> Dictionary:
+	return _tax_revenues_for(tax_rates)
+
+func _tax_revenues_for(projection_tax: Dictionary) -> Dictionary:
 	return CitySimulationServiceScript.tax_revenues(
 		_resident_income_tax_base(),
 		population,
 		_commercial_base_income(),
 		_industrial_base_income(),
-		tax_rates
+		projection_tax
 	)
 
 
@@ -6395,31 +6419,43 @@ func _industrial_base_income() -> int:
 	return CitySimulationServiceScript.base_income(city_grid, buildings, "industrial_income")
 
 func _business_income() -> int:
+	return _business_income_for(tax_rates)
+
+func _business_income_for(projection_tax: Dictionary) -> int:
 	return CitySimulationServiceScript.business_income(
 		_commercial_base_income(),
 		bool(active_policies.get("商業振興", false)),
 		_active_law_value("business_bonus"),
-		_tax_activity_factor("business"),
-		_tax_activity_factor("consumption")
+		_tax_activity_factor_for("business", projection_tax),
+		_tax_activity_factor_for("consumption", projection_tax)
 	)
 
 func _industrial_income() -> int:
+	return _industrial_income_for(tax_rates)
+
+func _industrial_income_for(projection_tax: Dictionary) -> int:
 	return CitySimulationServiceScript.industrial_income(
 		_industrial_base_income(),
-		_tax_activity_factor("industry"),
+		_tax_activity_factor_for("industry", projection_tax),
 		_active_law_value("industrial_bonus")
 	)
 
 func _tax_activity_factor(tax_key: String) -> float:
+	return _tax_activity_factor_for(tax_key, tax_rates)
+
+func _tax_activity_factor_for(tax_key: String, projection_tax: Dictionary) -> float:
 	return CitySimulationServiceScript.tax_activity_factor(
-		int(tax_rates[tax_key]),
+		int(projection_tax[tax_key]),
 		int(TAX_DEFS[tax_key]["reasonable"])
 	)
 
 func _utility_income() -> int:
+	return _utility_income_for(utility_fees)
+
+func _utility_income_for(projection_utility: Dictionary) -> int:
 	var raw_total := 0.0
 	for revenue: Variant in CitySimulationServiceScript.utility_revenues(
-		population, city_grid, buildings, utility_fees, UTILITY_DEFS
+		population, city_grid, buildings, projection_utility, UTILITY_DEFS
 	).values():
 		raw_total += float(revenue)
 	return int(round(raw_total))
@@ -6428,13 +6464,19 @@ func _utility_base_units(fee_key: String) -> float:
 	return CitySimulationServiceScript.utility_base_units(fee_key, population, city_grid)
 
 func _service_income() -> int:
-	return CitySimulationServiceScript.sum_int_values(_service_revenues())
+	return _service_income_for(service_fees)
+
+func _service_income_for(projection_service: Dictionary) -> int:
+	return CitySimulationServiceScript.sum_int_values(_service_revenues_for(projection_service))
 
 func _service_revenues() -> Dictionary:
+	return _service_revenues_for(service_fees)
+
+func _service_revenues_for(projection_service: Dictionary) -> Dictionary:
 	var revenues := CitySimulationServiceScript.service_revenues(
 		population,
 		city_grid,
-		service_fees,
+		projection_service,
 		SERVICE_DEFS
 	)
 	for mode: String in ["bus", "metro", "train", "air"]:
@@ -6453,22 +6495,24 @@ func _service_revenues() -> Dictionary:
 		revenues["parking"] = 0
 	revenues["medical"] = CitySimulationServiceScript.medical_service_revenue(
 		population,
-		int(service_fees.get("medical", 0)),
+		int(projection_service.get("medical", 0)),
 		Dictionary(SERVICE_DEFS.get("medical", {})).duplicate(true),
 		_healthcare_service_result()
 	)
 	return revenues
 
-func _service_fee_income(service_key: String) -> int:
-	return int(_service_revenues().get(service_key, 0))
+func _service_fee_income(service_key: String, projection_service: Dictionary = {}) -> int:
+	var values := service_fees if projection_service.is_empty() else projection_service
+	return int(_service_revenues_for(values).get(service_key, 0))
 
-func _utility_fee_income(fee_key: String, base_units: float) -> float:
+func _utility_fee_income(fee_key: String, base_units: float, projection_utility: Dictionary = {}) -> float:
+	var values := utility_fees if projection_utility.is_empty() else projection_utility
 	return CitySimulationServiceScript.utility_fee_income(
 		fee_key,
 		base_units,
 		city_grid,
 		buildings,
-		utility_fees,
+		values,
 		UTILITY_DEFS
 	)
 
@@ -6584,21 +6628,21 @@ func _tax_detail_text(tax_key: String, revenue: int) -> String:
 	var forecast := _fiscal_item_forecast("tax", tax_key)
 	return L10n.text("收入 $%d｜%s") % [revenue, forecast["summary"]]
 
-func _utility_detail_text(fee_key: String) -> String:
+func _utility_detail_text(fee_key: String, projection_utility: Dictionary = {}) -> String:
 	var def: Dictionary = UTILITY_DEFS[fee_key]
 	var has_building := _building_count(def["building"]) > 0
 	var building_name := L10n.text(str(def["building"]))
 	var note := (L10n.text("有%s") % building_name) if has_building else (L10n.text("缺%s") % building_name)
 	var forecast := _fiscal_item_forecast("utility", fee_key)
-	return L10n.text("收入 $%d｜%s｜%s") % [int(round(_utility_fee_income(fee_key, _utility_base_units(fee_key)))), note, forecast["summary"]]
+	return L10n.text("收入 $%d｜%s｜%s") % [int(round(_utility_fee_income(fee_key, _utility_base_units(fee_key), projection_utility))), note, forecast["summary"]]
 
-func _service_detail_text(service_key: String) -> String:
+func _service_detail_text(service_key: String, projection_service: Dictionary = {}) -> String:
 	var def: Dictionary = SERVICE_DEFS[service_key]
 	if service_key == "medical":
 		var healthcare_result := _healthcare_service_result()
 		var medical_forecast := _fiscal_item_forecast("service", service_key)
 		return L10n.text("收入 $%d｜%s｜%s") % [
-			_service_fee_income(service_key),
+			_service_fee_income(service_key, projection_service),
 			_healthcare_service_visible_text(healthcare_result),
 			str(medical_forecast["summary"]),
 		]
@@ -6606,19 +6650,15 @@ func _service_detail_text(service_key: String) -> String:
 	var building_name := L10n.text(str(def["building"]))
 	var note := (L10n.text("有%s") % building_name) if has_building else (L10n.text("缺%s") % building_name)
 	var forecast := _fiscal_item_forecast("service", service_key)
-	return L10n.text("收入 $%d｜%s｜%s") % [_service_fee_income(service_key), note, forecast["summary"]]
+	return L10n.text("收入 $%d｜%s｜%s") % [_service_fee_income(service_key, projection_service), note, forecast["summary"]]
 
 func _update_ui() -> void:
 	_sync_vertical_state()
-	# Render the finance page against the complete draft while keeping the live
-	# simulation and save authority untouched until the player applies it.
-	var fiscal_authority_tax := tax_rates
-	var fiscal_authority_utility := utility_fees
-	var fiscal_authority_service := service_fees
-	if _fiscal_draft_active:
-		tax_rates = _fiscal_draft_tax_rates.duplicate(true)
-		utility_fees = _fiscal_draft_utility_fees.duplicate(true)
-		service_fees = _fiscal_draft_service_fees.duplicate(true)
+	# Finance renders through explicit projection dictionaries. Draft values never
+	# replace the authoritative simulation/save dictionaries, even temporarily.
+	var fiscal_tax_values: Dictionary = _fiscal_draft_tax_rates if _fiscal_draft_active else tax_rates
+	var fiscal_utility_values: Dictionary = _fiscal_draft_utility_fees if _fiscal_draft_active else utility_fees
+	var fiscal_service_values: Dictionary = _fiscal_draft_service_fees if _fiscal_draft_active else service_fees
 	var terrain = _terrain_map()
 	if city_backdrop != null and terrain != null:
 		city_backdrop.call("set_terrain_snapshot", terrain.to_dict())
@@ -6691,18 +6731,18 @@ func _update_ui() -> void:
 	_update_metric_visual("醫療", healthcare)
 	_update_city_metric_cards()
 
-	var tax_revenues := _tax_revenues()
+	var tax_revenues := _tax_revenues_for(fiscal_tax_values)
 	for tax_key in tax_rates.keys():
 		labels["tax_detail_%s" % tax_key].text = _tax_detail_text(tax_key, tax_revenues[tax_key])
 	for fee_key in utility_fees.keys():
-		labels["utility_detail_%s" % fee_key].text = _utility_detail_text(fee_key)
+		labels["utility_detail_%s" % fee_key].text = _utility_detail_text(fee_key, fiscal_utility_values)
 	for service_key in service_fees.keys():
-		labels["service_detail_%s" % service_key].text = _service_detail_text(service_key)
-	var tax_income := _total_tax_income()
-	var business_income := _business_income()
-	var industrial_income := _industrial_income()
-	var utility_income := _utility_income()
-	var service_income := _service_income()
+		labels["service_detail_%s" % service_key].text = _service_detail_text(service_key, fiscal_service_values)
+	var tax_income := _total_tax_income_for(fiscal_tax_values)
+	var business_income := _business_income_for(fiscal_tax_values)
+	var industrial_income := _industrial_income_for(fiscal_tax_values)
+	var utility_income := _utility_income_for(fiscal_utility_values)
+	var service_income := _service_income_for(fiscal_service_values)
 	var maintenance := _maintenance_cost()
 	var policy_expense := _policy_expense()
 	var law_expense := _active_law_expense()
@@ -6786,10 +6826,6 @@ func _update_ui() -> void:
 	if oversight_panel:
 		oversight_panel.refresh(vertical_slice.governance.justice_system)
 	_update_building_info_panel()
-	if _fiscal_draft_active:
-		tax_rates = fiscal_authority_tax
-		utility_fees = fiscal_authority_utility
-		service_fees = fiscal_authority_service
 	_refresh_fiscal_draft_actions()
 	L10n.localize_tree(self)
 	_sync_placement_banner()

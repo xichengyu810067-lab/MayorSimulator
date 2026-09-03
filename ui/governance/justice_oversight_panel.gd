@@ -388,12 +388,26 @@ func debug_layout_signature() -> Dictionary:
 		var button := button_variant as Button
 		if is_instance_valid(button):
 			minimum_target = minf(minimum_target, minf(button.size.x, button.size.y))
+	var defense_actions := find_child("DefenseActions", true, false) as HBoxContainer
+	var defense_actions_rect := Rect2()
+	var defense_actions_fully_visible := false
+	if is_instance_valid(defense_actions) and defense_actions.is_visible_in_tree():
+		defense_actions_rect = defense_actions.get_global_rect()
+		defense_actions_fully_visible = get_global_rect().encloses(defense_actions_rect)
+		if is_instance_valid(_case_panel):
+			defense_actions_fully_visible = defense_actions_fully_visible and _case_panel.get_global_rect().encloses(defense_actions_rect)
+		for button_variant in _defense_buttons.values():
+			var defense_button := button_variant as Button
+			if is_instance_valid(defense_button) and not defense_actions_rect.encloses(defense_button.get_global_rect()):
+				defense_actions_fully_visible = false
 	return {
 		"mode": mode,
 		"root_is_scroll_container": false,
 		"scroll_container_count": scroll_count,
 		"positive_vertical_scroll_count": positive_vertical_scroll_count,
 		"minimum_interactive_extent": 0.0 if minimum_target == INF else minimum_target,
+		"defense_actions_rect": defense_actions_rect,
+		"defense_actions_fully_visible": defense_actions_fully_visible,
 		"panel_rect": get_rect(),
 		"top_rect": stage_signature.get("top_rect", Rect2()),
 		"tray_rect": stage_signature.get("tray_rect", Rect2()),

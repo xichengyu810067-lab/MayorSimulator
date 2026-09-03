@@ -138,7 +138,12 @@ func _layout_shell() -> void:
 		return
 	var usable_height := maxf(0.0, size.y - EDGE_INSET * 3.0)
 	var top_height := minf(_top_height, usable_height * 0.24)
-	var tray_height := minf(_tray_height, usable_height * 0.62)
+	# Containers refuse to shrink below their content minimum. Include that
+	# minimum before calculating tray_top so a tall workflow tray moves upward
+	# instead of silently extending beyond the clipped scene root.
+	var requested_tray_height := minf(_tray_height, usable_height * 0.62)
+	var tray_height := maxf(requested_tray_height, tray_panel.get_combined_minimum_size().y)
+	tray_height = minf(tray_height, maxf(0.0, size.y - EDGE_INSET * 2.0))
 	for panel: PanelContainer in [top_panel, tray_panel]:
 		panel.set_anchor(SIDE_LEFT, 0.0, false)
 		panel.set_anchor(SIDE_TOP, 0.0, false)

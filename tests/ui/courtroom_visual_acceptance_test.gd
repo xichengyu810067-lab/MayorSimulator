@@ -52,6 +52,7 @@ func _initialize() -> void:
 	var layout: Dictionary = panel.debug_layout_signature()
 	_check(not bool(layout.get("root_is_scroll_container", true)) and int(layout.get("positive_vertical_scroll_count", -1)) == 0, "1280x720 courtroom root has no positive vertical scroller: %s" % layout)
 	_check(float(layout.get("minimum_interactive_extent", 0.0)) >= 44.0, "1280x720 courtroom actions keep 44x44 targets: %s" % layout)
+	_check(bool(layout.get("defense_actions_fully_visible", false)), "1280x720 courtroom keeps the complete defense row inside the visible scene tray: %s" % layout)
 	_check(int(layout.get("actor_layer_count", 0)) == 3, "courtroom keeps all three actor layers inside the same scene workspace")
 	_check(str(system.judicial_cases[case_id].get("procedural_stage", "")) == "hearing", "case is captured during the hearing")
 	_check(stage._judges.modulate.a > 0.95, "judicial panel is seated during the hearing")

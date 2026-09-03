@@ -34,6 +34,10 @@ func _run() -> void:
 	var original_tax: Dictionary = main.tax_rates.duplicate(true)
 	var original_utility: Dictionary = main.utility_fees.duplicate(true)
 	var original_service: Dictionary = main.service_fees.duplicate(true)
+	var main_source := FileAccess.get_file_as_string("res://scripts/app/main.gd")
+	_check(not main_source.contains("tax_rates = _fiscal_draft_tax_rates"), "draft projection never replaces authoritative tax values, even temporarily")
+	_check(not main_source.contains("utility_fees = _fiscal_draft_utility_fees"), "draft projection never replaces authoritative utility values, even temporarily")
+	_check(not main_source.contains("service_fees = _fiscal_draft_service_fees"), "draft projection never replaces authoritative service values, even temporarily")
 	main.municipal_overlay.open_page("finance")
 	await process_frame
 

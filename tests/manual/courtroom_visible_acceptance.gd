@@ -139,6 +139,9 @@ func _check_layout(panel, stage) -> bool:
 	if float(layout.get("minimum_interactive_extent", 0.0)) < 44.0:
 		_fail("courtroom has an interaction target below 44px: %s" % layout)
 		return false
+	if not bool(layout.get("defense_actions_fully_visible", false)):
+		_fail("courtroom defense row is clipped outside the visible scene tray: %s" % layout)
+		return false
 	if panel._procedure_labels.size() != 5 or not panel._summary_label.text.contains("15"):
 		_fail("courtroom five-stage/15-member authority projection failed")
 		return false

@@ -103,7 +103,10 @@ func show_empty() -> void:
 func _build_scene() -> void:
 	_shell = SceneWorkflowShellScript.new(BACKGROUND_PATH)
 	_shell.name = "CourtroomWorkflowShell"
-	_shell.set_tray_height(282.0)
+	# The judicial tray also contains the five-stage timeline and three defense
+	# choices. Reserve enough height for the complete interaction row at native
+	# fullscreen scale instead of clipping its lower edge.
+	_shell.set_tray_height(350.0)
 	add_child(_shell)
 	_shell.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_background = _shell.background
