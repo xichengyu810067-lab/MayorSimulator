@@ -210,21 +210,24 @@ func _run() -> void:
 					main.call("_on_tax_changed", float(int(main.tax_rates["income"]) + 1), "income")
 					await _settle(2)
 				var fiscal_draft_status := main.municipal_overlay.find_child("FiscalDraftStatus", true, false) as Label
+				var fiscal_draft_state: Dictionary = main.call("debug_fiscal_draft_state")
+				var dirty_count := int(fiscal_draft_state.get("dirty_count", 0))
 				_check(
-					fiscal_draft_status != null and int(main.call("debug_fiscal_draft_state").get("dirty_count", 0)) > 0,
+					fiscal_draft_status != null and dirty_count > 0,
 					"%s finance page exposes a pending fiscal draft for localization coverage" % locale
 				)
 				if fiscal_draft_status != null:
-					if locale in ["en", "ko"]:
-						_check(
-							not _contains_han(fiscal_draft_status.text),
-							"%s pending fiscal draft status contains no untranslated Han text: %s" % [locale, fiscal_draft_status.text]
-						)
-					elif locale == "zh_CN":
-						_check(
-							not _contains_any(fiscal_draft_status.text, TRADITIONAL_ONLY_CHARACTERS),
-							"zh_CN pending fiscal draft status contains no Traditional-only text: %s" % fiscal_draft_status.text
-						)
+					var projected_net := int(fiscal_draft_state.get("projected_net", 0))
+					var safety_buffer := int(main.call("_fiscal_safety_buffer"))
+					var operating_source := "● 財政安全\n預估淨額已覆蓋市政支出與安全緩衝。" if projected_net >= safety_buffer else ("● 緩衝不足\n可運作，但無法承受收入波動。" if projected_net >= 0 else "● 赤字預警\n目前收費不足以支應每月市政運作。")
+					var expected_status := "%s\n%s" % [
+						_l10n.text(operating_source),
+						_l10n.text("尚未套用：%d 項變更\n可預覽整組草稿後再執行。") % dirty_count,
+					]
+					_check(
+						fiscal_draft_status.text == expected_status,
+						"%s pending fiscal draft status is exactly localized: expected='%s' actual='%s'" % [locale, expected_status, fiscal_draft_status.text]
+					)
 			if page_id == "judicial":
 				var case_title := main.judicial_panel.get("_case_title") as Label
 				var expected_case_title: String = _l10n.text("違法施行案件：%s") % _l10n.text("商業促進法案")

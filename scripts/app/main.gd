@@ -3914,6 +3914,10 @@ func _sync_fiscal_controls_from_draft() -> void:
 func _refresh_fiscal_draft_actions() -> void:
 	var changed := _fiscal_dirty_count()
 	if fiscal_draft_status_label != null:
+		# This label is composed from already-localized dynamic templates below.
+		# Prevent the tree-wide fallback replacement pass from rewriting substrings
+		# inside a translated value when the active locale changes.
+		fiscal_draft_status_label.set_meta("l10n_skip", true)
 		var safety_buffer := _fiscal_safety_buffer()
 		var projected_net_income := _projected_net_income()
 		var operating_status_source := "● 財政安全\n預估淨額已覆蓋市政支出與安全緩衝。" if projected_net_income >= safety_buffer else ("● 緩衝不足\n可運作，但無法承受收入波動。" if projected_net_income >= 0 else "● 赤字預警\n目前收費不足以支應每月市政運作。")
