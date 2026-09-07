@@ -259,7 +259,7 @@ func _capture_states() -> void:
 	scene.call("_open_municipal_center")
 	await _settle()
 	var overlay = scene.get("municipal_overlay")
-	if not _validate_overlay(overlay, "hub") or not _save_capture(OUTPUTS["hub"]):
+	if not _validate_overlay(scene, overlay, "hub") or not _save_capture(OUTPUTS["hub"]):
 		quit(1)
 		return
 
@@ -301,13 +301,20 @@ func _capture_states() -> void:
 				quit(1)
 				return
 			print("FINANCE_RESPONSIVE_SCROLL_CONTRACT %s" % JSON.stringify(fiscal_scroll_contract))
-		if not _validate_overlay(overlay, page_id) or not _save_capture(OUTPUTS[page_id]):
+		if not _validate_overlay(scene, overlay, page_id) or not _save_capture(OUTPUTS[page_id]):
 			quit(1)
 			return
 		if page_id == "finance":
 			scene.call("_on_tax_changed", float(int(scene.tax_rates["income"]) + 3), "income")
 			scene.call("_on_utility_fee_changed", float(int(scene.utility_fees["water"]) + 7), "water")
 			scene.call("_on_service_fee_changed", float(int(scene.service_fees["stadium"]) + 9), "stadium")
+			await _settle()
+			var fiscal_preview_button := scene.get("fiscal_preview_button") as Button
+			if fiscal_preview_button == null or fiscal_preview_button.disabled:
+				push_error("Finance draft changes did not enable the preview action.")
+				quit(1)
+				return
+			fiscal_preview_button.emit_signal("pressed")
 			await _settle()
 			if not _validate_fiscal_draft_capture(scene, overlay) or not _save_capture(OUTPUTS["finance_draft"]):
 				quit(1)
@@ -333,7 +340,7 @@ func _capture_states() -> void:
 		push_error("Governance review capture could not move the submitted bill to review.")
 		quit(1)
 		return
-	if not _validate_overlay(overlay, "governance") or not _save_capture(OUTPUTS["governance_review"]):
+	if not _validate_overlay(scene, overlay, "governance") or not _save_capture(OUTPUTS["governance_review"]):
 		quit(1)
 		return
 
@@ -352,7 +359,7 @@ func _capture_states() -> void:
 		push_error("Governance implemented capture could not move the active bill to implemented.")
 		quit(1)
 		return
-	if not _validate_overlay(overlay, "governance") or not _save_capture(OUTPUTS["governance_implemented"]):
+	if not _validate_overlay(scene, overlay, "governance") or not _save_capture(OUTPUTS["governance_implemented"]):
 		quit(1)
 		return
 
@@ -376,7 +383,7 @@ func _capture_states() -> void:
 		push_error("City-data benchmark chart did not settle on its authoritative target.")
 		quit(1)
 		return
-	if not _validate_overlay(overlay, "city_data") or not _save_capture(OUTPUTS["city_data"]):
+	if not _validate_overlay(scene, overlay, "city_data") or not _save_capture(OUTPUTS["city_data"]):
 		quit(1)
 		return
 	var city_tabs_for_capture := overlay.find_child("城市數據", true, false) as TabContainer
@@ -406,7 +413,7 @@ func _capture_states() -> void:
 	if not _validate_monthly_data_mode(scene, true):
 		quit(1)
 		return
-	if not _validate_overlay(overlay, "city_data") or not _save_capture(OUTPUTS["city_data_previous_month"]):
+	if not _validate_overlay(scene, overlay, "city_data") or not _save_capture(OUTPUTS["city_data_previous_month"]):
 		quit(1)
 		return
 	var city_data_tabs := overlay.find_child("城市數據", true, false) as TabContainer
@@ -438,7 +445,7 @@ func _capture_states() -> void:
 	if not _validate_monthly_report_scope(scene):
 		quit(1)
 		return
-	if not _validate_overlay(overlay, "report") or not _save_capture(OUTPUTS["report"]):
+	if not _validate_overlay(scene, overlay, "report") or not _save_capture(OUTPUTS["report"]):
 		quit(1)
 		return
 	var report_scroll := overlay.find_child("月度報告", true, false) as ScrollContainer
@@ -457,7 +464,7 @@ func _capture_states() -> void:
 	overlay = scene.get("municipal_overlay")
 	overlay.call("open_page", "blueprint")
 	await _settle()
-	if not _validate_overlay(overlay, "blueprint") or not _save_capture(OUTPUTS["dark_blueprint"]):
+	if not _validate_overlay(scene, overlay, "blueprint") or not _save_capture(OUTPUTS["dark_blueprint"]):
 		quit(1)
 		return
 
@@ -689,7 +696,7 @@ func _capture_native_gui_states(scene) -> bool:
 	scene.call("_open_municipal_center")
 	await _settle_frames(18)
 	var overlay = scene.get("municipal_overlay")
-	if not _validate_overlay(overlay, "hub"):
+	if not _validate_overlay(scene, overlay, "hub"):
 		return false
 	if not _save_native_capture(NATIVE_OUTPUTS["municipal_overlay"], overlay as Control):
 		return false
@@ -803,7 +810,7 @@ func _settle_frames(frame_count: int) -> void:
 	await RenderingServer.frame_post_draw
 
 
-func _validate_overlay(overlay, expected_page: String) -> bool:
+func _validate_overlay(scene, overlay, expected_page: String) -> bool:
 	if overlay == null or not is_instance_valid(overlay):
 		push_error("Readability capture could not find the municipal overlay.")
 		return false
@@ -814,7 +821,7 @@ func _validate_overlay(overlay, expected_page: String) -> bool:
 	if current_page != expected_page:
 		push_error("Expected municipal page '%s', got '%s'." % [expected_page, current_page])
 		return false
-	if not _validate_visual_data(overlay, expected_page):
+	if not _validate_visual_data(scene, overlay, expected_page):
 		return false
 	return true
 
@@ -1139,7 +1146,7 @@ func _validate_blueprint_review(overlay) -> bool:
 	return true
 
 
-func _validate_visual_data(overlay, expected_page: String) -> bool:
+func _validate_visual_data(scene, overlay, expected_page: String) -> bool:
 	if expected_page == "hub":
 		var layout: Dictionary = overlay.call("debug_hub_layout_state")
 		var destinations: Array = layout.get("destinations", [])
