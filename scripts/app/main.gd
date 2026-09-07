@@ -3918,7 +3918,11 @@ func _refresh_fiscal_draft_actions() -> void:
 		var projected_net_income := _projected_net_income()
 		var operating_status_source := "● 財政安全\n預估淨額已覆蓋市政支出與安全緩衝。" if projected_net_income >= safety_buffer else ("● 緩衝不足\n可運作，但無法承受收入波動。" if projected_net_income >= 0 else "● 赤字預警\n目前收費不足以支應每月市政運作。")
 		var operating_status := L10n.text(operating_status_source)
-		var draft_status := "尚未套用：%d 項變更\n可預覽整組草稿後再執行。" % changed if changed > 0 else "正式設定｜尚未變更\n可先調整多項，再預覽一次套用。"
+		var draft_status := (
+			L10n.text("尚未套用：%d 項變更\n可預覽整組草稿後再執行。") % changed
+			if changed > 0
+			else L10n.text("正式設定｜尚未變更\n可先調整多項，再預覽一次套用。")
+		)
 		fiscal_draft_status_label.text = "%s\n%s" % [operating_status, draft_status]
 		fiscal_draft_status_label.add_theme_color_override("font_color", COLOR_CAUTION if changed > 0 or projected_net_income < safety_buffer else _theme_muted())
 	if fiscal_preview_button != null:

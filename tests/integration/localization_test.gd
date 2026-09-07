@@ -205,6 +205,26 @@ func _run() -> void:
 			main.municipal_overlay.call("open_page", page_id)
 			await _settle(2)
 			_check_visible_translation(main, locale, str(PAGE_TITLES[page_id]), "%s page" % page_id)
+			if page_id == "finance":
+				if int(main.call("debug_fiscal_draft_state").get("dirty_count", 0)) == 0:
+					main.call("_on_tax_changed", float(int(main.tax_rates["income"]) + 1), "income")
+					await _settle(2)
+				var fiscal_draft_status := main.municipal_overlay.find_child("FiscalDraftStatus", true, false) as Label
+				_check(
+					fiscal_draft_status != null and int(main.call("debug_fiscal_draft_state").get("dirty_count", 0)) > 0,
+					"%s finance page exposes a pending fiscal draft for localization coverage" % locale
+				)
+				if fiscal_draft_status != null:
+					if locale in ["en", "ko"]:
+						_check(
+							not _contains_han(fiscal_draft_status.text),
+							"%s pending fiscal draft status contains no untranslated Han text: %s" % [locale, fiscal_draft_status.text]
+						)
+					elif locale == "zh_CN":
+						_check(
+							not _contains_any(fiscal_draft_status.text, TRADITIONAL_ONLY_CHARACTERS),
+							"zh_CN pending fiscal draft status contains no Traditional-only text: %s" % fiscal_draft_status.text
+						)
 			if page_id == "judicial":
 				var case_title := main.judicial_panel.get("_case_title") as Label
 				var expected_case_title: String = _l10n.text("違法施行案件：%s") % _l10n.text("商業促進法案")
