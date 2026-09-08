@@ -25,7 +25,27 @@ var _atomic_stage_hook_for_testing: Callable = Callable()
 
 
 func encode(envelope) -> String:
-	return JSON.stringify(envelope.to_dict(), "\t", false)
+	# JSON.stringify() is synchronous and read-only, so the serializer can borrow
+	# the envelope's already-detached snapshot dictionaries. Calling to_dict()
+	# here used to deep-copy the complete city state a second time at the save
+	# peak, including the canonical population records.
+	return JSON.stringify(_envelope_serialization_view(envelope), "\t", false)
+
+
+func _envelope_serialization_view(envelope) -> Dictionary:
+	return {
+		"schema_version": envelope.schema_version,
+		"content_version": envelope.content_version,
+		# Keep the persisted representation byte-compatible with SaveEnvelope.
+		"rng_seed": str(envelope.rng_seed),
+		"rng_state": str(envelope.rng_state),
+		"game_time": envelope.game_time,
+		"event_sequence": envelope.event_sequence,
+		"command_sequence": envelope.command_sequence,
+		"state": envelope.state,
+		"kernel": envelope.kernel,
+		"clock": envelope.clock,
+	}
 
 
 func decode(json_text: String):
@@ -53,13 +73,17 @@ func save_atomic(path: String, envelope) -> Error:
 	var temporary_path := absolute_path + ".tmp"
 	var backup_path := absolute_path + ".bak"
 	var encoded: String = encode(envelope)
+	var expected_hash := encoded.sha256_text()
 	var write_error: Error = _write_temporary_file(temporary_path, encoded, absolute_path, backup_path)
 	if write_error != OK:
 		if last_error_message.is_empty():
 			last_error_message = "Unable to write temporary save file."
 		_discard_temporary(temporary_path)
 		return write_error
-	var verification_error: Error = _verify_temporary_file(temporary_path, encoded)
+	# The durable temporary file now owns the payload. Drop the original JSON
+	# before read-back parsing so two full strings do not overlap in memory.
+	encoded = ""
+	var verification_error: Error = _verify_temporary_file(temporary_path, expected_hash)
 	if verification_error != OK:
 		_discard_temporary(temporary_path)
 		return verification_error
@@ -153,7 +177,13 @@ func _notify_atomic_stage_for_testing(stage: String, primary_path: String, tempo
 	})
 
 
-func _verify_temporary_file(temporary_path: String, expected_text: String) -> Error:
+func _verify_temporary_file(temporary_path: String, expected_hash: String) -> Error:
+	# Compare the on-disk bytes before allocating the read-back JSON string.
+	# FileAccess hashes the file incrementally, preserving the previous exact
+	# write-verification boundary without holding the original payload alive.
+	if FileAccess.get_sha256(temporary_path) != expected_hash:
+		last_error_message = "Temporary save failed byte-for-byte verification."
+		return ERR_FILE_CORRUPT
 	var file := FileAccess.open(temporary_path, FileAccess.READ)
 	if file == null:
 		last_error_message = "Unable to reopen temporary save file for verification."
@@ -165,13 +195,12 @@ func _verify_temporary_file(temporary_path: String, expected_text: String) -> Er
 		last_error_message = "Unable to read temporary save file during verification."
 		return read_error
 	var verified_envelope = decode(verified_text)
+	verified_text = ""
 	if verified_envelope == null:
 		var decode_error := last_error_message
 		last_error_message = "Temporary save failed decode verification: %s" % decode_error
 		return ERR_FILE_CORRUPT
-	if verified_text != expected_text:
-		last_error_message = "Temporary save failed byte-for-byte verification."
-		return ERR_FILE_CORRUPT
+	verified_envelope = null
 	return OK
 
 

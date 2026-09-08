@@ -341,7 +341,11 @@ func save_now(path: String = "") -> Error:
 		return ERR_INVALID_DATA
 	var envelope = make_envelope()
 	var validated_state = CityStateScript.from_dict(envelope.state)
-	if validated_state == null or not _validate_envelope_semantics(envelope, validated_state):
+	var snapshot_is_valid := validated_state != null and _validate_envelope_semantics(envelope, validated_state)
+	# Validation builds a detached CityState (including a hydrated NPC lookup).
+	# Release it before JSON encoding and temporary-file read-back verification.
+	validated_state = null
+	if not snapshot_is_valid:
 		save_service.last_error_message = "Refusing to save a semantically inconsistent session snapshot."
 		return ERR_INVALID_DATA
 	return save_service.save_atomic(resolved_path, envelope)
