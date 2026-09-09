@@ -153,8 +153,43 @@ func _test_main_stage_and_single_autosave() -> void:
 	stage.set_preview(first_preview)
 	var second_hearing_answerable: Dictionary = stage.debug_signature()
 	_check(bool(second_hearing_answerable.get("readonly_preview", false)) and not bool(second_hearing_answerable.get("confirm_disabled", true)), "same-option second hearing can accept a fresh preview and enable confirmation")
-	main.queue_free()
-	await process_frame
+
+	var rejected_bill_id := "industry_act"
+	main.vertical_slice.governance.active_laws.erase(rejected_bill_id)
+	var rejected_decision: Dictionary = main.vertical_slice.governance.legislative_history.back().duplicate(true)
+	rejected_decision["bill_id"] = rejected_bill_id
+	rejected_decision["name"] = "產業發展法案"
+	rejected_decision["passed"] = false
+	main.vertical_slice.governance.legislative_history.append(rejected_decision)
+	main.vertical_slice.governance.rejected_bills[rejected_bill_id] = rejected_decision.duplicate(true)
+	main._update_ui()
+	main.municipal_overlay.open_hub()
+	main.municipal_overlay.open_page("governance")
+	await _settle(2)
+	var reopened_signature: Dictionary = stage.debug_signature()
+	_check(str(reopened_signature.get("stage_state", "")) == "idle", "reopening governance leaves a completed vote result and returns to the catalog")
+	_check(bool(reopened_signature.get("catalog_visible", false)) and main.governance_catalog_title.visible and main.governance_status_tabs.visible, "reopening governance exposes the actionable policy and bill catalog")
+	_check(main.governance_force_panel.visible and not main.governance_force_button.disabled, "reopening governance exposes the legal force-enact entry for a rejected bill")
+	_check(main._autosave("test:governance_stale_final_page") == OK, "completed governance state saves for the reload regression")
+
+	await TestCleanup.release_fixtures(self, [main])
+	var resumed := (load("res://scenes/Main.tscn") as PackedScene).instantiate()
+	root.add_child(resumed)
+	await _settle(3)
+	resumed.start_save_path = TEST_SAVE_PATH
+	resumed.start_screen.set_continue_available(true)
+	resumed.start_screen.animation_duration = 0.01
+	resumed.start_screen.continue_game_button.emit_signal("pressed")
+	await _wait_for_loading(resumed)
+	_check(resumed._game_started, "completed governance save reloads through the Main Continue path")
+	resumed.municipal_overlay.open_page("governance")
+	await _settle(2)
+	var reloaded_signature: Dictionary = resumed.lower_council_stage.debug_signature()
+	_check(not resumed.vertical_slice.governance.legislative_history.is_empty(), "reload preserves legislative history without using it as current workflow state")
+	_check(str(reloaded_signature.get("stage_state", "")) == "idle" and bool(reloaded_signature.get("catalog_visible", false)), "reload opens completed governance state on the catalog instead of a stale final page")
+	_check(resumed.governance_catalog_title.visible and resumed.governance_status_tabs.visible, "reload keeps the governance catalog controls operable")
+	_check(resumed.governance_force_panel.visible and not resumed.governance_force_button.disabled, "reload preserves the rejected bill force-enact entry")
+	await TestCleanup.release_fixtures(self, [resumed])
 
 
 func _supportive_context() -> Dictionary:
@@ -171,6 +206,14 @@ func _supportive_context() -> Dictionary:
 func _settle(frames: int = 2) -> void:
 	for _index in range(frames):
 		await process_frame
+
+
+func _wait_for_loading(main) -> void:
+	for _frame in range(180):
+		await process_frame
+		if not main.start_screen.is_loading():
+			return
+	_check(false, "Main start flow did not finish within 180 frames")
 
 
 func _seat_grid_is_bounded(stage, signature: Dictionary) -> bool:

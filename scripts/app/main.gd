@@ -258,6 +258,7 @@ var governance_catalog_title: Control
 var governance_catalog_legend: Control
 var governance_force_panel: Control
 var lower_council_stage
+var _lower_council_final_decision: Dictionary = {}
 var settings_button: Button
 var municipal_button: Button
 var exit_button: Button
@@ -1493,6 +1494,7 @@ func _on_municipal_page_opened(page_id: String) -> void:
 		return
 	if page_id != "governance":
 		return
+	_lower_council_final_decision.clear()
 	_refresh_governance_catalog()
 	_refresh_lower_council_stage()
 	_select_governance_status(_preferred_governance_status())
@@ -2240,8 +2242,8 @@ func _refresh_lower_council_stage() -> void:
 	var hearing_active := str(pending.get("status", "")) == "awaiting_mayor_response"
 	var force_available: bool = not vertical_slice.governance.rejected_bills.is_empty() and pending.is_empty()
 	var latest_decision: Dictionary = {}
-	if pending.is_empty() and not vertical_slice.governance.legislative_history.is_empty():
-		latest_decision = vertical_slice.governance.legislative_history.back().duplicate(true)
+	if pending.is_empty() and not _lower_council_final_decision.is_empty():
+		latest_decision = _lower_council_final_decision.duplicate(true)
 	var workflow_active := hearing_active or not latest_decision.is_empty()
 	for catalog_control in [
 		governance_catalog_title,
@@ -4501,6 +4503,8 @@ func _on_lower_council_response_confirmed(response_id: String) -> void:
 	if not bool(result.get("ok", false)):
 		_set_hint("答詢無法送出：%s" % _vertical_error_text(str(result.get("error", "unknown"))), true)
 		return
+	var final_decision: Dictionary = result.get("decision", {})
+	_lower_council_final_decision = final_decision.duplicate(true)
 	_consume_vertical_events(vertical_slice.drain_ui_events())
 	_update_ui()
 	_set_hint("答詢已確認，下議院完成正式表決。", false)
