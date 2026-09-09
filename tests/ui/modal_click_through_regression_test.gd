@@ -18,6 +18,8 @@ func _run() -> void:
 	root.add_child(main)
 	await _settle(3)
 	main.start_screen.hide()
+	main.set("_game_started", true)
+	main.call("_sync_map_interaction_for_ui")
 	for tile_variant in main.grid_buttons:
 		var tile := tile_variant as Button
 		if tile != null:
@@ -55,6 +57,9 @@ func _run() -> void:
 	_check(_grid_press_count == 0, "exit X click reached an underlying map tile")
 	_check(_hovered_grid_count(main) == 0, "exit X exposed a white hover marker before pointer movement")
 	await _release_guard(exit_close_guard)
+
+	await _verify_npc_dialogue_planning_barrier(main, false)
+	await _verify_npc_dialogue_planning_barrier(main, true)
 
 	var exit_code := 1 if _failed else 0
 	if not _failed:
@@ -101,6 +106,76 @@ func _release_guard(guard: Control) -> void:
 	root.push_input(motion, true)
 	await _settle(2)
 	_check(not is_instance_valid(guard), "pointer guard did not release after real pointer movement")
+
+
+func _verify_npc_dialogue_planning_barrier(main, inject_on_next_frame: bool) -> void:
+	main.call("_on_transport_infrastructure_requested", "road", "build")
+	await _settle(2)
+	_check(main.map_action_mode == "transport_infrastructure", "road planning did not enter map mode")
+	_check(main.transport_plan_tiles.is_empty(), "road planning did not start with an empty tile intent")
+
+	var target_tile_index := _first_quoteable_road_tile(main)
+	_check(target_tile_index >= 0, "could not find a quoteable road tile under the map")
+	if target_tile_index < 0:
+		return
+	main.debug_show_npc_dialogue(0)
+	await _settle(3)
+	var card := main.get_npc_dialogue_card_control() as Control
+	_check(card != null and card.visible, "NPC dialogue did not open above planning mode")
+	if card == null or not card.visible:
+		return
+	var close_button := card.find_child("DismissButton", true, false) as Button
+	var target_tile := main.grid_buttons[target_tile_index] as Button
+	_check(close_button != null and target_tile != null, "NPC close button or target tile is unavailable")
+	if close_button == null or target_tile == null:
+		return
+	var click_position := target_tile.get_global_rect().get_center()
+	var treasury_before := int(main.funds)
+	var construction_before: Dictionary = main.vertical_slice.construction.to_dict()
+	var transport_before: Dictionary = main.vertical_slice.transport.to_dict()
+	var banner_before: String = str(main.placement_label.text)
+
+	_push_mouse_motion(click_position)
+	await process_frame
+	close_button.pressed.emit()
+	_check(not card.visible, "NPC dialogue close action did not hide the card")
+	if inject_on_next_frame:
+		await process_frame
+	main.call("_on_grid_pressed", target_tile_index)
+	if inject_on_next_frame:
+		await process_frame
+
+	var timing := "next frame" if inject_on_next_frame else "dismiss frame"
+	_check(main.transport_plan_tiles.is_empty(), "NPC close leaked a tile intent on the %s" % timing)
+	_check(main.placement_label.text == banner_before, "NPC close changed the planning quote banner on the %s" % timing)
+	_check(int(main.funds) == treasury_before, "NPC close deducted treasury funds on the %s" % timing)
+	_check(main.vertical_slice.construction.to_dict() == construction_before, "NPC close started construction on the %s" % timing)
+	_check(main.vertical_slice.transport.to_dict() == transport_before, "NPC close changed authoritative transport state on the %s" % timing)
+	var guard := main.get_node_or_null("ModalPointerGuard") as Control
+	_check(guard != null, "NPC close did not leave the shared pointer guard on the %s" % timing)
+	await _release_guard(guard)
+	main.call("_clear_transport_map_action")
+	await _settle(2)
+
+
+func _first_quoteable_road_tile(main) -> int:
+	for tile_index in main.grid_buttons.size():
+		if not bool(main.call("_is_tile_inside_hud_safe_area", tile_index)):
+			continue
+		var quote: Dictionary = main.vertical_slice.transport_project_quote(
+			"road", "build", [tile_index], 5, main.city_grid
+		)
+		if bool(quote.get("ok", false)):
+			return tile_index
+	return -1
+
+
+func _push_mouse_motion(position: Vector2) -> void:
+	var event := InputEventMouseMotion.new()
+	event.position = position
+	event.global_position = position
+	event.relative = Vector2.ZERO
+	root.push_input(event, true)
 
 
 func _hovered_grid_count(main) -> int:

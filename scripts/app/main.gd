@@ -35,6 +35,7 @@ const TransportVehicleControllerScript = preload("res://scripts/world/transport_
 const TransportPlanningSessionScript = preload("res://scripts/systems/city/transport_planning_session.gd")
 const TransportModesScript = preload("res://data/catalogs/transport_modes.gd")
 const ProgressiveChoicePagerScript = preload("res://ui/components/progressive_choice_pager.gd")
+const ModalPointerGuardScript = preload("res://ui/components/modal_pointer_guard.gd")
 const NpcDialogueCardScript = preload("res://ui/components/npc_dialogue_card.gd")
 const CityMetricCardScript = preload("res://ui/components/city_metric_card.gd")
 const UiIconCatalog = preload("res://ui/theme/ui_icon_catalog.gd")
@@ -313,6 +314,7 @@ var quit_application_on_confirm := true
 var _quit_shutdown_in_progress := false
 var _qa_release_smoke_active := false
 var _qa_release_smoke_frames_remaining := -1
+var _modal_grid_intent_block_until_process_frame := -1
 var _start_save_path := ""
 var start_save_path: String:
 	get:
@@ -655,6 +657,13 @@ func _sync_time_pause_for_ui() -> void:
 
 
 func _input(event: InputEvent) -> void:
+	if (
+		event.is_action_pressed("ui_cancel")
+		and is_instance_valid(npc_dialogue_card)
+		and npc_dialogue_card.visible
+	):
+		_dismiss_npc_dialogue_from_ui()
+		return
 	if event is InputEventMouseButton:
 		var zoom_event := event as InputEventMouseButton
 		if zoom_event.button_index == MOUSE_BUTTON_MIDDLE:
@@ -2680,7 +2689,7 @@ func _build_npc_dialogue_card() -> void:
 		return
 	npc_dialogue_card = NpcDialogueCardScript.new()
 	npc_dialogue_card.set_dark_mode(is_dark_mode)
-	npc_dialogue_card.dismiss_requested.connect(Callable(self, "_hide_npc_dialogue"))
+	npc_dialogue_card.dismiss_requested.connect(Callable(self, "_dismiss_npc_dialogue_from_ui"))
 	npc_dialogue_card.primary_action_requested.connect(Callable(self, "_open_selected_npc_request"))
 	npc_dialogue_card.position = Vector2(326, 520)
 	npc_dialogue_card.z_index = 2000
@@ -2967,6 +2976,31 @@ func _hide_npc_dialogue() -> void:
 		npc_dialogue_card.hide()
 	if refresh_after_close:
 		refresh_visible_npc_proxies()
+
+
+func _dismiss_npc_dialogue_from_ui() -> void:
+	get_viewport().set_input_as_handled()
+	_arm_modal_pointer_guard()
+	_hide_npc_dialogue()
+
+
+func _arm_modal_pointer_guard() -> void:
+	var guard := get_node_or_null(ModalPointerGuardScript.GUARD_NODE_NAME)
+	if guard == null:
+		guard = ModalPointerGuardScript.new()
+		add_child(guard)
+	guard.call("arm", get_viewport().get_mouse_position())
+	_modal_grid_intent_block_until_process_frame = Engine.get_process_frames() + 1
+
+
+func _modal_pointer_guard_blocks_grid_intent() -> bool:
+	var guard := get_node_or_null(ModalPointerGuardScript.GUARD_NODE_NAME) as Control
+	return (
+		guard != null
+		and is_instance_valid(guard)
+		and guard.visible
+		and Engine.get_process_frames() <= _modal_grid_intent_block_until_process_frame
+	)
 
 
 func _open_selected_npc_request() -> void:
@@ -5106,6 +5140,8 @@ func _refresh_transport_planning_panel() -> void:
 	transport_planning_panel.set_view_model(snapshot)
 
 func _on_grid_pressed(index: int) -> void:
+	if _modal_pointer_guard_blocks_grid_intent():
+		return
 	if index < 0 or index >= city_grid.size():
 		return
 	if _is_transport_map_action_active():
