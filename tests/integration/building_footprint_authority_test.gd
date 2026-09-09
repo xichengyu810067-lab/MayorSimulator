@@ -450,6 +450,16 @@ func _test_completion_command_fails_closed() -> void:
 		{"label": "tile mismatch", "record_mismatch": "tile", "expected": "building_tile_mismatch"},
 		{"label": "footprint mismatch", "record_mismatch": "footprint", "expected": "building_footprint_mismatch"},
 		{"label": "occupied tiles mismatch", "record_mismatch": "occupied", "expected": "building_occupied_tiles_mismatch"},
+		{"label": "fractional tile", "record_mismatch": "tile_fractional", "expected": "building_tile_required"},
+		{"label": "fractional anchor", "record_mismatch": "anchor_fractional", "expected": "building_anchor_required"},
+		{"label": "numeric tile string", "record_mismatch": "tile_numeric_string", "expected": "building_tile_required"},
+		{"label": "invalid anchor string", "record_mismatch": "anchor_invalid_string", "expected": "building_anchor_required"},
+		{"label": "boolean tile", "record_mismatch": "tile_boolean", "expected": "building_tile_required"},
+		{"label": "NaN tile", "record_mismatch": "tile_nan", "expected": "building_tile_required"},
+		{"label": "infinite anchor", "record_mismatch": "anchor_infinite", "expected": "building_anchor_required"},
+		{"label": "numeric footprint", "record_mismatch": "footprint_numeric", "expected": "building_footprint_required"},
+		{"label": "fractional immutable tile", "job_mismatch": "tile_fractional", "expected": "building_job_tile_required"},
+		{"label": "numeric immutable footprint", "job_mismatch": "footprint_numeric", "expected": "building_job_footprint_required"},
 	]
 	for case_index: int in range(cases.size()):
 		var case: Dictionary = cases[case_index]
@@ -476,6 +486,15 @@ func _test_completion_command_fails_closed() -> void:
 			var metadata: Dictionary = Dictionary(job.get("metadata", {})).duplicate(true)
 			metadata["entity_kind"] = str(case["entity_kind"])
 			job["metadata"] = metadata
+		match str(case.get("job_mismatch", "")):
+			"tile_fractional":
+				var metadata: Dictionary = Dictionary(job.get("metadata", {})).duplicate(true)
+				metadata["tile_index"] = float(metadata.get("tile_index", -1)) + 0.5
+				job["metadata"] = metadata
+			"footprint_numeric":
+				var metadata: Dictionary = Dictionary(job.get("metadata", {})).duplicate(true)
+				metadata["footprint_id"] = 123
+				job["metadata"] = metadata
 		if str(case.get("label", "")) != "active job":
 			coordinator.session.submit_command("upsert_construction", {
 				"job_id": job_id,
@@ -494,6 +513,22 @@ func _test_completion_command_fails_closed() -> void:
 				record["footprint_id"] = BuildingFootprintsScript.SINGLE_V1
 			"occupied":
 				record["occupied_tile_ids"] = [int(record.get("anchor_tile_id", -1))]
+			"tile_fractional":
+				record["tile_index"] = float(record.get("tile_index", -1)) + 0.5
+			"anchor_fractional":
+				record["anchor_tile_id"] = float(record.get("anchor_tile_id", -1)) + 0.5
+			"tile_numeric_string":
+				record["tile_index"] = str(record.get("tile_index", -1))
+			"anchor_invalid_string":
+				record["anchor_tile_id"] = "invalid"
+			"tile_boolean":
+				record["tile_index"] = true
+			"tile_nan":
+				record["tile_index"] = NAN
+			"anchor_infinite":
+				record["anchor_tile_id"] = INF
+			"footprint_numeric":
+				record["footprint_id"] = 123
 		var buildings_before: Dictionary = coordinator.session.state.buildings.duplicate(true)
 		var jobs_before: Dictionary = coordinator.session.state.construction_jobs.duplicate(true)
 		var rejection_events: Array = coordinator.session.submit_command("complete_building_construction", {
@@ -507,6 +542,48 @@ func _test_completion_command_fails_closed() -> void:
 			_check(str(rejection_events[0].reason_tag) == str(case["expected"]), "%s rejection is fail-closed and specific" % str(case["label"]))
 		_check(coordinator.session.state.buildings == buildings_before, "%s rejection writes no building authority" % str(case["label"]))
 		_check(coordinator.session.state.construction_jobs == jobs_before, "%s rejection writes no construction authority" % str(case["label"]))
+	_test_json_integer_scalar_completion()
+
+
+func _test_json_integer_scalar_completion() -> void:
+	var coordinator = VerticalSliceCoordinatorScript.new(20_263_100, 50_000_000)
+	var run := _find_available_flat_run(coordinator, 2)
+	_check(not run.is_empty(), "JSON integer scalar fixture finds a legal footprint")
+	if run.is_empty():
+		return
+	var started: Dictionary = coordinator.start_approved_building("學校", int(run["anchor"]), 20)
+	_check(bool(started.get("ok", false)), "JSON integer scalar fixture starts")
+	if not bool(started.get("ok", false)):
+		return
+	var job: Dictionary = Dictionary(started.get("job", {})).duplicate(true)
+	var job_id := str(job.get("id", ""))
+	job["status"] = "completed"
+	job["remaining_work"] = 0.0
+	job["projected_remaining_days"] = 0
+	job["completed_day"] = coordinator.game_day()
+	var metadata: Dictionary = Dictionary(job.get("metadata", {})).duplicate(true)
+	metadata["tile_index"] = float(metadata.get("tile_index", -1))
+	metadata["anchor_tile_id"] = float(metadata.get("anchor_tile_id", -1))
+	var occupied_as_json_numbers: Array = []
+	for tile_value: Variant in metadata.get("occupied_tile_ids", []):
+		occupied_as_json_numbers.append(float(tile_value))
+	metadata["occupied_tile_ids"] = occupied_as_json_numbers
+	job["metadata"] = metadata
+	coordinator.session.submit_command("upsert_construction", {
+		"job_id": job_id,
+		"record": job,
+		"reason_tag": "test.json_integer_completion_job",
+	}, "test_json_integer_completion_job")
+	var record := _completion_record_for_job(job, "test_json_integer_building")
+	var completion_events: Array = coordinator.session.submit_command("complete_building_construction", {
+		"building_id": str(record["building_id"]),
+		"job_id": job_id,
+		"record": record,
+		"reason_tag": "test.json_integer_completion",
+	}, "test_json_integer_completion")
+	_check(completion_events.size() == 1 and str(completion_events[0].event_type) == "building.construction_completed", "JSON n.0 integer scalars complete normally")
+	_check(coordinator.session.state.buildings.has(str(record["building_id"])), "JSON n.0 completion writes building authority once")
+	_check(not coordinator.session.state.construction_jobs.has(job_id), "JSON n.0 completion consumes its construction authority")
 
 
 func _test_pending_command_station_completion() -> void:
