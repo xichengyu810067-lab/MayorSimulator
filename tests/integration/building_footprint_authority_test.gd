@@ -44,12 +44,57 @@ var _failed := false
 var _checks := 0
 
 
+class PendingCommandDurability:
+	extends RefCounted
+
+	var delegate
+	var session
+	var metric_name: String
+	var metric_value: int
+	var operation_id: String
+	var queued := false
+	var register_calls := 0
+	var buildings: Dictionary:
+		get:
+			return delegate.buildings
+	var consecutive_unpaid_months: int:
+		get:
+			return int(delegate.consecutive_unpaid_months)
+
+	func _init(p_delegate, p_session, p_metric_name: String, p_metric_value: int, p_operation_id: String) -> void:
+		delegate = p_delegate
+		session = p_session
+		metric_name = p_metric_name
+		metric_value = p_metric_value
+		operation_id = p_operation_id
+
+	func register_building(building_id: String, attributes: Dictionary = {}) -> Dictionary:
+		register_calls += 1
+		var result: Dictionary = delegate.register_building(building_id, attributes)
+		if not queued:
+			queued = true
+			session.queue_command("metric_change", {
+				"metric": metric_name,
+				"value": metric_value,
+				"reason_tag": "test.pending_before_building_completion",
+			}, operation_id)
+		return result
+
+	func advance_week(current_day: int) -> Array[Dictionary]:
+		return delegate.advance_week(current_day)
+
+	func advance_year(current_day: int) -> Array[Dictionary]:
+		return delegate.advance_year(current_day)
+
+
 func _initialize() -> void:
 	_test_catalog_contract()
 	_test_natural_obstacle_feedback_for_every_footprint_cell()
 	_test_current_existing_registration_contract()
 	_test_atomic_placement_and_single_building_identity()
+	_test_completion_command_fails_closed()
 	_test_atomic_completion_observer_state()
+	_test_pending_command_station_completion()
 	_test_save_load_and_secondary_cell_lifecycle()
 	if _failed:
 		quit(1)
@@ -340,6 +385,7 @@ func _test_atomic_completion_observer_state() -> void:
 			continue
 		var job_id := str(started.get("job", {}).get("id", ""))
 		var observed_states: Array[Dictionary] = []
+		var pending_metric := "test_pending_completion_%d" % cell_count
 		var completion_observer := func(event) -> void:
 			if str(event.event_type) not in ["building.upserted", "building.construction_completed"]:
 				return
@@ -352,8 +398,23 @@ func _test_atomic_completion_observer_state() -> void:
 				"construction_present": coordinator.session.state.construction_jobs.has(job_id),
 			})
 		coordinator.session.domain_event.connect(completion_observer)
-		_complete_job(coordinator, started)
+		coordinator.drain_ui_events()
+		var pending_durability := PendingCommandDurability.new(
+			coordinator.durability,
+			coordinator.session,
+			pending_metric,
+			cell_count,
+			"test_pending_before_building_completion_%d" % cell_count
+		)
+		coordinator.durability = pending_durability
+		var completion_events := coordinator.advance_days(int(started.get("job", {}).get("projected_remaining_days", 0)), CITY_CONTEXT, false)
+		coordinator.durability = pending_durability.delegate
 		coordinator.session.domain_event.disconnect(completion_observer)
+		_check(pending_durability.queued, "%s completion fixture queues an earlier pending command" % display_name)
+		_check(pending_durability.register_calls == 1, "%s completion registers durability exactly once" % display_name)
+		_check(int(coordinator.session.state.metrics.get(pending_metric, -1)) == cell_count, "%s earlier pending command is flushed before completion" % display_name)
+		_check(_ui_event_count(completion_events, "building_completed") == 1, "%s queued command does not suppress or duplicate completion UI" % display_name)
+		_check(not _ui_event_seen(completion_events, "building_completion_failed"), "%s queued command is not mistaken for completion failure" % display_name)
 		_check(observed_states.size() == 1, "%s completion emits one observable building authority transition" % display_name)
 		if observed_states.size() == 1:
 			var observed: Dictionary = observed_states[0]
@@ -377,6 +438,127 @@ func _test_atomic_completion_observer_state() -> void:
 			var tile_id := int(tile_variant)
 			_check(reloaded.active_construction_for_tile(tile_id).is_empty(), "%s reload keeps occupied tile %d out of construction" % [display_name, tile_id])
 			_check(not reloaded.get_building_by_tile(tile_id).is_empty(), "%s reload restores occupied building tile %d" % [display_name, tile_id])
+
+
+func _test_completion_command_fails_closed() -> void:
+	var cases := [
+		{"label": "active job", "expected": "construction_job_not_completed"},
+		{"label": "non-build job", "operation": "demolish", "expected": "construction_job_not_build"},
+		{"label": "transport project", "entity_kind": "transport_project", "expected": "construction_job_not_building"},
+		{"label": "terrain flatten", "entity_kind": "terrain_flatten", "expected": "construction_job_not_building"},
+		{"label": "blueprint mismatch", "record_mismatch": "blueprint", "expected": "building_blueprint_mismatch"},
+		{"label": "tile mismatch", "record_mismatch": "tile", "expected": "building_tile_mismatch"},
+		{"label": "footprint mismatch", "record_mismatch": "footprint", "expected": "building_footprint_mismatch"},
+		{"label": "occupied tiles mismatch", "record_mismatch": "occupied", "expected": "building_occupied_tiles_mismatch"},
+	]
+	for case_index: int in range(cases.size()):
+		var case: Dictionary = cases[case_index]
+		var coordinator = VerticalSliceCoordinatorScript.new(20_263_000 + case_index, 50_000_000)
+		var run := _find_available_flat_run(coordinator, 2)
+		_check(not run.is_empty(), "%s fail-closed fixture finds a legal footprint" % str(case["label"]))
+		if run.is_empty():
+			continue
+		var started: Dictionary = coordinator.start_approved_building("學校", int(run["anchor"]), 20)
+		_check(bool(started.get("ok", false)), "%s fail-closed fixture starts" % str(case["label"]))
+		if not bool(started.get("ok", false)):
+			continue
+		var job: Dictionary = Dictionary(started.get("job", {})).duplicate(true)
+		var job_id := str(job.get("id", ""))
+		if str(case.get("label", "")) != "active job":
+			job["status"] = "completed"
+			job["remaining_work"] = 0.0
+			job["projected_remaining_days"] = 0
+			job["elapsed_days"] = maxi(1, int(job.get("elapsed_days", 0)))
+			job["completed_day"] = coordinator.game_day()
+		if case.has("operation"):
+			job["operation"] = str(case["operation"])
+		if case.has("entity_kind"):
+			var metadata: Dictionary = Dictionary(job.get("metadata", {})).duplicate(true)
+			metadata["entity_kind"] = str(case["entity_kind"])
+			job["metadata"] = metadata
+		if str(case.get("label", "")) != "active job":
+			coordinator.session.submit_command("upsert_construction", {
+				"job_id": job_id,
+				"record": job,
+				"reason_tag": "test.invalid_completion_job",
+			}, "test_invalid_completion_job_%d" % case_index)
+		var record := _completion_record_for_job(job, "test_building_%d" % case_index)
+		match str(case.get("record_mismatch", "")):
+			"blueprint":
+				var blueprint: Dictionary = Dictionary(record["blueprint"]).duplicate(true)
+				blueprint["version"] = int(blueprint.get("version", 1)) + 1
+				record["blueprint"] = blueprint
+			"tile":
+				record["tile_index"] = int(record.get("tile_index", -1)) + 1
+			"footprint":
+				record["footprint_id"] = BuildingFootprintsScript.SINGLE_V1
+			"occupied":
+				record["occupied_tile_ids"] = [int(record.get("anchor_tile_id", -1))]
+		var buildings_before: Dictionary = coordinator.session.state.buildings.duplicate(true)
+		var jobs_before: Dictionary = coordinator.session.state.construction_jobs.duplicate(true)
+		var rejection_events: Array = coordinator.session.submit_command("complete_building_construction", {
+			"building_id": str(record["building_id"]),
+			"job_id": job_id,
+			"record": record,
+			"reason_tag": "test.invalid_completion",
+		}, "test_invalid_completion_%d" % case_index)
+		_check(rejection_events.size() == 1 and str(rejection_events[0].event_type) == "command.rejected", "%s completion command rejects" % str(case["label"]))
+		if rejection_events.size() == 1:
+			_check(str(rejection_events[0].reason_tag) == str(case["expected"]), "%s rejection is fail-closed and specific" % str(case["label"]))
+		_check(coordinator.session.state.buildings == buildings_before, "%s rejection writes no building authority" % str(case["label"]))
+		_check(coordinator.session.state.construction_jobs == jobs_before, "%s rejection writes no construction authority" % str(case["label"]))
+
+
+func _test_pending_command_station_completion() -> void:
+	var coordinator = VerticalSliceCoordinatorScript.new(20_264_000, 50_000_000)
+	var run := _find_available_flat_run(coordinator, 1)
+	_check(not run.is_empty(), "station pending-command fixture finds a legal footprint")
+	if run.is_empty():
+		return
+	var started: Dictionary = coordinator.start_approved_building("公車站", int(run["anchor"]), 20)
+	_check(bool(started.get("ok", false)), "station pending-command fixture starts")
+	if not bool(started.get("ok", false)):
+		return
+	coordinator.drain_ui_events()
+	var pending_durability := PendingCommandDurability.new(
+		coordinator.durability,
+		coordinator.session,
+		"test_station_pending_completion",
+		1,
+		"test_station_pending_completion"
+	)
+	coordinator.durability = pending_durability
+	var completion_events := coordinator.advance_days(int(started.get("job", {}).get("projected_remaining_days", 0)), CITY_CONTEXT, false)
+	coordinator.durability = pending_durability.delegate
+	_check(pending_durability.queued, "station completion queues an earlier pending command")
+	_check(pending_durability.register_calls == 1, "station completion registers durability exactly once")
+	_check(_ui_event_count(completion_events, "building_completed") == 1, "station completion emits exactly one observable building completion")
+	_check(not _ui_event_seen(completion_events, "building_completion_failed"), "station pending command is not mistaken for completion failure")
+	var station_record: Dictionary = coordinator.get_building_by_tile(int(run["anchor"]))
+	var station_id := str(station_record.get("building_id", ""))
+	_check(not station_id.is_empty(), "station completion creates its building authority")
+	_check(coordinator.transport.stations.has(station_id), "station completion registers transport authority exactly once")
+	var station_count: int = coordinator.transport.stations.size()
+	var later_events: Array[Dictionary] = coordinator.advance_days(1, CITY_CONTEXT, false)
+	_check(_ui_event_count(later_events, "building_completed") == 0, "later station tick does not repeat completion UI")
+	_check(coordinator.transport.stations.size() == station_count, "later station tick does not duplicate transport authority")
+
+
+func _completion_record_for_job(job: Dictionary, building_id: String) -> Dictionary:
+	var metadata: Dictionary = job.get("metadata", {})
+	var blueprint: Dictionary = job.get("blueprint", {})
+	return {
+		"building_id": building_id,
+		"definition_id": str(blueprint.get("building_id", "")),
+		"building_name": str(metadata.get("building_name", "")),
+		"tile_index": int(metadata.get("tile_index", -1)),
+		"anchor_tile_id": int(metadata.get("anchor_tile_id", -1)),
+		"footprint_id": str(metadata.get("footprint_id", "")),
+		"occupied_tile_ids": Array(metadata.get("occupied_tile_ids", [])).duplicate(),
+		"status": "active",
+		"durability": 100,
+		"blueprint": blueprint.duplicate(true),
+	}
 
 
 func _test_save_load_and_secondary_cell_lifecycle() -> void:
@@ -533,6 +715,14 @@ func _ui_event_seen(events: Array[Dictionary], event_type: String) -> bool:
 		if str(event.get("type", "")) == event_type:
 			return true
 	return false
+
+
+func _ui_event_count(events: Array[Dictionary], event_type: String) -> int:
+	var count := 0
+	for event: Dictionary in events:
+		if str(event.get("type", "")) == event_type:
+			count += 1
+	return count
 
 
 func _assert_no_placement_mutation(

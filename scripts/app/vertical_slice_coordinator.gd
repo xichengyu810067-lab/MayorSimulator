@@ -2376,13 +2376,22 @@ func _handle_construction_fact(event: Dictionary) -> bool:
 			"engineering_fee": maxi(300, int((definition.base_cost if definition != null else 1000) * 0.1)),
 			"metadata": metadata
 		})
+		var completion_operation_id := _operation_id("building_complete")
 		var completion_events: Array = session.submit_command("complete_building_construction", {
 			"building_id": instance_id,
 			"job_id": job_id,
 			"record": record,
 			"reason_tag": "building.construction_completed",
-		}, _operation_id("building_complete"))
-		if completion_events.is_empty() or str(completion_events[0].event_type) != "building.construction_completed":
+		}, completion_operation_id)
+		var completion_emitted := false
+		for completion_event in completion_events:
+			if (
+				str(completion_event.event_type) == "building.construction_completed"
+				and str(completion_event.caused_by) == completion_operation_id
+			):
+				completion_emitted = true
+				break
+		if not completion_emitted:
 			_push_ui_event("building_completion_failed", {
 				"job_id": job_id,
 				"error": "building_authority_transition_failed",
