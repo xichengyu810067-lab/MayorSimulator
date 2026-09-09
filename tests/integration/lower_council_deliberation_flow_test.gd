@@ -155,13 +155,17 @@ func _test_main_stage_and_single_autosave() -> void:
 	_check(bool(second_hearing_answerable.get("readonly_preview", false)) and not bool(second_hearing_answerable.get("confirm_disabled", true)), "same-option second hearing can accept a fresh preview and enable confirmation")
 
 	var rejected_bill_id := "industry_act"
+	var rejected_definition: Dictionary = main.vertical_slice.governance.bill_definitions.get(rejected_bill_id, {})
+	var rejected_decision := _rejected_bill_fixture(main.vertical_slice.governance.legislative_history.back(), rejected_definition, main.vertical_slice.game_day())
+	var rejected_final_vote: Dictionary = rejected_decision.get("final_vote", {})
+	_check(str(rejected_decision.get("bill_id", "")) == rejected_bill_id and str(rejected_decision.get("name", "")) == str(rejected_definition.get("name", "")), "rejected fixture matches the selected bill definition")
+	_check(str(rejected_decision.get("status", "")) == "rejected" and not bool(rejected_decision.get("passed", true)) and not bool(rejected_decision.get("lower_passed", true)), "rejected fixture has a consistent terminal rejection state")
+	_check(_vote_fixture_is_consistent(rejected_final_vote, rejected_bill_id), "rejected fixture preserves a consistent 30-seat vote below threshold 16")
 	main.vertical_slice.governance.active_laws.erase(rejected_bill_id)
-	var rejected_decision: Dictionary = main.vertical_slice.governance.legislative_history.back().duplicate(true)
-	rejected_decision["bill_id"] = rejected_bill_id
-	rejected_decision["name"] = "產業發展法案"
-	rejected_decision["passed"] = false
-	main.vertical_slice.governance.legislative_history.append(rejected_decision)
+	main.vertical_slice.governance.legislative_history.append(rejected_decision.duplicate(true))
 	main.vertical_slice.governance.rejected_bills[rejected_bill_id] = rejected_decision.duplicate(true)
+	_check(main.vertical_slice.governance.rejected_bills.get(rejected_bill_id, {}) == rejected_decision, "rejected map stores the same terminal decision as legislative history")
+	_check(main.vertical_slice.latest_rejected_bill_id() == rejected_bill_id, "coordinator identifies the fixture bill as the latest eligible rejection")
 	main._update_ui()
 	main.municipal_overlay.open_hub()
 	main.municipal_overlay.open_page("governance")
@@ -189,6 +193,20 @@ func _test_main_stage_and_single_autosave() -> void:
 	_check(str(reloaded_signature.get("stage_state", "")) == "idle" and bool(reloaded_signature.get("catalog_visible", false)), "reload opens completed governance state on the catalog instead of a stale final page")
 	_check(resumed.governance_catalog_title.visible and resumed.governance_status_tabs.visible, "reload keeps the governance catalog controls operable")
 	_check(resumed.governance_force_panel.visible and not resumed.governance_force_button.disabled, "reload preserves the rejected bill force-enact entry")
+	_check(resumed.vertical_slice.latest_rejected_bill_id() == rejected_bill_id, "reload preserves the same latest eligible rejected bill")
+	var judiciary_before: int = resumed.vertical_slice.governance.judiciary_cases.size()
+	var oversight_before: int = resumed.vertical_slice.governance.oversight_cases.size()
+	var checks_before: int = resumed.vertical_slice.governance.checks_and_balances_history.size()
+	resumed.governance_force_button.emit_signal("pressed")
+	await _settle(2)
+	_check(resumed.vertical_slice.governance.active_laws.has(rejected_bill_id), "force-enact button activates the rejected bill through the governance coordinator")
+	var forced_law: Dictionary = resumed.vertical_slice.governance.active_laws.get(rejected_bill_id, {})
+	_check(bool(forced_law.get("forced", false)) and str(forced_law.get("status", "")) == "active", "force-enact button records the active law as an executive override")
+	_check(resumed.vertical_slice.governance.judiciary_cases.size() == judiciary_before + 1, "force-enact button creates the expected judicial review entry")
+	_check(resumed.vertical_slice.governance.oversight_cases.size() == oversight_before + 1, "force-enact button creates the expected oversight inquiry entry")
+	_check(resumed.vertical_slice.governance.checks_and_balances_history.size() == checks_before + 1, "force-enact button records the checks-and-balances authority event")
+	var latest_check: Dictionary = resumed.vertical_slice.governance.checks_and_balances_history.back()
+	_check(str(latest_check.get("action", "")) == "executive_override_checked" and str(latest_check.get("subject_id", "")) == rejected_bill_id, "force-enact button records the rejected bill's executive override review")
 	await TestCleanup.release_fixtures(self, [resumed])
 
 
@@ -201,6 +219,74 @@ func _supportive_context() -> Dictionary:
 		"feasibility": 58,
 		"regional_support": {"north": 70, "east": 66, "south": 74, "west": 68},
 	}
+
+
+func _rejected_bill_fixture(source_decision: Dictionary, definition: Dictionary, resolved_day: int) -> Dictionary:
+	var bill_id := str(definition.get("id", ""))
+	return {
+		"bill_id": bill_id,
+		"name": str(definition.get("name", bill_id)),
+		"submitted_day": maxi(0, resolved_day - 1),
+		"resolved_day": resolved_day,
+		"first_vote": _rejected_vote_fixture(source_decision.get("first_vote", {}), bill_id, "initial", resolved_day),
+		"debate": {},
+		"mayor_response": {},
+		"final_vote": _rejected_vote_fixture(source_decision.get("final_vote", {}), bill_id, "final", resolved_day),
+		"lower_passed": false,
+		"upper_vote": {"passed": false, "votes": [], "veto_regions": []},
+		"passed": false,
+		"status": "rejected",
+	}
+
+
+func _rejected_vote_fixture(source_vote: Dictionary, bill_id: String, stage: String, game_day: int) -> Dictionary:
+	var source_votes: Array = source_vote.get("votes", [])
+	var votes: Array[Dictionary] = []
+	for index in range(30):
+		var vote: Dictionary = (source_votes[index] as Dictionary).duplicate(true) if index < source_votes.size() and source_votes[index] is Dictionary else {}
+		var member_id := str(vote.get("member_id", "LC-%03d" % (index + 1)))
+		var supports := index < 15
+		vote["vote_id"] = "fixture_%s_%s_%s" % [bill_id, stage, member_id]
+		vote["member_id"] = member_id
+		vote["bill_id"] = bill_id
+		vote["bill_version"] = 1
+		vote["game_day"] = game_day
+		vote["choice"] = "for" if supports else "against"
+		vote["supports"] = supports
+		vote["primary_reason"] = "feasibility"
+		vote["concern"] = "feasibility"
+		votes.append(vote)
+	return {
+		"ok": true,
+		"votes_for": 15,
+		"votes_against": 15,
+		"abstentions": 0,
+		"absences": 0,
+		"majority_threshold": 16,
+		"passed": false,
+		"stage": stage,
+		"model": "lower_council_30_member",
+		"votes": votes,
+	}
+
+
+func _vote_fixture_is_consistent(vote: Dictionary, bill_id: String) -> bool:
+	var votes: Array = vote.get("votes", [])
+	if votes.size() != 30 or int(vote.get("majority_threshold", 0)) != 16 or bool(vote.get("passed", true)):
+		return false
+	var counted_for := 0
+	var counted_against := 0
+	for vote_variant: Variant in votes:
+		var member_vote: Dictionary = vote_variant
+		if str(member_vote.get("bill_id", "")) != bill_id:
+			return false
+		if str(member_vote.get("choice", "")) == "for":
+			counted_for += 1
+		elif str(member_vote.get("choice", "")) == "against":
+			counted_against += 1
+		else:
+			return false
+	return counted_for == int(vote.get("votes_for", -1)) and counted_against == int(vote.get("votes_against", -1)) and counted_for < int(vote.get("majority_threshold", 0))
 
 
 func _settle(frames: int = 2) -> void:
