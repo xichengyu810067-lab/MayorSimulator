@@ -60,6 +60,7 @@ func _run() -> void:
 
 	await _verify_npc_dialogue_planning_barrier(main, false)
 	await _verify_npc_dialogue_planning_barrier(main, true)
+	await _verify_npc_dialogue_keyboard_dismiss_keeps_next_click(main)
 
 	var exit_code := 1 if _failed else 0
 	if not _failed:
@@ -68,6 +69,11 @@ func _run() -> void:
 
 
 func _click(button: Button) -> void:
+	await _click_without_post_settle(button)
+	await _settle(2)
+
+
+func _click_without_post_settle(button: Button) -> void:
 	var center := button.get_global_rect().get_center()
 	var motion := InputEventMouseMotion.new()
 	motion.position = center
@@ -92,7 +98,6 @@ func _click(button: Button) -> void:
 	up.position = center
 	up.global_position = center
 	root.push_input(up, true)
-	await _settle(2)
 
 
 func _release_guard(guard: Control) -> void:
@@ -129,15 +134,12 @@ func _verify_npc_dialogue_planning_barrier(main, inject_on_next_frame: bool) -> 
 	_check(close_button != null and target_tile != null, "NPC close button or target tile is unavailable")
 	if close_button == null or target_tile == null:
 		return
-	var click_position := target_tile.get_global_rect().get_center()
 	var treasury_before := int(main.funds)
 	var construction_before: Dictionary = main.vertical_slice.construction.to_dict()
 	var transport_before: Dictionary = main.vertical_slice.transport.to_dict()
 	var banner_before: String = str(main.placement_label.text)
 
-	_push_mouse_motion(click_position)
-	await process_frame
-	close_button.pressed.emit()
+	await _click_without_post_settle(close_button)
 	_check(not card.visible, "NPC dialogue close action did not hide the card")
 	if inject_on_next_frame:
 		await process_frame
@@ -155,6 +157,66 @@ func _verify_npc_dialogue_planning_barrier(main, inject_on_next_frame: bool) -> 
 	_check(guard != null, "NPC close did not leave the shared pointer guard on the %s" % timing)
 	await _release_guard(guard)
 	main.call("_clear_transport_map_action")
+	await _settle(2)
+
+
+func _verify_npc_dialogue_keyboard_dismiss_keeps_next_click(main) -> void:
+	main.call("_on_transport_infrastructure_requested", "road", "build")
+	await _settle(2)
+	var target_tile_index := _first_quoteable_road_tile(main)
+	_check(target_tile_index >= 0, "could not find a quoteable road tile for keyboard dismissal")
+	if target_tile_index < 0:
+		return
+	var target_tile := main.grid_buttons[target_tile_index] as Button
+	_check(target_tile != null, "keyboard dismissal target tile is unavailable")
+	if target_tile == null:
+		return
+	main.debug_show_npc_dialogue(0)
+	await _settle(3)
+	var card := main.get_npc_dialogue_card_control() as Control
+	_check(card != null and card.visible, "NPC dialogue did not open for keyboard dismissal")
+	if card == null or not card.visible:
+		return
+
+	var click_position := target_tile.get_global_rect().get_center()
+	_push_mouse_motion(click_position)
+	await process_frame
+	var escape := InputEventKey.new()
+	escape.keycode = KEY_ESCAPE
+	escape.pressed = true
+	root.push_input(escape, true)
+	_check(not card.visible, "Escape did not close the NPC dialogue")
+	_check(main.get_node_or_null("ModalPointerGuard") == null, "Escape incorrectly armed a pointer guard")
+	var grid_presses_before := _grid_press_count
+	await _click_at_without_motion(click_position)
+	_check(_grid_press_count == grid_presses_before + 1, "Escape swallowed the unmoved pointer's next tile click")
+	_check(main.transport_plan_tiles == [target_tile_index], "the tile click after Escape did not update the real road plan")
+
+	var escape_release := InputEventKey.new()
+	escape_release.keycode = KEY_ESCAPE
+	escape_release.pressed = false
+	root.push_input(escape_release, true)
+	main.call("_clear_transport_map_action")
+	await _settle(2)
+
+
+func _click_at_without_motion(position: Vector2) -> void:
+	var down := InputEventMouseButton.new()
+	down.button_index = MOUSE_BUTTON_LEFT
+	down.button_mask = MOUSE_BUTTON_MASK_LEFT
+	down.pressed = true
+	down.position = position
+	down.global_position = position
+	root.push_input(down, true)
+	await process_frame
+
+	var up := InputEventMouseButton.new()
+	up.button_index = MOUSE_BUTTON_LEFT
+	up.button_mask = 0
+	up.pressed = false
+	up.position = position
+	up.global_position = position
+	root.push_input(up, true)
 	await _settle(2)
 
 

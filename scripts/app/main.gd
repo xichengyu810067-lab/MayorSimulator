@@ -662,7 +662,7 @@ func _input(event: InputEvent) -> void:
 		and is_instance_valid(npc_dialogue_card)
 		and npc_dialogue_card.visible
 	):
-		_dismiss_npc_dialogue_from_ui()
+		_dismiss_npc_dialogue_from_keyboard()
 		return
 	if event is InputEventMouseButton:
 		var zoom_event := event as InputEventMouseButton
@@ -2689,7 +2689,7 @@ func _build_npc_dialogue_card() -> void:
 		return
 	npc_dialogue_card = NpcDialogueCardScript.new()
 	npc_dialogue_card.set_dark_mode(is_dark_mode)
-	npc_dialogue_card.dismiss_requested.connect(Callable(self, "_dismiss_npc_dialogue_from_ui"))
+	npc_dialogue_card.dismiss_requested.connect(Callable(self, "_dismiss_npc_dialogue_from_pointer"))
 	npc_dialogue_card.primary_action_requested.connect(Callable(self, "_open_selected_npc_request"))
 	npc_dialogue_card.position = Vector2(326, 520)
 	npc_dialogue_card.z_index = 2000
@@ -2978,9 +2978,14 @@ func _hide_npc_dialogue() -> void:
 		refresh_visible_npc_proxies()
 
 
-func _dismiss_npc_dialogue_from_ui() -> void:
+func _dismiss_npc_dialogue_from_pointer() -> void:
 	get_viewport().set_input_as_handled()
 	_arm_modal_pointer_guard()
+	_hide_npc_dialogue()
+
+
+func _dismiss_npc_dialogue_from_keyboard() -> void:
+	get_viewport().set_input_as_handled()
 	_hide_npc_dialogue()
 
 
