@@ -181,28 +181,49 @@ func _test_cross_catalog_canonical_order() -> void:
 func _test_footprint_render_geometry_bounds() -> void:
 	# Use the same compact tile size that exposed the original bleed.  This is a
 	# geometry check over the renderer's shared draw helpers, not a self-reported
-	# visual flag, and covers completed plus active construction for all tiers.
+	# visual flag. It includes all 1/2/3-cell roles, industrial/civic anchor
+	# effects, and the animated construction anchor accents.
 	var city_tile_button_script = load("res://scripts/world/city_tile_button.gd")
 	for footprint_cells in [1, 2, 3]:
-		for is_construction in [false, true]:
-			var cell = city_tile_button_script.new()
-			cell.size = Vector2(70, 70)
-			cell.set_tile({
-				"index": 1,
-				"building_name": "學校" if not is_construction else "",
-				"footprint_role": "anchor",
-				"footprint_index": 0,
-				"footprint_count": footprint_cells,
-				"construction": {"workload": 100.0, "remaining_work": 50.0} if is_construction else {},
-			})
-			var geometry: Dictionary = cell.get_footprint_render_geometry()
-			var primitives: Array = geometry.get("primitive_bounds", [])
-			if footprint_cells == 1 and not is_construction:
-				_check(primitives.is_empty(), "single-cell completed buildings retain the existing single-tile renderer")
-			else:
-				_check(not primitives.is_empty(), "%d-cell %s renderer exposes concrete draw geometry" % [footprint_cells, "construction" if is_construction else "completed"])
-			_check(bool(geometry.get("all_primitives_within_tile", false)), "%d-cell %s draw primitives remain inside the tile hit bounds" % [footprint_cells, "construction" if is_construction else "completed"])
-			cell.free()
+		var roles := ["anchor"] if footprint_cells == 1 else ["anchor", "secondary"]
+		for role: String in roles:
+			var footprint_index := 0 if role == "anchor" else 1
+			for profile_case: Dictionary in [
+				{"name": "工廠", "profile": "industrial", "customization": {"variant": 0}},
+				{"name": "市政府", "profile": "civic", "customization": {"roof": 1}},
+			]:
+				for animation_seconds in [0.0, 1.0, 3.0]:
+					var cell = city_tile_button_script.new()
+					cell.size = Vector2(70, 70)
+					cell.set_tile({
+						"index": 1,
+						"building_name": str(profile_case["name"]),
+						"footprint_role": role,
+						"footprint_index": footprint_index,
+						"footprint_count": footprint_cells,
+						"customization": Dictionary(profile_case["customization"]),
+					})
+					cell.debug_set_animation_time(animation_seconds)
+					var geometry: Dictionary = cell.get_footprint_render_geometry()
+					var primitives: Array = geometry.get("primitive_bounds", [])
+					_check(not primitives.is_empty(), "%d-cell %s %s anchor/segment renderer exposes concrete geometry at %.1fs" % [footprint_cells, role, str(profile_case["profile"]), animation_seconds])
+					_check(bool(geometry.get("all_primitives_within_tile", false)), "%d-cell %s %s primitive bounds stay inside its 70px hit tile at %.1fs" % [footprint_cells, role, str(profile_case["profile"]), animation_seconds])
+					cell.free()
+			for animation_seconds in [0.0, 1.0, 3.0]:
+				var construction_cell = city_tile_button_script.new()
+				construction_cell.size = Vector2(70, 70)
+				construction_cell.set_tile({
+					"index": 1,
+					"footprint_role": role,
+					"footprint_index": footprint_index,
+					"footprint_count": footprint_cells,
+					"construction": {"workload": 100.0, "remaining_work": 50.0},
+				})
+				construction_cell.debug_set_animation_time(animation_seconds)
+				var construction_geometry: Dictionary = construction_cell.get_footprint_render_geometry()
+				_check(not Array(construction_geometry.get("primitive_bounds", [])).is_empty(), "%d-cell %s construction exposes foundation plus relevant anchor geometry at %.1fs" % [footprint_cells, role, animation_seconds])
+				_check(bool(construction_geometry.get("all_primitives_within_tile", false)), "%d-cell %s construction primitives stay inside its 70px hit tile at %.1fs" % [footprint_cells, role, animation_seconds])
+				construction_cell.free()
 
 
 func _test_preview_groups(main) -> void:
