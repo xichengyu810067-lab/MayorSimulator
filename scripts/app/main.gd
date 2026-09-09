@@ -638,8 +638,10 @@ func _build_ui() -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST and is_inside_tree():
 		_request_application_quit()
-	elif what == NOTIFICATION_APPLICATION_FOCUS_OUT and vertical_slice != null:
-		vertical_slice.set_time_paused(true)
+	elif what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+		_npc_keyboard_dismiss_waiting_for_cancel_release = false
+		if vertical_slice != null:
+			vertical_slice.set_time_paused(true)
 	elif what == NOTIFICATION_APPLICATION_FOCUS_IN and vertical_slice != null:
 		_sync_time_pause_for_ui()
 

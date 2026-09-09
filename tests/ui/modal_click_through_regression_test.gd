@@ -210,6 +210,50 @@ func _verify_npc_dialogue_keyboard_dismiss_keeps_building_placement(main) -> voi
 	main.call("_cancel_building_placement", false)
 	await _settle(2)
 
+	main.call("_enter_building_placement", BUILDING_NAME)
+	await _settle(2)
+	_check(main.placement_mode_active, "building placement did not restart after normal Escape key-up")
+	var fresh_escape_after_release := InputEventKey.new()
+	fresh_escape_after_release.keycode = KEY_ESCAPE
+	fresh_escape_after_release.pressed = true
+	root.push_input(fresh_escape_after_release, true)
+	await _settle(2)
+	_check(not main.placement_mode_active, "normal key-up left the next fresh Escape blocked")
+	var fresh_escape_release := InputEventKey.new()
+	fresh_escape_release.keycode = KEY_ESCAPE
+	fresh_escape_release.pressed = false
+	root.push_input(fresh_escape_release, true)
+
+	main.call("_enter_building_placement", BUILDING_NAME)
+	await _settle(2)
+	main.debug_show_npc_dialogue(0)
+	await _settle(3)
+	card = main.get_npc_dialogue_card_control() as Control
+	_check(card != null and card.visible, "NPC dialogue did not reopen for focus-loss dismissal")
+	if card == null or not card.visible:
+		return
+	var focus_escape := InputEventKey.new()
+	focus_escape.keycode = KEY_ESCAPE
+	focus_escape.pressed = true
+	root.push_input(focus_escape, true)
+	_check(not card.visible, "Escape did not close the NPC dialogue before focus loss")
+	main.notification(NOTIFICATION_APPLICATION_FOCUS_OUT)
+	await _settle(2)
+	main.notification(NOTIFICATION_APPLICATION_FOCUS_IN)
+	await _settle(2)
+	# The old key-up is intentionally absent: focus loss is the lifecycle boundary.
+	var fresh_escape_after_focus := InputEventKey.new()
+	fresh_escape_after_focus.keycode = KEY_ESCAPE
+	fresh_escape_after_focus.pressed = true
+	root.push_input(fresh_escape_after_focus, true)
+	await _settle(2)
+	_check(not main.placement_mode_active, "focus loss without the old key-up left the next fresh Escape blocked")
+	var focus_escape_release := InputEventKey.new()
+	focus_escape_release.keycode = KEY_ESCAPE
+	focus_escape_release.pressed = false
+	root.push_input(focus_escape_release, true)
+	await _settle(2)
+
 
 func _click_at_without_motion(position: Vector2) -> void:
 	var down := InputEventMouseButton.new()
