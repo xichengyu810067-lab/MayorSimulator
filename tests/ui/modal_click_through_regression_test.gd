@@ -212,6 +212,37 @@ func _verify_npc_dialogue_keyboard_dismiss_keeps_building_placement(main) -> voi
 
 	main.call("_enter_building_placement", BUILDING_NAME)
 	await _settle(2)
+	main.debug_show_npc_dialogue(0)
+	await _settle(3)
+	card = main.get_npc_dialogue_card_control() as Control
+	_check(card != null and card.visible, "NPC dialogue did not reopen for native Escape ordering")
+	if card == null or not card.visible:
+		return
+	var native_escape_down := InputEventKey.new()
+	native_escape_down.keycode = KEY_ESCAPE
+	native_escape_down.pressed = true
+	root.push_input(native_escape_down, true)
+	_check(not card.visible, "native Escape ordering did not close the NPC dialogue")
+	var native_escape_up := InputEventKey.new()
+	native_escape_up.keycode = KEY_ESCAPE
+	native_escape_up.pressed = false
+	root.push_input(native_escape_up, true)
+	var duplicate_escape_down := InputEventKey.new()
+	duplicate_escape_down.keycode = KEY_ESCAPE
+	duplicate_escape_down.pressed = true
+	root.push_input(duplicate_escape_down, true)
+	await _settle(2)
+	_check(main.placement_mode_active, "a second Escape press in the dismiss frame cancelled building placement")
+	_check(main.placement_banner.visible, "a second Escape press in the dismiss frame hid the placement banner")
+	var duplicate_escape_release := InputEventKey.new()
+	duplicate_escape_release.keycode = KEY_ESCAPE
+	duplicate_escape_release.pressed = false
+	root.push_input(duplicate_escape_release, true)
+	main.call("_cancel_building_placement", false)
+	await _settle(2)
+
+	main.call("_enter_building_placement", BUILDING_NAME)
+	await _settle(2)
 	_check(main.placement_mode_active, "building placement did not restart after normal Escape key-up")
 	var fresh_escape_after_release := InputEventKey.new()
 	fresh_escape_after_release.keycode = KEY_ESCAPE

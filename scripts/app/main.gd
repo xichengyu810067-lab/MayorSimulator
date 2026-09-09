@@ -316,6 +316,7 @@ var _qa_release_smoke_active := false
 var _qa_release_smoke_frames_remaining := -1
 var _modal_grid_intent_block_until_process_frame := -1
 var _npc_keyboard_dismiss_waiting_for_cancel_release := false
+var _npc_keyboard_dismiss_block_cancel_until_process_frame := -1
 var _start_save_path := ""
 var start_save_path: String:
 	get:
@@ -640,6 +641,7 @@ func _notification(what: int) -> void:
 		_request_application_quit()
 	elif what == NOTIFICATION_APPLICATION_FOCUS_OUT:
 		_npc_keyboard_dismiss_waiting_for_cancel_release = false
+		_npc_keyboard_dismiss_block_cancel_until_process_frame = -1
 		if vertical_slice != null:
 			vertical_slice.set_time_paused(true)
 	elif what == NOTIFICATION_APPLICATION_FOCUS_IN and vertical_slice != null:
@@ -667,9 +669,9 @@ func _input(event: InputEvent) -> void:
 		_npc_keyboard_dismiss_waiting_for_cancel_release = false
 		get_viewport().set_input_as_handled()
 		return
-	if (
+	if event.is_action_pressed("ui_cancel") and (
 		_npc_keyboard_dismiss_waiting_for_cancel_release
-		and event.is_action_pressed("ui_cancel")
+		or Engine.get_process_frames() <= _npc_keyboard_dismiss_block_cancel_until_process_frame
 	):
 		get_viewport().set_input_as_handled()
 		return
@@ -3002,6 +3004,7 @@ func _dismiss_npc_dialogue_from_pointer() -> void:
 
 func _dismiss_npc_dialogue_from_keyboard() -> void:
 	_npc_keyboard_dismiss_waiting_for_cancel_release = true
+	_npc_keyboard_dismiss_block_cancel_until_process_frame = Engine.get_process_frames() + 1
 	get_viewport().set_input_as_handled()
 	_hide_npc_dialogue()
 
