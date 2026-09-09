@@ -61,6 +61,7 @@ func _run() -> void:
 	await _verify_npc_dialogue_planning_barrier(main, false)
 	await _verify_npc_dialogue_planning_barrier(main, true)
 	await _verify_npc_dialogue_keyboard_dismiss_keeps_building_placement(main)
+	await _verify_npc_dialogue_timeout_boundary(main)
 
 	var exit_code := 1 if _failed else 0
 	if not _failed:
@@ -212,37 +213,6 @@ func _verify_npc_dialogue_keyboard_dismiss_keeps_building_placement(main) -> voi
 
 	main.call("_enter_building_placement", BUILDING_NAME)
 	await _settle(2)
-	main.debug_show_npc_dialogue(0)
-	await _settle(3)
-	card = main.get_npc_dialogue_card_control() as Control
-	_check(card != null and card.visible, "NPC dialogue did not reopen for native Escape ordering")
-	if card == null or not card.visible:
-		return
-	var native_escape_down := InputEventKey.new()
-	native_escape_down.keycode = KEY_ESCAPE
-	native_escape_down.pressed = true
-	root.push_input(native_escape_down, true)
-	_check(not card.visible, "native Escape ordering did not close the NPC dialogue")
-	var native_escape_up := InputEventKey.new()
-	native_escape_up.keycode = KEY_ESCAPE
-	native_escape_up.pressed = false
-	root.push_input(native_escape_up, true)
-	var duplicate_escape_down := InputEventKey.new()
-	duplicate_escape_down.keycode = KEY_ESCAPE
-	duplicate_escape_down.pressed = true
-	root.push_input(duplicate_escape_down, true)
-	await _settle(2)
-	_check(main.placement_mode_active, "a second Escape press in the dismiss frame cancelled building placement")
-	_check(main.placement_banner.visible, "a second Escape press in the dismiss frame hid the placement banner")
-	var duplicate_escape_release := InputEventKey.new()
-	duplicate_escape_release.keycode = KEY_ESCAPE
-	duplicate_escape_release.pressed = false
-	root.push_input(duplicate_escape_release, true)
-	main.call("_cancel_building_placement", false)
-	await _settle(2)
-
-	main.call("_enter_building_placement", BUILDING_NAME)
-	await _settle(2)
 	_check(main.placement_mode_active, "building placement did not restart after normal Escape key-up")
 	var fresh_escape_after_release := InputEventKey.new()
 	fresh_escape_after_release.keycode = KEY_ESCAPE
@@ -302,6 +272,66 @@ func _click_at_without_motion(position: Vector2) -> void:
 	up.pressed = false
 	up.position = position
 	up.global_position = position
+	root.push_input(up, true)
+	await _settle(2)
+
+
+func _verify_npc_dialogue_timeout_boundary(main) -> void:
+	const BUILDING_NAME := "加油站"
+	var timeout_delta := float(main.NPC_DIALOGUE_DURATION_SECONDS) + 0.1
+
+	main.debug_show_npc_dialogue(0)
+	await _settle(2)
+	var card := main.get_npc_dialogue_card_control() as Control
+	_check(card != null and card.visible, "NPC dialogue did not open for idle timeout verification")
+	if card == null or not card.visible:
+		return
+	main.call("_update_ambient", timeout_delta)
+	_check(not card.visible, "NPC dialogue no longer auto-times out outside a map action")
+
+	main.call("_enter_building_placement", BUILDING_NAME)
+	await _settle(2)
+	main.debug_show_npc_dialogue(0)
+	await _settle(2)
+	card = main.get_npc_dialogue_card_control() as Control
+	_check(card != null and card.visible, "NPC dialogue did not open above building placement for timeout verification")
+	if card == null or not card.visible:
+		return
+	main.call("_update_ambient", timeout_delta)
+	_check(card.visible, "NPC dialogue auto-timed out during active building placement")
+	await _press_escape_once()
+	_check(not card.visible, "Escape did not close the retained NPC dialogue above building placement")
+	_check(main.placement_mode_active, "Escape reached building placement after retained NPC dialogue dismissal")
+	_check(main.placement_banner.visible, "Escape hid the building placement banner after retained NPC dialogue dismissal")
+	main.call("_cancel_building_placement", false)
+	await _settle(2)
+
+	main.call("_on_transport_infrastructure_requested", "road", "build")
+	await _settle(2)
+	main.debug_show_npc_dialogue(0)
+	await _settle(2)
+	card = main.get_npc_dialogue_card_control() as Control
+	_check(card != null and card.visible, "NPC dialogue did not open above transport planning for timeout verification")
+	if card == null or not card.visible:
+		return
+	main.call("_update_ambient", timeout_delta)
+	_check(card.visible, "NPC dialogue auto-timed out during active transport planning")
+	await _press_escape_once()
+	_check(not card.visible, "Escape did not close the retained NPC dialogue above transport planning")
+	_check(main.map_action_mode == "transport_infrastructure", "Escape reached transport planning after retained NPC dialogue dismissal")
+	_check(main.transport_plan_kind == "road" and main.transport_plan_operation == "build", "Escape changed the retained transport planning action")
+	main.call("_clear_transport_map_action")
+	await _settle(2)
+
+
+func _press_escape_once() -> void:
+	var down := InputEventKey.new()
+	down.keycode = KEY_ESCAPE
+	down.pressed = true
+	root.push_input(down, true)
+	var up := InputEventKey.new()
+	up.keycode = KEY_ESCAPE
+	up.pressed = false
 	root.push_input(up, true)
 	await _settle(2)
 

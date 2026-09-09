@@ -316,7 +316,6 @@ var _qa_release_smoke_active := false
 var _qa_release_smoke_frames_remaining := -1
 var _modal_grid_intent_block_until_process_frame := -1
 var _npc_keyboard_dismiss_waiting_for_cancel_release := false
-var _npc_keyboard_dismiss_block_cancel_until_process_frame := -1
 var _start_save_path := ""
 var start_save_path: String:
 	get:
@@ -641,7 +640,6 @@ func _notification(what: int) -> void:
 		_request_application_quit()
 	elif what == NOTIFICATION_APPLICATION_FOCUS_OUT:
 		_npc_keyboard_dismiss_waiting_for_cancel_release = false
-		_npc_keyboard_dismiss_block_cancel_until_process_frame = -1
 		if vertical_slice != null:
 			vertical_slice.set_time_paused(true)
 	elif what == NOTIFICATION_APPLICATION_FOCUS_IN and vertical_slice != null:
@@ -669,9 +667,9 @@ func _input(event: InputEvent) -> void:
 		_npc_keyboard_dismiss_waiting_for_cancel_release = false
 		get_viewport().set_input_as_handled()
 		return
-	if event.is_action_pressed("ui_cancel") and (
+	if (
 		_npc_keyboard_dismiss_waiting_for_cancel_release
-		or Engine.get_process_frames() <= _npc_keyboard_dismiss_block_cancel_until_process_frame
+		and event.is_action_pressed("ui_cancel")
 	):
 		get_viewport().set_input_as_handled()
 		return
@@ -2748,7 +2746,11 @@ func _update_ambient(delta: float) -> void:
 	ambient_time += delta
 	if weather_visual_layer != null and vertical_slice != null:
 		weather_visual_layer.set_game_day(vertical_slice.game_day())
-	if _npc_dialogue_remaining_seconds > 0.0:
+	if (
+		_npc_dialogue_remaining_seconds > 0.0
+		and not placement_mode_active
+		and not _is_transport_map_action_active()
+	):
 		_npc_dialogue_remaining_seconds = maxf(0.0, _npc_dialogue_remaining_seconds - delta)
 		if _npc_dialogue_remaining_seconds <= 0.0:
 			_hide_npc_dialogue()
@@ -3004,7 +3006,6 @@ func _dismiss_npc_dialogue_from_pointer() -> void:
 
 func _dismiss_npc_dialogue_from_keyboard() -> void:
 	_npc_keyboard_dismiss_waiting_for_cancel_release = true
-	_npc_keyboard_dismiss_block_cancel_until_process_frame = Engine.get_process_frames() + 1
 	get_viewport().set_input_as_handled()
 	_hide_npc_dialogue()
 
