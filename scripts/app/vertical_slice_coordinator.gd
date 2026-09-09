@@ -1683,6 +1683,19 @@ func adjust_population(delta: int, reason_tag: String, address_id: String = "") 
 	_emit_changed()
 	return result
 
+
+func match_population_jobs(open_jobs: Array[Dictionary]) -> Array[Dictionary]:
+	if population == null:
+		return []
+	var matches: Array[Dictionary] = population.match_open_jobs(open_jobs, game_day())
+	if matches.is_empty():
+		return matches
+	# Employment is part of the canonical NPC record. Keep the runtime-only
+	# CityState lookup exact at the same boundary that mutates those records, so
+	# the fail-closed save gate never observes a partially mirrored population.
+	_sync_population_to_core("population.job_matched")
+	return matches
+
 func start_demolition(tile_index: int, worker_count: int) -> Dictionary:
 	if governance.has_failed():
 		return _terminal_command_error()
@@ -2133,9 +2146,40 @@ func save_game(path: String = "") -> Error:
 	_stash_subsystems()
 	var resolved_path := path if not path.is_empty() else save_path
 	var error: Error = session.save_now(resolved_path)
-	last_save_message = "已儲存：第 %d 年 %d 月 %d 日" % [current_date()["year"], current_date()["month"], current_date()["day"]] if error == OK else "儲存失敗（錯誤 %d）" % error
+	if error == OK:
+		last_save_message = "已儲存：第 %d 年 %d 月 %d 日" % [current_date()["year"], current_date()["month"], current_date()["day"]]
+	else:
+		last_save_message = "儲存失敗（錯誤 %d）｜%s" % [error, _save_failure_hint()]
+		var diagnostic_code := _save_failure_code()
+		if not diagnostic_code.is_empty():
+			# Expected negative-path tests deliberately provoke save failures. Keep a
+			# data-free diagnostic in stdout without converting the handled error into
+			# an engine warning that release gates would treat as an unhandled defect.
+			print("SAVE_FAILURE error=%d reason=%s" % [error, diagnostic_code])
 	_emit_changed()
 	return error
+
+
+func _save_failure_hint() -> String:
+	var diagnostic := str(session.save_service.last_error_message)
+	if diagnostic.contains("runtime NPC data"):
+		return "人口資料同步不一致，請保留目前畫面並重試。"
+	if diagnostic.contains("semantically inconsistent"):
+		return "存檔狀態驗證未通過，請保留目前畫面並重試。"
+	return "存檔寫入或驗證失敗，請保留目前畫面並重試。"
+
+
+func _save_failure_code() -> String:
+	var diagnostic := str(session.save_service.last_error_message)
+	if diagnostic.contains("runtime NPC data"):
+		return "runtime_population_mismatch"
+	if diagnostic.contains("semantically inconsistent"):
+		return "semantic_snapshot_invalid"
+	if diagnostic.contains("temporary") or diagnostic.contains("Temporary"):
+		return "temporary_write_or_verification_failed"
+	if diagnostic.is_empty():
+		return ""
+	return "save_io_or_verification_failed"
 
 func has_save_game(path: String = "") -> bool:
 	var resolved_path := path if not path.is_empty() else save_path

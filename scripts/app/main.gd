@@ -6419,7 +6419,7 @@ func _match_available_jobs() -> Array[Dictionary]:
 		CELL_COUNT,
 		_active_law_value("job_attraction")
 	)
-	return vertical_slice.population.match_open_jobs(open_jobs, vertical_slice.game_day())
+	return vertical_slice.match_population_jobs(open_jobs)
 
 
 func _job_sector_for_building(building_name: String) -> String:
