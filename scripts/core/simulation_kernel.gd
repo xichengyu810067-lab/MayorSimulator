@@ -106,6 +106,30 @@ func process_next() -> Array:
 				))
 		"upsert_building":
 			events.append(_upsert_record(command, "building.upserted", "building_id"))
+		"complete_building_construction":
+			var building_id := str(command.payload.get("building_id", ""))
+			var job_id := str(command.payload.get("job_id", ""))
+			var record_value: Variant = command.payload.get("record", null)
+			if building_id.is_empty():
+				events.append(_rejected(command, "building_id_required"))
+			elif job_id.is_empty():
+				events.append(_rejected(command, "job_id_required"))
+			elif not record_value is Dictionary:
+				events.append(_rejected(command, "building_record_required"))
+			elif not state.construction_jobs.has(job_id):
+				events.append(_rejected(command, "construction_job_required"))
+			else:
+				var record: Dictionary = (record_value as Dictionary).duplicate(true)
+				record["building_id"] = building_id
+				events.append(_emit(
+					"building.construction_completed",
+					state.game_time,
+					building_id,
+					null,
+					str(command.payload.get("reason_tag", "building.construction_completed")),
+					{"record": record, "job_id": job_id},
+					command.operation_id
+				))
 		"remove_building":
 			events.append(_remove_record(command, "building.removed", "building_id"))
 		"upsert_construction":

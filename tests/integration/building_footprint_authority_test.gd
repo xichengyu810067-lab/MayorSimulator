@@ -49,6 +49,7 @@ func _initialize() -> void:
 	_test_natural_obstacle_feedback_for_every_footprint_cell()
 	_test_current_existing_registration_contract()
 	_test_atomic_placement_and_single_building_identity()
+	_test_atomic_completion_observer_state()
 	_test_save_load_and_secondary_cell_lifecycle()
 	if _failed:
 		quit(1)
@@ -323,6 +324,61 @@ func _test_current_existing_registration_contract() -> void:
 		_check(str(coordinator.get_building_by_tile(int(tile_variant)).get("building_id", "")) == str(record.get("building_id", "")), "current existing-building occupied cells share one identity")
 
 
+func _test_atomic_completion_observer_state() -> void:
+	for scenario_variant: Variant in FOOTPRINT_SCENARIOS:
+		var scenario: Dictionary = scenario_variant
+		var coordinator = VerticalSliceCoordinatorScript.new(20_261_000 + int(scenario.get("cell_count", 0)), 50_000_000)
+		var cell_count := int(scenario.get("cell_count", 0))
+		var display_name := str(scenario.get("display_name", ""))
+		var run := _find_available_flat_run(coordinator, cell_count)
+		_check(not run.is_empty(), "%s atomic completion fixture finds a legal footprint" % display_name)
+		if run.is_empty():
+			continue
+		var started: Dictionary = coordinator.start_approved_building(display_name, int(run.get("anchor", -1)), 20)
+		_check(bool(started.get("ok", false)), "%s atomic completion fixture starts" % display_name)
+		if not bool(started.get("ok", false)):
+			continue
+		var job_id := str(started.get("job", {}).get("id", ""))
+		var observed_states: Array[Dictionary] = []
+		var completion_observer := func(event) -> void:
+			if str(event.event_type) not in ["building.upserted", "building.construction_completed"]:
+				return
+			var record: Dictionary = event.payload.get("record", {})
+			if str(record.get("building_name", "")) != display_name:
+				return
+			observed_states.append({
+				"event_type": str(event.event_type),
+				"building_present": coordinator.session.state.buildings.has(str(record.get("building_id", ""))),
+				"construction_present": coordinator.session.state.construction_jobs.has(job_id),
+			})
+		coordinator.session.domain_event.connect(completion_observer)
+		_complete_job(coordinator, started)
+		coordinator.session.domain_event.disconnect(completion_observer)
+		_check(observed_states.size() == 1, "%s completion emits one observable building authority transition" % display_name)
+		if observed_states.size() == 1:
+			var observed: Dictionary = observed_states[0]
+			_check(bool(observed.get("building_present", false)) and not bool(observed.get("construction_present", true)), "%s completion never exposes completed building authority beside its old construction job: %s" % [display_name, observed])
+		for tile_variant: Variant in run.get("tiles", []):
+			var tile_id := int(tile_variant)
+			_check(coordinator.active_construction_for_tile(tile_id).is_empty(), "%s completion clears construction from occupied tile %d" % [display_name, tile_id])
+			_check(not coordinator.get_building_by_tile(tile_id).is_empty(), "%s completion activates occupied tile %d" % [display_name, tile_id])
+		_check(not coordinator.session.state.construction_jobs.has(job_id), "%s completion removes its core construction mirror" % display_name)
+		var completed_building_count: int = coordinator.session.state.buildings.size()
+		var days_to_next_month := 31 - int(coordinator.current_date().get("day", 1))
+		var later_events: Array[Dictionary] = coordinator.advance_days(days_to_next_month, CITY_CONTEXT, false)
+		_check(not _ui_event_seen(later_events, "building_completed"), "%s later day/month ticks do not repeat completion" % display_name)
+		_check(coordinator.session.state.buildings.size() == completed_building_count, "%s later day/month ticks do not duplicate building authority" % display_name)
+		var save_path := "user://tests/building_footprint_atomic_%s.json" % str(scenario.get("size", "unknown"))
+		_check(coordinator.save_game(save_path) == OK, "%s completed atomic state saves" % display_name)
+		var reloaded = VerticalSliceCoordinatorScript.new(20_262_000 + cell_count, 1)
+		_check(reloaded.load_game(save_path), "%s completed atomic state reloads" % display_name)
+		_check(not reloaded.session.state.construction_jobs.has(job_id), "%s reload does not resurrect the completed construction mirror" % display_name)
+		for tile_variant: Variant in run.get("tiles", []):
+			var tile_id := int(tile_variant)
+			_check(reloaded.active_construction_for_tile(tile_id).is_empty(), "%s reload keeps occupied tile %d out of construction" % [display_name, tile_id])
+			_check(not reloaded.get_building_by_tile(tile_id).is_empty(), "%s reload restores occupied building tile %d" % [display_name, tile_id])
+
+
 func _test_save_load_and_secondary_cell_lifecycle() -> void:
 	var medium_source = VerticalSliceCoordinatorScript.new(20_260_903, 50_000_000)
 	var medium_run := _find_available_flat_run(medium_source, 2)
@@ -470,6 +526,13 @@ func _as_int_array(value: Variant) -> Array[int]:
 		for item: Variant in value:
 			result.append(int(item))
 	return result
+
+
+func _ui_event_seen(events: Array[Dictionary], event_type: String) -> bool:
+	for event: Dictionary in events:
+		if str(event.get("type", "")) == event_type:
+			return true
+	return false
 
 
 func _assert_no_placement_mutation(

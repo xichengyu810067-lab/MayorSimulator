@@ -118,6 +118,16 @@ func apply_event(event) -> bool:
 				)
 		"building.upserted":
 			buildings[event.subject_id] = event.payload.get("record", event.payload).duplicate(true)
+		"building.construction_completed":
+			var completed_record_value: Variant = event.payload.get("record", null)
+			var completed_job_id := str(event.payload.get("job_id", ""))
+			if event.subject_id.is_empty() or completed_job_id.is_empty() or not completed_record_value is Dictionary:
+				accepted = false
+			else:
+				var completed_record: Dictionary = (completed_record_value as Dictionary).duplicate(true)
+				completed_record["building_id"] = event.subject_id
+				construction_jobs.erase(completed_job_id)
+				buildings[event.subject_id] = completed_record
 		"building.removed":
 			buildings.erase(event.subject_id)
 		"construction.upserted":

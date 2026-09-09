@@ -2376,12 +2376,24 @@ func _handle_construction_fact(event: Dictionary) -> bool:
 			"engineering_fee": maxi(300, int((definition.base_cost if definition != null else 1000) * 0.1)),
 			"metadata": metadata
 		})
-		_upsert_building(record, "building.construction_completed")
+		var completion_events: Array = session.submit_command("complete_building_construction", {
+			"building_id": instance_id,
+			"job_id": job_id,
+			"record": record,
+			"reason_tag": "building.construction_completed",
+		}, _operation_id("building_complete"))
+		if completion_events.is_empty() or str(completion_events[0].event_type) != "building.construction_completed":
+			_push_ui_event("building_completion_failed", {
+				"job_id": job_id,
+				"error": "building_authority_transition_failed",
+			})
+			return false
 		_register_transport_station_for_building(record)
 		if transport_planning_session != null:
 			transport_planning_session.mark_job_completed(job_id, instance_id)
 		_try_materialize_completed_transport_package()
 		_push_ui_event("building_completed", record)
+		return true
 	elif operation == "demolish":
 		var target_id := str(job.get("target_id", ""))
 		var building_record: Dictionary = session.state.buildings.get(target_id, {})
