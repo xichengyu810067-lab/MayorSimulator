@@ -60,7 +60,7 @@ func _run() -> void:
 
 	await _verify_npc_dialogue_planning_barrier(main, false)
 	await _verify_npc_dialogue_planning_barrier(main, true)
-	await _verify_npc_dialogue_keyboard_dismiss_keeps_next_click(main)
+	await _verify_npc_dialogue_keyboard_dismiss_keeps_building_placement(main)
 
 	var exit_code := 1 if _failed else 0
 	if not _failed:
@@ -160,11 +160,14 @@ func _verify_npc_dialogue_planning_barrier(main, inject_on_next_frame: bool) -> 
 	await _settle(2)
 
 
-func _verify_npc_dialogue_keyboard_dismiss_keeps_next_click(main) -> void:
-	main.call("_on_transport_infrastructure_requested", "road", "build")
+func _verify_npc_dialogue_keyboard_dismiss_keeps_building_placement(main) -> void:
+	const BUILDING_NAME := "加油站"
+	main.call("_enter_building_placement", BUILDING_NAME)
 	await _settle(2)
-	var target_tile_index := _first_quoteable_road_tile(main)
-	_check(target_tile_index >= 0, "could not find a quoteable road tile for keyboard dismissal")
+	_check(main.placement_mode_active, "gas-station building placement did not start")
+	_check(main.placement_banner.visible, "gas-station building placement banner did not open")
+	var target_tile_index := _first_placeable_building_tile(main, BUILDING_NAME)
+	_check(target_tile_index >= 0, "could not find a placeable gas-station tile for keyboard dismissal")
 	if target_tile_index < 0:
 		return
 	var target_tile := main.grid_buttons[target_tile_index] as Button
@@ -187,16 +190,24 @@ func _verify_npc_dialogue_keyboard_dismiss_keeps_next_click(main) -> void:
 	root.push_input(escape, true)
 	_check(not card.visible, "Escape did not close the NPC dialogue")
 	_check(main.get_node_or_null("ModalPointerGuard") == null, "Escape incorrectly armed a pointer guard")
+	await _settle(4)
+	# One physical key lifecycle must be idempotent if the same pressed event is
+	# delivered again before its release reaches Main.
+	root.push_input(escape, true)
+	await _settle(4)
+	_check(main.placement_mode_active, "Escape dismissal cancelled building placement on a later process frame")
+	_check(main.placement_banner.visible, "Escape dismissal hid the building placement banner on a later process frame")
 	var grid_presses_before := _grid_press_count
 	await _click_at_without_motion(click_position)
 	_check(_grid_press_count == grid_presses_before + 1, "Escape swallowed the unmoved pointer's next tile click")
-	_check(main.transport_plan_tiles == [target_tile_index], "the tile click after Escape did not update the real road plan")
+	_check(int(main.get("_pending_construction_tile")) == target_tile_index, "the tile click after Escape did not select the real building site")
+	_check(main.construction_confirmation.is_open(), "the tile click after Escape did not open the building confirmation")
 
 	var escape_release := InputEventKey.new()
 	escape_release.keycode = KEY_ESCAPE
 	escape_release.pressed = false
 	root.push_input(escape_release, true)
-	main.call("_clear_transport_map_action")
+	main.call("_cancel_building_placement", false)
 	await _settle(2)
 
 
@@ -228,6 +239,19 @@ func _first_quoteable_road_tile(main) -> int:
 			"road", "build", [tile_index], 5, main.city_grid
 		)
 		if bool(quote.get("ok", false)):
+			return tile_index
+	return -1
+
+
+func _first_placeable_building_tile(main, building_name: String) -> int:
+	var workers := 5
+	if main.vertical_slice_panel != null:
+		workers = int(main.vertical_slice_panel.selected_worker_count())
+	for tile_index in main.grid_buttons.size():
+		if not bool(main.call("_is_tile_inside_hud_safe_area", tile_index)):
+			continue
+		var quote: Dictionary = main.vertical_slice.placement_footprint_quote(building_name, tile_index, workers)
+		if bool(quote.get("ok", false)) and bool(quote.get("can_afford", false)):
 			return tile_index
 	return -1
 

@@ -315,6 +315,7 @@ var _quit_shutdown_in_progress := false
 var _qa_release_smoke_active := false
 var _qa_release_smoke_frames_remaining := -1
 var _modal_grid_intent_block_until_process_frame := -1
+var _npc_keyboard_dismiss_waiting_for_cancel_release := false
 var _start_save_path := ""
 var start_save_path: String:
 	get:
@@ -657,6 +658,19 @@ func _sync_time_pause_for_ui() -> void:
 
 
 func _input(event: InputEvent) -> void:
+	if (
+		_npc_keyboard_dismiss_waiting_for_cancel_release
+		and event.is_action_released("ui_cancel")
+	):
+		_npc_keyboard_dismiss_waiting_for_cancel_release = false
+		get_viewport().set_input_as_handled()
+		return
+	if (
+		_npc_keyboard_dismiss_waiting_for_cancel_release
+		and event.is_action_pressed("ui_cancel")
+	):
+		get_viewport().set_input_as_handled()
+		return
 	if (
 		event.is_action_pressed("ui_cancel")
 		and is_instance_valid(npc_dialogue_card)
@@ -2985,6 +2999,7 @@ func _dismiss_npc_dialogue_from_pointer() -> void:
 
 
 func _dismiss_npc_dialogue_from_keyboard() -> void:
+	_npc_keyboard_dismiss_waiting_for_cancel_release = true
 	get_viewport().set_input_as_handled()
 	_hide_npc_dialogue()
 
