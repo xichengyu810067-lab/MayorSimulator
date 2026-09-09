@@ -30,6 +30,7 @@ func _run() -> void:
 
 	_test_capture_argument_contract()
 	_test_cross_catalog_canonical_order()
+	_test_footprint_render_geometry_bounds()
 	_test_preview_groups(main)
 	_test_completed_visuals_selection_and_navigation(main)
 	_test_large_construction_completion_load_and_demolition(main)
@@ -177,6 +178,33 @@ func _test_cross_catalog_canonical_order() -> void:
 			cell.free()
 
 
+func _test_footprint_render_geometry_bounds() -> void:
+	# Use the same compact tile size that exposed the original bleed.  This is a
+	# geometry check over the renderer's shared draw helpers, not a self-reported
+	# visual flag, and covers completed plus active construction for all tiers.
+	var city_tile_button_script = load("res://scripts/world/city_tile_button.gd")
+	for footprint_cells in [1, 2, 3]:
+		for is_construction in [false, true]:
+			var cell = city_tile_button_script.new()
+			cell.size = Vector2(70, 70)
+			cell.set_tile({
+				"index": 1,
+				"building_name": "學校" if not is_construction else "",
+				"footprint_role": "anchor",
+				"footprint_index": 0,
+				"footprint_count": footprint_cells,
+				"construction": {"workload": 100.0, "remaining_work": 50.0} if is_construction else {},
+			})
+			var geometry: Dictionary = cell.get_footprint_render_geometry()
+			var primitives: Array = geometry.get("primitive_bounds", [])
+			if footprint_cells == 1 and not is_construction:
+				_check(primitives.is_empty(), "single-cell completed buildings retain the existing single-tile renderer")
+			else:
+				_check(not primitives.is_empty(), "%d-cell %s renderer exposes concrete draw geometry" % [footprint_cells, "construction" if is_construction else "completed"])
+			_check(bool(geometry.get("all_primitives_within_tile", false)), "%d-cell %s draw primitives remain inside the tile hit bounds" % [footprint_cells, "construction" if is_construction else "completed"])
+			cell.free()
+
+
 func _test_preview_groups(main) -> void:
 	var size_cases := {
 		"公園": 1,
@@ -251,7 +279,9 @@ func _test_completed_visuals_selection_and_navigation(main) -> void:
 			_check(str(visual.get("role", "")) == ("anchor" if occupied_index == 0 else "secondary"), "completed visual assigns an explicit footprint role")
 			_check(bool(visual.get("draws_footprint_segment", false)), "completed footprint renders a non-empty segment in every occupied cell")
 			_check(str(visual.get("visual_coverage_mode", "")) == ("full_footprint_segments" if occupied.size() > 1 else "single_cell"), "completed footprint reports the correct full-cell coverage mode")
-			_check(int(visual.get("segment_source_index", -1)) == occupied_index and bool(visual.get("segment_clipped_to_tile", false)), "completed footprint keeps each visual source segment inside its matching hit tile")
+			var completed_geometry: Dictionary = main.grid_buttons[tile_id].get_footprint_render_geometry()
+			_check(int(visual.get("segment_source_index", -1)) == occupied_index, "completed footprint selects the matching visual source segment")
+			_check(bool(completed_geometry.get("all_primitives_within_tile", false)), "completed footprint draw geometry is clipped to its matching hit tile")
 			_check(bool(visual.get("draws_primary_body", false)) == (occupied_index == 0), "completed footprint retains one anchor-owned accent body")
 			_check(not main.get_npc_navigation_grid().is_position_walkable(main.call("_iso_tile_center", tile_id)), "every completed occupied center blocks NPC navigation")
 		if occupied.size() > 1:
@@ -318,7 +348,9 @@ func _test_large_construction_completion_load_and_demolition(main) -> void:
 		_check(str(view.get("owner_id", "")) == owner_id, "all active footprint cells share one progress identity")
 		_check(bool(visual.get("draws_footprint_segment", false)), "active footprint renders construction in every occupied cell")
 		_check(str(visual.get("visual_coverage_mode", "")) == "full_footprint_segments", "active large footprint reports full-cell construction coverage")
-		_check(int(visual.get("segment_source_index", -1)) == occupied_index and bool(visual.get("segment_clipped_to_tile", false)), "active footprint keeps each construction segment inside its matching hit tile")
+		var construction_geometry: Dictionary = main.grid_buttons[tile_id].get_footprint_render_geometry()
+		_check(int(visual.get("segment_source_index", -1)) == occupied_index, "active footprint selects the matching construction segment")
+		_check(bool(construction_geometry.get("all_primitives_within_tile", false)), "active footprint draw geometry is clipped to its matching hit tile")
 		_check(bool(visual.get("draws_primary_body", false)) == (occupied_index == 0), "active footprint retains one anchor-owned construction accent")
 		_check(not main.get_npc_navigation_grid().is_position_walkable(main.call("_iso_tile_center", tile_id)), "active footprint blocks every NPC center")
 

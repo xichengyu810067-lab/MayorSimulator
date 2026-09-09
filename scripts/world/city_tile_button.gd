@@ -247,12 +247,33 @@ func get_footprint_visual_snapshot() -> Dictionary:
 		"draws_footprint_segment": has_footprint_content,
 		"visual_coverage_mode": "full_footprint_segments" if footprint_count > 1 and has_footprint_content else ("single_cell" if has_footprint_content else "none"),
 		"segment_source_index": footprint_index if has_footprint_content else -1,
-		"segment_clipped_to_tile": has_footprint_content,
 		"draws_primary_body": _is_primary_footprint_cell() and has_footprint_content,
 		"connects_west": footprint_count > 1 and footprint_index > 0,
 		"connects_east": footprint_count > 1 and footprint_index < footprint_count - 1,
 		"placement_preview_count": int(placement_preview.get("footprint_count", 0)),
 		"placement_preview_valid": bool(placement_preview.get("can_place", false)),
+	}
+
+
+func get_footprint_render_geometry() -> Dictionary:
+	# This is derived from the same rect/point helpers used by _draw(), so the
+	# regression test checks render geometry rather than a self-reported flag.
+	var primitive_bounds: Array[Rect2] = []
+	if not construction_job.is_empty():
+		primitive_bounds.append(_points_bounds(_construction_foundation_points(size * 0.5)))
+		primitive_bounds.append(_construction_scaffold_bounds())
+		primitive_bounds.append(_construction_progress_rect(size * 0.5))
+	elif building_name != "" and footprint_count > 1:
+		primitive_bounds.append(_clip_rect_to_tile(_procedural_building_body_rect().grow(1.5)))
+		if visual_texture != null:
+			primitive_bounds.append(_tile_draw_bounds())
+	var within_tile := true
+	for primitive: Rect2 in primitive_bounds:
+		within_tile = within_tile and _tile_draw_bounds().encloses(primitive)
+	return {
+		"tile_bounds": _tile_draw_bounds(),
+		"primitive_bounds": primitive_bounds,
+		"all_primitives_within_tile": within_tile,
 	}
 
 
@@ -545,24 +566,27 @@ func _draw_blocked_placement_indicator() -> void:
 
 func _draw_construction_site() -> void:
 	var center := size * 0.5
-	var foundation := PackedVector2Array([
-		center + Vector2(0, -24),
-		center + Vector2(36, -4),
-		center + Vector2(0, 18),
-		center + Vector2(-36, -4),
-	])
+	var foundation := _construction_foundation_points(center)
 	draw_colored_polygon(foundation, Color(0.36, 0.31, 0.27, 0.92))
 	draw_polyline(PackedVector2Array([foundation[0], foundation[1], foundation[2], foundation[3], foundation[0]]), Color(0.83, 0.67, 0.38), 2.0)
 	var timber := Color(0.55, 0.34, 0.16)
-	for x_offset in [-24.0, 0.0, 24.0]:
-		draw_line(center + Vector2(x_offset, -34), center + Vector2(x_offset, 12), timber, 4.0)
-	for y_offset in [-28.0, -10.0, 8.0]:
-		draw_line(center + Vector2(-30, y_offset), center + Vector2(30, y_offset), timber, 3.0)
-	draw_line(center + Vector2(-28, 10), center + Vector2(24, -30), Color(0.93, 0.75, 0.36), 3.0)
+	var scaffold := _construction_scaffold_bounds()
+	for x_ratio in [0.0, 0.5, 1.0]:
+		var x: float = scaffold.position.x + scaffold.size.x * float(x_ratio)
+		draw_line(Vector2(x, scaffold.position.y), Vector2(x, scaffold.end.y), timber, 4.0)
+	for y_ratio in [0.0, 0.42, 0.84]:
+		var y: float = scaffold.position.y + scaffold.size.y * float(y_ratio)
+		draw_line(Vector2(scaffold.position.x, y), Vector2(scaffold.end.x, y), timber, 3.0)
+	draw_line(
+		Vector2(scaffold.position.x + 3.0, scaffold.end.y - 3.0),
+		Vector2(scaffold.end.x - 3.0, scaffold.position.y + 3.0),
+		Color(0.93, 0.75, 0.36),
+		3.0
+	)
 	var workload := maxf(1.0, float(construction_job.get("workload", 1.0)))
 	var remaining := clampf(float(construction_job.get("remaining_work", workload)), 0.0, workload)
 	var progress := clampf(1.0 - remaining / workload, 0.0, 1.0)
-	var bar_rect := Rect2(center + Vector2(-31, 25), Vector2(62, 8))
+	var bar_rect := _construction_progress_rect(center)
 	draw_rect(bar_rect, Color(0.03, 0.08, 0.11, 0.80))
 	draw_rect(Rect2(bar_rect.position + Vector2(2, 2), Vector2((bar_rect.size.x - 4) * progress, 4)), Color(0.20, 0.82, 0.49))
 	var pulse := 0.5 + 0.5 * sin(_animation_time * 4.2)
@@ -570,20 +594,78 @@ func _draw_construction_site() -> void:
 	# multi-cell worksite therefore never leaves a secondary grid square looking
 	# vacant, while the job authority remains shared through its owner id.
 	if _is_primary_footprint_cell():
-		draw_arc(center + Vector2(31, -31), 9.0 + pulse * 1.6, 0.0, TAU, 20, Color(0.98, 0.78, 0.20, 0.66 + pulse * 0.30), 2.0)
+		var marker_center := _clamp_point_to_tile(center + Vector2(31, -31), 12.0)
+		draw_arc(marker_center, 9.0 + pulse * 1.6, 0.0, TAU, 20, Color(0.98, 0.78, 0.20, 0.66 + pulse * 0.30), 2.0)
 	# A small moving hoist and restrained dust puffs give the anchor worksite
 	# visible life without obscuring the shared progress or interaction cells.
 	if not _is_primary_footprint_cell():
 		return
 	var hoist_angle := -0.55 + sin(_animation_time * 2.4) * 0.24
-	var hoist_origin := center + Vector2(24, -26)
-	var hoist_tip := hoist_origin + Vector2(cos(hoist_angle), sin(hoist_angle)) * 18.0
+	var hoist_origin := _clamp_point_to_tile(center + Vector2(24, -26), 3.0)
+	var hoist_tip := _clamp_point_to_tile(hoist_origin + Vector2(cos(hoist_angle), sin(hoist_angle)) * 18.0, 3.0)
 	draw_line(hoist_origin, hoist_tip, Color(0.96, 0.74, 0.26), 3.0, true)
-	draw_line(hoist_tip, hoist_tip + Vector2(0, 8), Color(0.30, 0.24, 0.18), 1.5, true)
+	draw_line(hoist_tip, _clamp_point_to_tile(hoist_tip + Vector2(0, 8), 2.0), Color(0.30, 0.24, 0.18), 1.5, true)
 	for dust_index in 3:
 		var dust_phase := fposmod(_animation_time * 0.65 + float(dust_index) * 0.31, 1.0)
-		var dust_center := center + Vector2(-20.0 + float(dust_index) * 18.0, 13.0 - dust_phase * 10.0)
+		var dust_center := _clamp_point_to_tile(center + Vector2(-20.0 + float(dust_index) * 18.0, 13.0 - dust_phase * 10.0), 5.0)
 		draw_circle(dust_center, 2.0 + dust_phase * 2.2, Color(0.86, 0.72, 0.48, (1.0 - dust_phase) * 0.28))
+
+
+func _tile_draw_bounds() -> Rect2:
+	return Rect2(Vector2.ZERO, size)
+
+
+func _clip_rect_to_tile(rect: Rect2) -> Rect2:
+	return rect.intersection(_tile_draw_bounds())
+
+
+func _clamp_point_to_tile(point: Vector2, padding: float) -> Vector2:
+	var maximum_padding := minf(size.x, size.y) * 0.5
+	var safe_padding := clampf(padding, 0.0, maximum_padding)
+	return Vector2(
+		clampf(point.x, safe_padding, size.x - safe_padding),
+		clampf(point.y, safe_padding, size.y - safe_padding)
+	)
+
+
+func _construction_foundation_points(center: Vector2) -> PackedVector2Array:
+	var horizontal_radius := minf(36.0, maxf(0.0, size.x * 0.5 - 3.0))
+	var upper_radius := minf(24.0, maxf(0.0, size.y * 0.5 - 3.0))
+	var lower_radius := minf(18.0, maxf(0.0, size.y * 0.5 - 3.0))
+	return PackedVector2Array([
+		center + Vector2(0, -upper_radius),
+		center + Vector2(horizontal_radius, -4),
+		center + Vector2(0, lower_radius),
+		center + Vector2(-horizontal_radius, -4),
+	])
+
+
+func _construction_scaffold_bounds() -> Rect2:
+	var horizontal_padding := minf(4.0, size.x * 0.25)
+	var vertical_padding := minf(4.0, size.y * 0.25)
+	var height := minf(size.y * 0.62, maxf(0.0, size.y - vertical_padding * 2.0))
+	return Rect2(
+		Vector2(horizontal_padding, vertical_padding),
+		Vector2(maxf(0.0, size.x - horizontal_padding * 2.0), height)
+	)
+
+
+func _construction_progress_rect(center: Vector2) -> Rect2:
+	var width := minf(62.0, maxf(8.0, size.x - 8.0))
+	var height := minf(8.0, maxf(4.0, size.y * 0.12))
+	var desired := Rect2(center + Vector2(-width * 0.5, minf(25.0, size.y * 0.36)), Vector2(width, height))
+	return _clip_rect_to_tile(desired)
+
+
+func _points_bounds(points: PackedVector2Array) -> Rect2:
+	if points.is_empty():
+		return Rect2()
+	var minimum := points[0]
+	var maximum := points[0]
+	for point: Vector2 in points:
+		minimum = minimum.min(point)
+		maximum = maximum.max(point)
+	return Rect2(minimum, maximum - minimum)
 
 func _draw_empty_decor() -> void:
 	if tile_index in [27, 28, 35, 36]:
@@ -739,12 +821,8 @@ func _draw_storybook_building_segment() -> void:
 func _draw_procedural_building_segment() -> void:
 	var wall := _wall_color()
 	var roof := _roof_color()
-	var is_west_edge := footprint_index == 0
-	var is_east_edge := footprint_index == footprint_count - 1
-	var side_inset := 4.0 if is_west_edge or is_east_edge else 0.0
-	var body_width := size.x - (8.0 if is_west_edge and is_east_edge else side_inset)
-	var body := Rect2(Vector2(4.0 if is_west_edge else 0.0, size.y * 0.34), Vector2(body_width, size.y * 0.38))
-	draw_rect(body.grow(1.5), _darken(wall, 0.35))
+	var body := _procedural_building_body_rect()
+	draw_rect(_clip_rect_to_tile(body.grow(1.5)), _darken(wall, 0.35))
 	draw_rect(body, wall)
 	var roof_y := body.position.y - size.y * 0.10
 	draw_colored_polygon(PackedVector2Array([
@@ -760,6 +838,17 @@ func _draw_procedural_building_segment() -> void:
 	if _is_primary_footprint_cell():
 		var door := Rect2(Vector2(size.x * 0.50 - 6.0, body.end.y - 16.0), Vector2(12.0, 16.0))
 		draw_rect(door, _darken(wall, 0.56))
+
+
+func _procedural_building_body_rect() -> Rect2:
+	var is_west_edge := footprint_index == 0
+	var is_east_edge := footprint_index == footprint_count - 1
+	var side_inset := 4.0 if is_west_edge or is_east_edge else 0.0
+	var body_width := size.x - (8.0 if is_west_edge and is_east_edge else side_inset)
+	return Rect2(
+		Vector2(4.0 if is_west_edge else 0.0, size.y * 0.34),
+		Vector2(body_width, size.y * 0.38)
+	)
 
 
 func _draw_storybook_building() -> void:
