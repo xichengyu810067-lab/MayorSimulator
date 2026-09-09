@@ -249,7 +249,10 @@ func _test_completed_visuals_selection_and_navigation(main) -> void:
 			_check(int(view.get("owner_anchor_tile_id", -1)) == anchor, "completed occupied cell shares its owner anchor")
 			_check(int(visual.get("footprint_count", 0)) == occupied.size(), "completed visual exposes the full footprint count")
 			_check(str(visual.get("role", "")) == ("anchor" if occupied_index == 0 else "secondary"), "completed visual assigns an explicit footprint role")
-			_check(bool(visual.get("draws_primary_body", false)) == (occupied_index == 0), "completed footprint draws one anchor body")
+			_check(bool(visual.get("draws_footprint_segment", false)), "completed footprint renders a non-empty segment in every occupied cell")
+			_check(str(visual.get("visual_coverage_mode", "")) == ("full_footprint_segments" if occupied.size() > 1 else "single_cell"), "completed footprint reports the correct full-cell coverage mode")
+			_check(int(visual.get("segment_source_index", -1)) == occupied_index and bool(visual.get("segment_clipped_to_tile", false)), "completed footprint keeps each visual source segment inside its matching hit tile")
+			_check(bool(visual.get("draws_primary_body", false)) == (occupied_index == 0), "completed footprint retains one anchor-owned accent body")
 			_check(not main.get_npc_navigation_grid().is_position_walkable(main.call("_iso_tile_center", tile_id)), "every completed occupied center blocks NPC navigation")
 		if occupied.size() > 1:
 			_check(main.city_grid[int(occupied[0])] != "", "multi-cell economic identity remains on the anchor")
@@ -313,7 +316,10 @@ func _test_large_construction_completion_load_and_demolition(main) -> void:
 			owner_id = str(view.get("owner_id", ""))
 		_check(str(view.get("kind", "")) == "construction", "active footprint cell resolves to construction authority")
 		_check(str(view.get("owner_id", "")) == owner_id, "all active footprint cells share one progress identity")
-		_check(bool(visual.get("draws_primary_body", false)) == (occupied_index == 0), "active footprint draws one construction body/progress")
+		_check(bool(visual.get("draws_footprint_segment", false)), "active footprint renders construction in every occupied cell")
+		_check(str(visual.get("visual_coverage_mode", "")) == "full_footprint_segments", "active large footprint reports full-cell construction coverage")
+		_check(int(visual.get("segment_source_index", -1)) == occupied_index and bool(visual.get("segment_clipped_to_tile", false)), "active footprint keeps each construction segment inside its matching hit tile")
+		_check(bool(visual.get("draws_primary_body", false)) == (occupied_index == 0), "active footprint retains one anchor-owned construction accent")
 		_check(not main.get_npc_navigation_grid().is_position_walkable(main.call("_iso_tile_center", tile_id)), "active footprint blocks every NPC center")
 
 	var days := int(start.get("job", {}).get("projected_remaining_days", 0))

@@ -232,6 +232,7 @@ func get_visual_animation_contract() -> Dictionary:
 
 
 func get_footprint_visual_snapshot() -> Dictionary:
+	var has_footprint_content := building_name != "" or not construction_job.is_empty()
 	return {
 		"tile_id": tile_index,
 		"role": footprint_role,
@@ -239,8 +240,15 @@ func get_footprint_visual_snapshot() -> Dictionary:
 		"footprint_count": footprint_count,
 		"footprint_id": footprint_id,
 		"owner_anchor_tile_id": owner_anchor_tile_id,
-		"draws_shared_base": footprint_count > 1 and (building_name != "" or not construction_job.is_empty()),
-		"draws_primary_body": _is_primary_footprint_cell() and (building_name != "" or not construction_job.is_empty()),
+		"draws_shared_base": footprint_count > 1 and has_footprint_content,
+		# Every occupied cell now owns a non-overlapping visible segment.  The
+		# anchor still owns the animated accent, but it no longer owns the whole
+		# building image or construction site by itself.
+		"draws_footprint_segment": has_footprint_content,
+		"visual_coverage_mode": "full_footprint_segments" if footprint_count > 1 and has_footprint_content else ("single_cell" if has_footprint_content else "none"),
+		"segment_source_index": footprint_index if has_footprint_content else -1,
+		"segment_clipped_to_tile": has_footprint_content,
+		"draws_primary_body": _is_primary_footprint_cell() and has_footprint_content,
 		"connects_west": footprint_count > 1 and footprint_index > 0,
 		"connects_east": footprint_count > 1 and footprint_index < footprint_count - 1,
 		"placement_preview_count": int(placement_preview.get("footprint_count", 0)),
@@ -337,13 +345,15 @@ func _draw() -> void:
 
 	if not construction_job.is_empty():
 		_draw_footprint_base(true)
-		if _is_primary_footprint_cell():
-			_draw_construction_site()
+		_draw_construction_site()
 	elif building_name != "":
 		_draw_footprint_base(false)
-		if _is_primary_footprint_cell():
-			_draw_building_shadow()
+		_draw_building_shadow()
+		if footprint_count > 1:
+			_draw_footprint_building_segment()
+		else:
 			_draw_building()
+		if _is_primary_footprint_cell():
 			_draw_ambient_animation_overlay()
 
 	if is_building_mode and not placement_preview.is_empty():
@@ -556,9 +566,15 @@ func _draw_construction_site() -> void:
 	draw_rect(bar_rect, Color(0.03, 0.08, 0.11, 0.80))
 	draw_rect(Rect2(bar_rect.position + Vector2(2, 2), Vector2((bar_rect.size.x - 4) * progress, 4)), Color(0.20, 0.82, 0.49))
 	var pulse := 0.5 + 0.5 * sin(_animation_time * 4.2)
-	draw_arc(center + Vector2(31, -31), 9.0 + pulse * 1.6, 0.0, TAU, 20, Color(0.98, 0.78, 0.20, 0.66 + pulse * 0.30), 2.0)
-	# A small moving hoist and restrained dust puffs give every active worksite
-	# visible life without obscuring its progress bar or interaction footprint.
+	# The status bar is intentionally rendered on every occupied cell.  A
+	# multi-cell worksite therefore never leaves a secondary grid square looking
+	# vacant, while the job authority remains shared through its owner id.
+	if _is_primary_footprint_cell():
+		draw_arc(center + Vector2(31, -31), 9.0 + pulse * 1.6, 0.0, TAU, 20, Color(0.98, 0.78, 0.20, 0.66 + pulse * 0.30), 2.0)
+	# A small moving hoist and restrained dust puffs give the anchor worksite
+	# visible life without obscuring the shared progress or interaction cells.
+	if not _is_primary_footprint_cell():
+		return
 	var hoist_angle := -0.55 + sin(_animation_time * 2.4) * 0.24
 	var hoist_origin := center + Vector2(24, -26)
 	var hoist_tip := hoist_origin + Vector2(cos(hoist_angle), sin(hoist_angle)) * 18.0
@@ -692,6 +708,58 @@ func _draw_building() -> void:
 			_draw_city_hall()
 		_:
 			_draw_fairytale_house(Vector2(size.x * 0.50, size.y * 0.54), 1.0)
+
+
+func _draw_footprint_building_segment() -> void:
+	# A multi-cell building is rendered as one clipped segment per occupied cell.
+	# This keeps the visual inside its own hit target, leaves no secondary cell
+	# blank, and avoids overpainting a neighbouring building or NPC target.
+	# The procedural facade is a non-transparent backing for the cropped source
+	# art, so a transparent margin in an existing PNG cannot reopen a visual gap.
+	_draw_procedural_building_segment()
+	if visual_texture != null:
+		_draw_storybook_building_segment()
+	if _is_primary_footprint_cell():
+		_draw_customization_badge()
+
+
+func _draw_storybook_building_segment() -> void:
+	var texture_size := visual_texture.get_size()
+	if texture_size.x <= 0.0 or texture_size.y <= 0.0:
+		return
+	var segment_width := texture_size.x / float(footprint_count)
+	var source := Rect2(
+		Vector2(segment_width * float(footprint_index), 0.0),
+		Vector2(segment_width, texture_size.y)
+	)
+	var tint := Color.WHITE if not is_dark_mode else Color(0.68, 0.74, 0.86, 0.94)
+	draw_texture_rect_region(visual_texture, Rect2(Vector2.ZERO, size), source, tint, false, true)
+
+
+func _draw_procedural_building_segment() -> void:
+	var wall := _wall_color()
+	var roof := _roof_color()
+	var is_west_edge := footprint_index == 0
+	var is_east_edge := footprint_index == footprint_count - 1
+	var side_inset := 4.0 if is_west_edge or is_east_edge else 0.0
+	var body_width := size.x - (8.0 if is_west_edge and is_east_edge else side_inset)
+	var body := Rect2(Vector2(4.0 if is_west_edge else 0.0, size.y * 0.34), Vector2(body_width, size.y * 0.38))
+	draw_rect(body.grow(1.5), _darken(wall, 0.35))
+	draw_rect(body, wall)
+	var roof_y := body.position.y - size.y * 0.10
+	draw_colored_polygon(PackedVector2Array([
+		Vector2(body.position.x, body.position.y),
+		Vector2(body.end.x, body.position.y),
+		Vector2(body.end.x - 5.0, roof_y),
+		Vector2(body.position.x + 5.0, roof_y),
+	]), roof)
+	for x_ratio in [0.26, 0.52, 0.76]:
+		var window := Rect2(Vector2(size.x * x_ratio - 4.0, body.position.y + body.size.y * 0.30), Vector2(8.0, 11.0))
+		draw_rect(window, Color(0.82, 0.95, 1.0, 0.94))
+		draw_rect(window, _darken(Color(0.82, 0.95, 1.0, 0.94), 0.46), false, 1.0)
+	if _is_primary_footprint_cell():
+		var door := Rect2(Vector2(size.x * 0.50 - 6.0, body.end.y - 16.0), Vector2(12.0, 16.0))
+		draw_rect(door, _darken(wall, 0.56))
 
 
 func _draw_storybook_building() -> void:
