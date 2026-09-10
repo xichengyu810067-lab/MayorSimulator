@@ -331,7 +331,20 @@ $godotLogText = if (Test-Path -LiteralPath $godotLogPath -PathType Leaf) { Get-C
 $importGodotLogText = if (Test-Path -LiteralPath $importGodotLogPath -PathType Leaf) { Get-Content -LiteralPath $importGodotLogPath -Raw } else { '' }
 $plainLog = ($importStdoutText + "`n" + $importStderrText + "`n" + $importGodotLogText + "`n" + $stdoutText + "`n" + $stderrText + "`n" + $godotLogText) -replace "`e\[[0-?]*[ -/]*[@-~]", ''
 $environmentDiagnostics = @([regex]::Matches($plainLog, '(?im)^.*Failed to read the root certificate store.*$') | ForEach-Object { $_.Value.Trim() } | Sort-Object -Unique)
-$productLog = [regex]::Replace($plainLog, '(?im)^.*Failed to read the root certificate store.*$', '')
+$vulkanLoaderHeader = 'WARNING: GENERAL - Message Id Number: 0 | Message Id Name: Loader Message'
+$vulkanLoaderBody = 'windows_read_data_files_in_registry: Registry lookup failed to get layer manifest files.'
+if ([regex]::IsMatch($plainLog, "(?m)^$([regex]::Escape($vulkanLoaderHeader))\r?\n\t$([regex]::Escape($vulkanLoaderBody))\r?$")) {
+    $environmentDiagnostics += $vulkanLoaderHeader
+}
+$rgbConversionWarning = 'WARNING: Image format RGB8 not supported by hardware, converting to RGBA8.'
+if ([regex]::IsMatch($plainLog, "(?m)^$([regex]::Escape($rgbConversionWarning))\r?$")) {
+    $environmentDiagnostics += $rgbConversionWarning
+}
+$environmentDiagnostics = @($environmentDiagnostics | Sort-Object -Unique)
+$productLog = $plainLog
+foreach ($diagnostic in $environmentDiagnostics) {
+    $productLog = [regex]::Replace($productLog, "(?m)^$([regex]::Escape($diagnostic))\r?$", '')
+}
 $unexpectedDiagnostics = @([regex]::Matches($productLog, '(?im)^(?:SCRIPT ERROR|ERROR|WARNING):[^\r\n]*') | ForEach-Object { $_.Value.Trim() } | Sort-Object -Unique)
 foreach ($pattern in @('Leaked instance:', 'ObjectDB instances? (?:was|were) leaked at exit', 'resources? still in use at exit', 'Resource still in use:', 'Orphan StringName:', 'unclaimed string names at exit')) {
     if ([regex]::IsMatch($productLog, $pattern, [Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
