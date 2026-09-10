@@ -2,6 +2,7 @@ extends SceneTree
 
 const TutorialStoryOverlayScript = preload("res://ui/tutorial/tutorial_story_overlay.gd")
 const AudioDirectorScript = preload("res://scripts/audio/audio_director.gd")
+const ContentRegistry = preload("res://data/catalogs/content_registry.gd")
 const TestCleanup := preload("res://tests/helpers/scene_tree_test_cleanup.gd")
 
 const AUDIO_PATHS := [
@@ -68,6 +69,16 @@ func _run() -> void:
 	overlay._transition.custom_step(1.0)
 	await process_frame
 	_check(overlay.current_page == 1 and overlay.title_label.text != first_title, "one Enter key press advances exactly one tutorial page")
+	_check(overlay.body_label.text.contains(str(ContentRegistry.BUILDING_IDS.size())), "tutorial building count follows the authoritative content registry")
+	var localization = root.get_node_or_null("L10n")
+	_check(localization != null, "tutorial count test can access the localization authority")
+	if localization != null:
+		for locale in localization.SUPPORTED_LOCALES:
+			_check(bool(localization.set_locale(locale, false)), "tutorial supports locale %s" % locale)
+			overlay.call("_apply_page_content")
+			_check(overlay.body_label.text.contains(str(ContentRegistry.BUILDING_IDS.size())) and not overlay.body_label.text.contains("%d"), "tutorial renders the authoritative building count in %s" % locale)
+		localization.set_locale(localization.SOURCE_LOCALE, false)
+		overlay.call("_apply_page_content")
 	_check(_page_turn_cue_count == 1, "one Enter key press emits exactly one page-turn cue")
 	while overlay.current_page < overlay.PAGES.size() - 1:
 		overlay.next_button.emit_signal("pressed")

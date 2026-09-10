@@ -3,6 +3,7 @@ extends Control
 
 const BACKGROUND = preload("res://assets/images/tutorial/story-intro-background.png")
 const UiIconCatalog = preload("res://ui/theme/ui_icon_catalog.gd")
+const ContentRegistry = preload("res://data/catalogs/content_registry.gd")
 
 signal completed(skipped: bool)
 signal audio_cue(cue: String)
@@ -18,7 +19,7 @@ const PAGES := [
 	{
 		"kicker": "第一步｜興建",
 		"title": "先從官方入門藍圖開始",
-		"body": "選擇建築後，遊戲已替 26 種建築準備核准的入門藍圖。你不必先理解材質、樓層與工期，就能直接回到地圖選空地施工。",
+		"body": "選擇建築後，遊戲已替 %d 種建築準備核准的入門藍圖。你不必先理解材質、樓層與工期，就能直接回到地圖選空地施工。",
 		"bullets": ["建築卡使用逐棟專屬圖像，圖像與名稱一致", "綠色加號表示可施工；紅色叉號表示地塊受阻"],
 		"icon": "buildings",
 	},
@@ -258,7 +259,10 @@ func _apply_page_content() -> void:
 	var page: Dictionary = PAGES[current_page]
 	kicker_label.text = _l10n_text(str(page["kicker"]))
 	title_label.text = _l10n_text(str(page["title"]))
-	body_label.text = _l10n_text(str(page["body"]))
+	var localized_body := _l10n_text(str(page["body"]))
+	if localized_body.contains("%d"):
+		localized_body = localized_body % ContentRegistry.BUILDING_IDS.size()
+	body_label.text = localized_body
 	page_icon.texture = UiIconCatalog.texture(str(page["icon"]))
 	for child in bullets_box.get_children():
 		bullets_box.remove_child(child)
