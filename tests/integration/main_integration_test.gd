@@ -352,14 +352,89 @@ func _run() -> void:
 			main.municipal_overlay.open_hub()
 			await process_frame
 	var municipal_back := main.municipal_overlay.find_child("BackButton", true, false) as Button
-	for child_parent in [["blueprint", "buildings"], ["transport_planning", "buildings"], ["report", "city_data"]]:
-		main.municipal_overlay.open_page(str(child_parent[0]))
+	# Navigation is a real visit history, not a static child-to-parent lookup.
+	# Exercise the player-visible sequences first, then a direct-page transition
+	# whose return target cannot be expressed by the legacy static map.
+	for route in [["buildings", "blueprint", "buildings"], ["buildings", "transport_planning", "buildings"], ["city_data", "report", "city_data"]]:
+		main.municipal_overlay.open_hub()
 		await process_frame
-		_check(municipal_back != null and municipal_back.visible, "contextual page '%s' exposes back navigation" % child_parent[0])
+		main.municipal_overlay.open_page(str(route[0]))
+		await process_frame
+		main.municipal_overlay.open_page(str(route[1]))
+		await process_frame
+		_check(municipal_back != null and municipal_back.visible, "contextual page '%s' exposes back navigation" % route[1])
 		if municipal_back != null:
 			municipal_back.emit_signal("pressed")
 			await process_frame
-			_check(main.municipal_overlay.current_page() == str(child_parent[1]), "contextual page '%s' returns to '%s'" % [child_parent[0], child_parent[1]])
+			_check(main.municipal_overlay.current_page() == str(route[2]), "contextual page '%s' returns to immediate '%s'" % [route[1], route[2]])
+			municipal_back.emit_signal("pressed")
+			await process_frame
+			_check(main.municipal_overlay.current_page() == "hub", "parent page '%s' returns to the hub" % route[2])
+	for page_id in direct_hub_pages:
+		main.municipal_overlay.open_hub()
+		await process_frame
+		main.municipal_overlay.open_page(str(page_id))
+		await process_frame
+		_check(municipal_back != null and municipal_back.visible, "direct page '%s' exposes back navigation" % page_id)
+		if municipal_back != null:
+			municipal_back.emit_signal("pressed")
+			await process_frame
+			_check(main.municipal_overlay.current_page() == "hub", "direct page '%s' returns to the hub" % page_id)
+	main.municipal_overlay.open_hub()
+	await process_frame
+	main.municipal_overlay.open_page("governance")
+	await process_frame
+	main.municipal_overlay.open_page("finance")
+	await process_frame
+	if municipal_back != null:
+		municipal_back.emit_signal("pressed")
+		await process_frame
+		_check(main.municipal_overlay.current_page() == "governance", "cross-page visit returns to the actual previous page instead of the hub")
+		municipal_back.emit_signal("pressed")
+		await process_frame
+		_check(main.municipal_overlay.current_page() == "hub", "cross-page history eventually returns to the hub")
+	main.municipal_overlay.open_page("buildings")
+	await process_frame
+	main.municipal_overlay.open_page("buildings")
+	await process_frame
+	if municipal_back != null:
+		municipal_back.emit_signal("pressed")
+		await process_frame
+		_check(main.municipal_overlay.current_page() == "hub", "opening the same page repeatedly does not create a back-loop")
+	main.municipal_overlay.open_page("buildings")
+	await process_frame
+	main.municipal_overlay.open_page("unknown_municipal_page")
+	await process_frame
+	_check(main.municipal_overlay.current_page() == "buildings", "unknown municipal page fails safe without replacing the current page")
+	if municipal_back != null:
+		municipal_back.emit_signal("pressed")
+		await process_frame
+		_check(main.municipal_overlay.current_page() == "hub", "unknown municipal page does not corrupt the previous-page route")
+	var released_page := Control.new()
+	main.municipal_overlay.register_page("released_navigation_test", "Released navigation test", released_page, false)
+	main.municipal_overlay.open_page("buildings")
+	await process_frame
+	main.municipal_overlay.open_page("released_navigation_test")
+	await process_frame
+	released_page.queue_free()
+	await process_frame
+	main.municipal_overlay.open_page("blueprint")
+	await process_frame
+	if municipal_back != null:
+		municipal_back.emit_signal("pressed")
+		await process_frame
+		_check(main.municipal_overlay.current_page() == "buildings", "released history page is skipped safely while navigating back")
+	main.municipal_overlay.close_overlay()
+	await process_frame
+	main.municipal_overlay.open_hub()
+	await process_frame
+	_check(main.municipal_overlay.current_page() == "hub", "close and reopen clears stale municipal navigation history")
+	main.municipal_overlay.open_page("buildings")
+	await process_frame
+	if municipal_back != null:
+		municipal_back.emit_signal("pressed")
+		await process_frame
+		_check(main.municipal_overlay.current_page() == "hub", "reopened municipal overlay starts a fresh navigation route")
 	main.municipal_overlay.open_hub()
 	await process_frame
 

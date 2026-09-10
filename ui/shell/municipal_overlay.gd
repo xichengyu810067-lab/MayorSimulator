@@ -79,6 +79,7 @@ const HUB_ENTRIES: Array[Dictionary] = [
 ]
 var _dark_mode := false
 var _current_page_id := ""
+var _page_history: Array[String] = []
 var _pages: Dictionary = {}
 var _page_titles: Dictionary = {}
 var _hub_children: Dictionary = {}
@@ -155,6 +156,11 @@ func register_page(page_id: String, title: String, control: Control, hub_child: 
 
 
 func open_hub() -> void:
+	_page_history.clear()
+	_show_hub()
+
+
+func _show_hub() -> void:
 	_show_only(_hub_page)
 	_current_page_id = HUB_PAGE_ID
 	_header_title.text = "市政服務中心"
@@ -176,17 +182,25 @@ func open_page(page_id: String) -> void:
 		push_warning("MunicipalOverlay page '%s' is no longer valid." % normalized_id)
 		return
 
+	if not visible or _current_page_id.is_empty():
+		_page_history = _initial_history_for(normalized_id)
+	elif _current_page_id != normalized_id:
+		_page_history.append(_current_page_id)
+	_show_page(normalized_id, page)
+
+
+func _show_page(page_id: String, page: Control) -> void:
+	_current_page_id = page_id
 	_show_only(page)
-	_current_page_id = normalized_id
-	_header_title.text = str(_page_titles.get(normalized_id, normalized_id))
-	_back_button.visible = bool(_hub_children.get(normalized_id, true)) or HUB_CONTEXT_PARENTS.has(normalized_id)
+	_header_title.text = str(_page_titles.get(page_id, page_id))
+	_back_button.visible = not _page_history.is_empty()
 	L10n.localize_tree(self)
 	show()
 	if _back_button.visible:
 		_back_button.grab_focus()
 	else:
 		_close_button.grab_focus()
-	page_opened.emit(normalized_id)
+	page_opened.emit(page_id)
 
 
 func close_overlay() -> void:
@@ -194,6 +208,7 @@ func close_overlay() -> void:
 		return
 	hide()
 	_current_page_id = ""
+	_page_history.clear()
 	_set_all_pages_hidden()
 	overlay_closed.emit()
 
@@ -218,7 +233,7 @@ func set_dark_mode(enabled: bool) -> void:
 func _unhandled_key_input(event: InputEvent) -> void:
 	if not visible or not event.is_action_pressed("ui_cancel"):
 		return
-	if _current_page_id != HUB_PAGE_ID and (bool(_hub_children.get(_current_page_id, false)) or HUB_CONTEXT_PARENTS.has(_current_page_id)):
+	if _current_page_id != HUB_PAGE_ID and not _page_history.is_empty():
 		_handle_back()
 	else:
 		close_overlay()
@@ -526,11 +541,31 @@ func _hub_entry(page_id: String) -> Dictionary:
 
 
 func _handle_back() -> void:
-	var contextual_parent := str(HUB_CONTEXT_PARENTS.get(_current_page_id, ""))
-	if not contextual_parent.is_empty() and _pages.has(contextual_parent):
-		open_page(contextual_parent)
-	else:
-		open_hub()
+	while not _page_history.is_empty():
+		var previous_page_id: String = _page_history.pop_back()
+		if previous_page_id == HUB_PAGE_ID:
+			_show_hub()
+			return
+		var previous_page: Control = _pages.get(previous_page_id) as Control
+		if is_instance_valid(previous_page):
+			_show_page(previous_page_id, previous_page)
+			return
+		push_warning("MunicipalOverlay skipped an unavailable history page named '%s'." % previous_page_id)
+	open_hub()
+
+
+func _initial_history_for(page_id: String) -> Array[String]:
+	var history: Array[String] = [HUB_PAGE_ID]
+	var visited := {page_id: true}
+	var contextual_parent := str(HUB_CONTEXT_PARENTS.get(page_id, ""))
+	while not contextual_parent.is_empty() and contextual_parent != HUB_PAGE_ID and not visited.has(contextual_parent):
+		visited[contextual_parent] = true
+		var parent_page := _pages.get(contextual_parent) as Control
+		if not is_instance_valid(parent_page):
+			break
+		history.append(contextual_parent)
+		contextual_parent = str(HUB_CONTEXT_PARENTS.get(contextual_parent, ""))
+	return history
 
 
 func debug_hub_layout_state() -> Dictionary:
