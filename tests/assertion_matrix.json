@@ -67,6 +67,7 @@
     { "id": "blueprint_library", "script": "res://tests/integration/blueprint_library_test.gd", "success_pattern": "Blueprint library test passed." },
     { "id": "separation_of_powers", "script": "res://tests/integration/separation_of_powers_test.gd", "success_pattern": "Separation of powers test passed." },
     { "id": "tutorial_audio", "script": "res://tests/integration/tutorial_audio_test.gd", "success_pattern": "Tutorial animation and original audio test passed." },
+    { "id": "intro_cinematic_contract", "script": "res://tests/ui/intro_cinematic_contract_test.gd", "success_pattern": "Intro cinematic contract test passed." },
     { "id": "building_visual_catalog_contract", "script": "res://tests/ui/building_visual_catalog_contract_test.gd", "success_pattern": "Building visual catalog contract test passed." },
     { "id": "transport_visual_animation", "script": "res://tests/ui/transport_visual_animation_test.gd", "success_pattern": "Transport visual animation test passed." },
     { "id": "transport_network_layer", "script": "res://tests/ui/transport_network_layer_test.gd", "success_pattern": "Transport network layer test passed." },
