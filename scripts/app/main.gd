@@ -2387,7 +2387,12 @@ func _build_map_panel() -> Control:
 	map_viewport_background.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	map_viewport_background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	map_viewport_background.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	map_viewport_background.z_index = -1
+	# Keep the cover art in the viewport's normal canvas layer. A negative
+	# z-index places this descendant behind the root theme background as well,
+	# so the exposed area at zooms below 100% is still rendered white. Child
+	# order already keeps this node behind map_stage without crossing that
+	# sibling boundary.
+	map_viewport_background.z_index = 0
 	map_viewport.add_child(map_viewport_background)
 
 	map_stage = Control.new()

@@ -206,6 +206,8 @@ func _viewport_is_covered_by_terrain_background(main) -> bool:
 		or main.map_viewport_background.get_parent() != main.map_viewport
 		or main.map_viewport_background.texture == null
 		or main.map_viewport_background.mouse_filter != Control.MOUSE_FILTER_IGNORE
+		or main.map_viewport_background.z_index != main.map_stage.z_index
+		or main.map_viewport_background.get_index() >= main.map_stage.get_index()
 	):
 		return false
 	var viewport_rect: Rect2 = main.map_viewport.get_global_rect()
