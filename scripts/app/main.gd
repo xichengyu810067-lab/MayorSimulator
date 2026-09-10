@@ -4921,7 +4921,10 @@ func _handle_transport_tile_pressed(index: int) -> void:
 	transport_plan_tiles = candidate
 	_sync_placement_banner()
 	_update_transport_runtime()
-	_set_hint("已選 %d 格｜目前工程估價 $%d。" % [transport_plan_tiles.size(), int(quote.get("total_cost", quote.get("cost", 0)))], false)
+	_set_hint("已選 %d 格｜目前工程估價 $%d。" % [
+		transport_plan_tiles.size(),
+		_transport_visible_plan_cost(quote, transport_plan_tiles.size(), _transport_session_snapshot()),
+	], false)
 
 
 func _handle_transport_demolition_tile(index: int) -> void:
@@ -5523,8 +5526,7 @@ func _sync_placement_banner() -> void:
 			var valid := not transport_plan_tiles.is_empty() and bool(quote.get("ok", false))
 			var can_afford := valid and bool(quote.get("can_afford", true))
 			var package_route := _transport_session_is_route_package(session) and transport_plan_operation == "build"
-			var route_price := TransportModesScript.route_package_price_quote(transport_plan_tiles.size())
-			var cost := int(route_price.get("construction_cost", 0)) if package_route else int(quote.get("total_cost", 0))
+			var cost := _transport_visible_plan_cost(quote, transport_plan_tiles.size(), session)
 			var operation_label := "興建" if transport_plan_operation == "build" else "拆除"
 			placement_label.text = L10n.text("%s步驟 2/3｜%s%s｜已選 %d 格｜預估 $%d") % [
 				session_prefix, L10n.text(operation_label), L10n.text(_transport_kind_label(transport_plan_kind)),
@@ -5557,6 +5559,12 @@ func _sync_placement_banner() -> void:
 			placement_confirm_button.disabled = station_count < minimum_stops
 		return
 	placement_label.text = L10n.text("放置 %s｜點擊空地查看總價｜Esc／右鍵取消") % L10n.text(placement_building_name)
+
+
+func _transport_visible_plan_cost(quote: Dictionary, tile_count: int, session: Dictionary = {}) -> int:
+	if _transport_session_is_route_package(session) and transport_plan_operation == "build":
+		return int(TransportModesScript.route_package_price_quote(tile_count).get("construction_cost", 0))
+	return int(quote.get("total_cost", quote.get("cost", 0)))
 
 
 func _flatten_pending_terrain() -> void:

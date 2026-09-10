@@ -1,6 +1,7 @@
 extends SceneTree
 
 const TestCleanup := preload("res://tests/helpers/scene_tree_test_cleanup.gd")
+const TransportModesScript := preload("res://data/catalogs/transport_modes.gd")
 
 var _failed := false
 var _checks := 0
@@ -151,6 +152,9 @@ func _run() -> void:
 		main._on_grid_pressed(int(road_tiles[road_index]))
 		_check(main.transport_plan_tiles.size() == road_index + 1, "road map input did not append the next adjacent tile")
 		_check(main.transport_plan_tiles[road_index] == int(road_tiles[road_index]), "road map input changed the player-selected path order")
+		var visible_route_cost := int(TransportModesScript.route_package_price_quote(road_index + 1).get("construction_cost", -1))
+		_check(main.placement_label.text.contains("預估 $%d" % visible_route_cost), "route-package banner does not show its authoritative route price at L=%d: %s" % [road_index + 1, main.placement_label.text])
+		_check(main.hint_label.text.contains("估價 $%d" % visible_route_cost), "route-package hint disagrees with the banner at L=%d: %s" % [road_index + 1, main.hint_label.text])
 	_check(existing_building_button != null and existing_building_button.is_visible_in_tree(), "route placement hides a pre-existing building visual")
 	if existing_building_button != null:
 		var building_visual: Dictionary = existing_building_button.call("get_visual_animation_debug_snapshot")
@@ -172,7 +176,7 @@ func _run() -> void:
 	continue_button = main.transport_planning_panel.find_child("TransportPlanningSessionContinue", true, false) as Button
 	_check(continue_button != null and continue_button.text.contains("確認總包") and not continue_button.disabled, "route-edit phase lacks an enabled one-step package confirmation")
 	var package_detail := main.transport_planning_panel.find_child("TransportPlanningSessionDetail", true, false) as Label
-	_check(package_detail != null and package_detail.text.contains("總工程費") and package_detail.text.contains("路線 5 格") and package_detail.text.contains("月維護"), "package confirmation does not expose its route-length cost breakdown")
+	_check(package_detail != null and package_detail.text.contains("總工程費") and package_detail.text.contains("路線 5 格 $5000") and package_detail.text.contains("月維護"), "package confirmation does not expose the same authoritative route price shown during map selection")
 	var route_button := main.transport_planning_panel.find_child("PlanRoute_bus", true, false) as Button
 	_check(route_button == null or route_button.disabled, "package workflow still requires a second route-stop planning pass")
 	await _capture_checkpoint("package-confirmation", "02-package-confirmation.png", capture_dir)
