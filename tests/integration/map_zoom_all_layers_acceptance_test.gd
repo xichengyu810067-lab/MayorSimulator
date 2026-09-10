@@ -94,6 +94,7 @@ func _run() -> void:
 	await _validate_zoom_snapshot(main, target_button, building_button, representative_npc, centers, transport_snapshot, target_tile, 1.75, "175%")
 	await _drive_zoom(main, main.MAP_ZOOM_MIN, MOUSE_BUTTON_WHEEL_DOWN, "wheel down to 65%")
 	await _validate_zoom_snapshot(main, target_button, building_button, representative_npc, centers, transport_snapshot, target_tile, 0.65, "65%")
+	await _verify_left_drag_and_reset_contract(main, target_button, target_tile)
 
 	await _finish([main])
 
@@ -211,6 +212,100 @@ func _wheel_once(main, wheel_button: int, phase: String) -> void:
 	await process_frame
 	var anchored_global: Vector2 = main.map_stage.get_global_transform_with_canvas() * anchor_local
 	_check(anchored_global.distance_to(cursor) <= TRANSFORM_EPSILON, "%s keeps the stage point under the wheel cursor" % phase)
+
+
+func _verify_left_drag_and_reset_contract(main, target_button: Button, target_tile: int) -> void:
+	var cursor: Vector2 = main.map_viewport.get_global_rect().get_center()
+	# Establish an arbitrary, non-default wheel state before testing a direct
+	# right-click reset. This is intentionally independent from the min/max test.
+	await _drive_zoom(main, 1.15, MOUSE_BUTTON_WHEEL_UP, "wheel from minimum into enlarged left-drag contract")
+	_check(main.map_zoom > 1.0, "left-drag contract starts from an enlarged map")
+
+	var pan_before_click: Vector2 = main.map_pan_offset
+	_tile_press_count = 0
+	_last_tile_pressed = -1
+	var drag_start := target_button.get_global_rect().get_center()
+	_check(main.map_viewport.get_global_rect().has_point(drag_start), "left-drag source tile remains inside the map viewport")
+	var hover_motion := InputEventMouseMotion.new()
+	hover_motion.position = drag_start
+	hover_motion.global_position = drag_start
+	root.push_input(hover_motion, true)
+	await process_frame
+	var left_down := InputEventMouseButton.new()
+	left_down.button_index = MOUSE_BUTTON_LEFT
+	left_down.button_mask = MOUSE_BUTTON_MASK_LEFT
+	left_down.pressed = true
+	left_down.position = drag_start
+	left_down.global_position = drag_start
+	root.push_input(left_down, true)
+	await process_frame
+	var short_motion := InputEventMouseMotion.new()
+	short_motion.position = drag_start + Vector2(3.0, 2.0)
+	short_motion.global_position = short_motion.position
+	short_motion.relative = Vector2(3.0, 2.0)
+	short_motion.button_mask = MOUSE_BUTTON_MASK_LEFT
+	root.push_input(short_motion, true)
+	await process_frame
+	_check(main.map_pan_offset.is_equal_approx(pan_before_click), "short left movement below the drag threshold does not pan")
+
+	var drag_motion := InputEventMouseMotion.new()
+	drag_motion.position = drag_start + Vector2(84.0, -52.0)
+	drag_motion.global_position = drag_motion.position
+	drag_motion.relative = Vector2(81.0, -54.0)
+	drag_motion.button_mask = MOUSE_BUTTON_MASK_LEFT
+	root.push_input(drag_motion, true)
+	await process_frame
+	_check(not main.map_pan_offset.is_equal_approx(pan_before_click), "left drag pans an enlarged map after its threshold")
+	var left_up := InputEventMouseButton.new()
+	left_up.button_index = MOUSE_BUTTON_LEFT
+	left_up.pressed = false
+	left_up.position = drag_motion.position
+	left_up.global_position = drag_motion.position
+	root.push_input(left_up, true)
+	await _settle(2)
+	_check(not main._map_pan_drag_active, "left drag releases its map capture")
+	_check(_tile_press_count == 0, "a captured map drag cannot click through to its source tile")
+
+	# A normal GUI tile click remains a click at the same enlarged transform.
+	await _click_target(main, target_button, target_tile, "left-drag contract ordinary tile click")
+
+	var right_reset := InputEventMouseButton.new()
+	right_reset.button_index = MOUSE_BUTTON_RIGHT
+	right_reset.pressed = true
+	right_reset.position = cursor
+	right_reset.global_position = cursor
+	main._input(right_reset)
+	_check(is_equal_approx(main.map_zoom, 1.0), "right click resets arbitrary wheel zoom exactly to 100%")
+	_check(main.map_pan_offset.is_equal_approx(Vector2.ZERO), "right click restores original pan exactly")
+	var expected_position: Vector2 = (main.map_viewport.size - main.MAP_STAGE_SIZE * float(main.call("_base_map_scale"))) * 0.5
+	_check(main.map_stage.position.distance_to(expected_position) <= ROUND_TRIP_EPSILON, "right click restores the original centered stage anchor")
+
+	# While a camera reset is possible, it wins without destroying an active map
+	# action. Once already reset, right-click retains its established cancel role.
+	main.placement_mode_active = true
+	main.placement_building_name = "住宅"
+	await _wheel_once(main, MOUSE_BUTTON_WHEEL_UP, "wheel up before active-placement right reset")
+	main._input(right_reset)
+	_check(main.placement_mode_active, "right reset preserves active placement instead of cancelling it")
+	_check(is_equal_approx(main.map_zoom, 1.0) and main.map_pan_offset.is_equal_approx(Vector2.ZERO), "active-placement right reset restores the exact original camera")
+	main._input(right_reset)
+	_check(not main.placement_mode_active, "right click at the original camera retains the explicit placement cancel affordance")
+
+	main.map_action_mode = "transport_infrastructure"
+	await _wheel_once(main, MOUSE_BUTTON_WHEEL_UP, "wheel up before active-transport right reset")
+	main._input(right_reset)
+	_check(main.map_action_mode == "transport_infrastructure", "right reset preserves an active transport map action instead of cancelling it")
+	_check(is_equal_approx(main.map_zoom, 1.0) and main.map_pan_offset.is_equal_approx(Vector2.ZERO), "active-transport right reset restores the exact original camera")
+	main.map_action_mode = ""
+
+	# Modal surfaces remain input boundaries: a right click cannot pan/reset a map
+	# behind a visible modal or click through to the active map state.
+	await _wheel_once(main, MOUSE_BUTTON_WHEEL_UP, "wheel up before modal right-click guard")
+	var zoom_before_modal_right_click: float = main.map_zoom
+	main.settings_overlay.show()
+	main._input(right_reset)
+	_check(is_equal_approx(main.map_zoom, zoom_before_modal_right_click), "right click behind a visible modal does not reset the map")
+	main.settings_overlay.hide()
 
 
 func _click_target(main, button: Button, target_tile: int, phase: String) -> void:

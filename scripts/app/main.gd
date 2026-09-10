@@ -59,6 +59,7 @@ const MAP_STAGE_SIZE := SquareGridLayoutScript.STAGE_SIZE
 const MAP_ZOOM_MIN := 0.65
 const MAP_ZOOM_MAX := 1.75
 const MAP_ZOOM_STEP := 0.10
+const MAP_LEFT_DRAG_THRESHOLD := 8.0
 const TERRAIN_LABELS := {
 	"flat_grass": "平坦草地",
 	"trees": "樹林",
@@ -357,6 +358,9 @@ var transport_route_fare := 30
 var map_zoom := 1.0
 var map_pan_offset := Vector2.ZERO
 var _map_pan_drag_active := false
+var _map_pan_drag_pending := false
+var _map_pan_drag_uses_left_button := false
+var _map_pan_drag_origin := Vector2.ZERO
 var _map_pan_drag_last_position := Vector2.ZERO
 var _npc_dialogue_remaining_seconds := 0.0
 var _active_npc_dialogue_index := -1
@@ -686,13 +690,39 @@ func _input(event: InputEvent) -> void:
 		if zoom_event.button_index == MOUSE_BUTTON_MIDDLE:
 			if zoom_event.pressed and _can_zoom_map_at(zoom_event.position):
 				_map_pan_drag_active = true
+				_map_pan_drag_pending = false
+				_map_pan_drag_uses_left_button = false
+				_map_pan_drag_origin = zoom_event.position
 				_map_pan_drag_last_position = zoom_event.position
 				get_viewport().set_input_as_handled()
 				return
-			if not zoom_event.pressed and _map_pan_drag_active:
-				_map_pan_drag_active = false
+			if not zoom_event.pressed and _map_pan_drag_active and not _map_pan_drag_uses_left_button:
+				_clear_map_pan_drag_state()
 				get_viewport().set_input_as_handled()
 				return
+		if zoom_event.button_index == MOUSE_BUTTON_LEFT:
+			if zoom_event.pressed and _can_left_drag_map_at(zoom_event.position):
+				# Leave the press unhandled. A tile/NPC/UI control must still receive a
+				# normal short click; motion only becomes a camera capture after the
+				# player deliberately crosses this threshold.
+				_map_pan_drag_pending = true
+				_map_pan_drag_uses_left_button = true
+				_map_pan_drag_origin = zoom_event.position
+				_map_pan_drag_last_position = zoom_event.position
+			elif not zoom_event.pressed and _map_pan_drag_uses_left_button:
+				if _map_pan_drag_active:
+					_clear_map_pan_drag_state()
+					get_viewport().set_input_as_handled()
+					return
+				_clear_map_pan_drag_state()
+		if (
+			zoom_event.pressed
+			and zoom_event.button_index == MOUSE_BUTTON_RIGHT
+			and _can_reset_map_at(zoom_event.position)
+		):
+			_reset_map_camera()
+			get_viewport().set_input_as_handled()
+			return
 		if (
 			zoom_event.pressed
 			and zoom_event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]
@@ -702,11 +732,16 @@ func _input(event: InputEvent) -> void:
 			_zoom_map_at(zoom_event.position, direction * MAP_ZOOM_STEP)
 			get_viewport().set_input_as_handled()
 			return
-	if event is InputEventMouseMotion and _map_pan_drag_active:
+	if event is InputEventMouseMotion and (_map_pan_drag_active or _map_pan_drag_pending):
 		var pan_event := event as InputEventMouseMotion
 		if not _can_zoom_map_at(pan_event.position):
-			_map_pan_drag_active = false
+			_clear_map_pan_drag_state()
 			return
+		if _map_pan_drag_pending:
+			if pan_event.position.distance_to(_map_pan_drag_origin) < MAP_LEFT_DRAG_THRESHOLD:
+				return
+			_map_pan_drag_pending = false
+			_map_pan_drag_active = true
 		var pan_delta := pan_event.position - _map_pan_drag_last_position
 		_map_pan_drag_last_position = pan_event.position
 		map_pan_offset += pan_delta
@@ -745,6 +780,42 @@ func _can_zoom_map_at(global_position: Vector2) -> bool:
 		if blocking_surface != null and blocking_surface.visible:
 			return false
 	return true
+
+
+func _can_left_drag_map_at(global_position: Vector2) -> bool:
+	if map_zoom <= 1.0 or not _can_zoom_map_at(global_position):
+		return false
+	# HUD and ordinary controls are outside map_viewport's child tree. Keeping
+	# them out of the drag candidate boundary prevents a left UI click becoming a
+	# camera gesture, while tiles/NPCs remain eligible for thresholded map drag.
+	var hovered_control := get_viewport().gui_get_hovered_control()
+	if hovered_control == null:
+		return true
+	return hovered_control == map_viewport or map_viewport.is_ancestor_of(hovered_control)
+
+
+func _can_reset_map_at(global_position: Vector2) -> bool:
+	return _can_zoom_map_at(global_position) and _camera_reset_is_needed()
+
+
+func _camera_reset_is_needed() -> bool:
+	return not is_equal_approx(map_zoom, 1.0) or not map_pan_offset.is_equal_approx(Vector2.ZERO)
+
+
+func _clear_map_pan_drag_state() -> void:
+	_map_pan_drag_active = false
+	_map_pan_drag_pending = false
+	_map_pan_drag_uses_left_button = false
+	_map_pan_drag_origin = Vector2.ZERO
+	_map_pan_drag_last_position = Vector2.ZERO
+
+
+func _reset_map_camera() -> void:
+	map_zoom = 1.0
+	map_pan_offset = Vector2.ZERO
+	_clear_map_pan_drag_state()
+	_layout_map_stage()
+	_set_hint("地圖已回到 100% 原始視角", false)
 
 
 func _zoom_map_at(global_position: Vector2, zoom_delta: float) -> void:
