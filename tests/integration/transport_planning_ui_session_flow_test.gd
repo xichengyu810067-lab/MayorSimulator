@@ -26,6 +26,7 @@ func _run() -> void:
 	if main.tutorial_overlay != null and main.tutorial_overlay.is_open():
 		main.tutorial_overlay.close_as_completed(false)
 	main._set_map_interaction_enabled(true)
+	_check_route_package_visible_cost_kinds(main)
 
 	main.municipal_overlay.open_page("buildings")
 	main._select_building_group("economy")
@@ -152,7 +153,7 @@ func _run() -> void:
 		main._on_grid_pressed(int(road_tiles[road_index]))
 		_check(main.transport_plan_tiles.size() == road_index + 1, "road map input did not append the next adjacent tile")
 		_check(main.transport_plan_tiles[road_index] == int(road_tiles[road_index]), "road map input changed the player-selected path order")
-		var visible_route_cost := int(TransportModesScript.route_package_price_quote(road_index + 1).get("construction_cost", -1))
+		var visible_route_cost := int(TransportModesScript.route_package_price_quote(road_index + 1, "road").get("construction_cost", -1))
 		_check(main.placement_label.text.contains("預估 $%d" % visible_route_cost), "route-package banner does not show its authoritative route price at L=%d: %s" % [road_index + 1, main.placement_label.text])
 		_check(main.hint_label.text.contains("估價 $%d" % visible_route_cost), "route-package hint disagrees with the banner at L=%d: %s" % [road_index + 1, main.hint_label.text])
 	_check(existing_building_button != null and existing_building_button.is_visible_in_tree(), "route placement hides a pre-existing building visual")
@@ -219,6 +220,26 @@ func _run() -> void:
 	if not _failed:
 		print("Transport planning UI session flow test passed. Checks=%d" % _checks)
 	await TestCleanup.finish(self, [main], exit_code)
+
+
+func _check_route_package_visible_cost_kinds(main) -> void:
+	var original_kind: String = main.transport_plan_kind
+	var original_operation: String = main.transport_plan_operation
+	main.transport_plan_operation = "build"
+	var session := {"workflow": "route_package_v1", "state": "network_placement"}
+	for mode: String in ["bus", "metro", "train", "air"]:
+		var network_kind := str({
+			"bus": "road",
+			"metro": "metro_track",
+			"train": "rail_track",
+			"air": "runway",
+		}.get(mode, ""))
+		main.transport_plan_kind = network_kind
+		var authoritative: Dictionary = TransportModesScript.route_package_price_quote(3, network_kind)
+		var visible: int = int(main._transport_visible_plan_cost({}, 3, session))
+		_check(visible == int(authoritative.get("construction_cost", -1)), "%s route-package visible quote is not kind-aware: %s" % [mode, authoritative])
+	main.transport_plan_kind = original_kind
+	main.transport_plan_operation = original_operation
 
 
 func _place_station(main, tile_id: int) -> void:

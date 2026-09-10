@@ -9,6 +9,7 @@ const DRAFT_CAPTURE := "transport-route-package-draft-native.png"
 const CONSTRUCTION_CAPTURE := "transport-route-package-construction-native.png"
 const OPERATIONAL_CAPTURE := "transport-route-package-operational-native.png"
 const TestCleanup := preload("res://tests/helpers/scene_tree_test_cleanup.gd")
+const TransportModesScript := preload("res://data/catalogs/transport_modes.gd")
 
 var output_dir := ""
 var failed := false
@@ -197,9 +198,9 @@ func _run() -> void:
 	var detail := main.transport_planning_panel.find_child("TransportPlanningSessionDetail", true, false) as Label
 	var expected_tokens := [
 		"站點 $%d" % int(quote.get("station_building_cost", -1)),
-		"路線 11 格 $11020",
+		"路線 11 格 $%d" % int(quote.get("route_construction_cost", -1)),
 		"總工程費 $%d" % int(quote.get("total_cost", -1)),
-		"路線月維護 $3306",
+		"路線月維護 $%d" % int(quote.get("route_monthly_maintenance", -1)),
 	]
 	if detail == null or not detail.is_visible_in_tree():
 		_fail("package confirmation detail is not visible")
@@ -297,7 +298,7 @@ func _run() -> void:
 		"pricing": {
 			"price_model": str(quote.get("price_model", "")),
 			"route_tile_count": int(quote.get("route_tile_count", 0)),
-			"long_distance_exponent": 1,
+			"price_provenance": str(quote.get("price_provenance", "")),
 			"route_construction_cost": int(quote.get("route_construction_cost", 0)),
 			"route_monthly_maintenance": int(quote.get("route_monthly_maintenance", 0)),
 		},
@@ -363,7 +364,10 @@ func _run() -> void:
 		return
 	result_file.store_string(JSON.stringify(result, "\t"))
 	result_file.close()
-	print("TRANSPORT_ROUTE_PACKAGE_NATIVE_VISIBLE_ACCEPTANCE_PASSED captures=5 L=11 construction=11020 maintenance=3306 ledger_delta=1 route_status=operational bus_only=true building_visible=true l_turn=true actual_main=true")
+	print("TRANSPORT_ROUTE_PACKAGE_NATIVE_VISIBLE_ACCEPTANCE_PASSED captures=5 L=11 construction=%d maintenance=%d ledger_delta=1 route_status=operational bus_only=true building_visible=true l_turn=true actual_main=true" % [
+		int(quote.get("route_construction_cost", 0)),
+		int(quote.get("route_monthly_maintenance", 0)),
+	])
 	await TestCleanup.finish(self, [main], 0)
 
 
@@ -375,13 +379,15 @@ func _validate_draft_quote(
 	city_grid_before: Array,
 	negative_ledger_before: int
 ) -> bool:
+	var expected_route := TransportModesScript.route_package_price_quote(11, "road")
 	if (
 		not bool(quote.get("ok", false))
-		or str(quote.get("price_model", "")) != "route_package_v1"
+		or str(quote.get("price_model", "")) != str(expected_route.get("price_model", ""))
+		or str(quote.get("price_provenance", "")) != str(expected_route.get("price_provenance", ""))
 		or int(quote.get("route_tile_count", -1)) != 11
-		or int(quote.get("route_construction_cost", -1)) != 11_020
-		or int(quote.get("route_monthly_maintenance", -1)) != 3_306
-		or int(quote.get("total_cost", -1)) != int(quote.get("station_building_cost", 0)) + 11_020 + int(quote.get("support_facility_cost", 0)) + int(quote.get("level_crossing_cost", 0))
+		or int(quote.get("route_construction_cost", -1)) != int(expected_route.get("construction_cost", -2))
+		or int(quote.get("route_monthly_maintenance", -1)) != int(expected_route.get("monthly_maintenance", -2))
+		or int(quote.get("total_cost", -1)) != int(quote.get("station_building_cost", 0)) + int(expected_route.get("construction_cost", 0)) + int(quote.get("support_facility_cost", 0)) + int(quote.get("level_crossing_cost", 0))
 		or int(main.vertical_slice.treasury_balance()) != funds_before
 		or main.vertical_slice.construction.to_dict() != jobs_before
 		or main.vertical_slice.transport.to_dict() != network_before

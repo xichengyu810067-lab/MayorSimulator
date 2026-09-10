@@ -5563,7 +5563,7 @@ func _sync_placement_banner() -> void:
 
 func _transport_visible_plan_cost(quote: Dictionary, tile_count: int, session: Dictionary = {}) -> int:
 	if _transport_session_is_route_package(session) and transport_plan_operation == "build":
-		return int(TransportModesScript.route_package_price_quote(tile_count).get("construction_cost", 0))
+		return int(TransportModesScript.route_package_price_quote(tile_count, transport_plan_kind).get("construction_cost", 0))
 	return int(quote.get("total_cost", quote.get("cost", 0)))
 
 

@@ -7,6 +7,7 @@ const TransportModesScript = preload("res://data/catalogs/transport_modes.gd")
 
 const SAVE_PATH := "user://b13_transport_route_package_round_trip.json"
 const LEGACY_SAVE_PATH := "user://b13_transport_route_package_v1_round_trip.json"
+const LEGACY_FIXTURE_PATH := "res://tests/fixtures/save_schema/route_package_v1_transport.json"
 
 var _failed := false
 var _checks := 0
@@ -140,42 +141,25 @@ func _test_insufficient_funds_is_zero_write() -> void:
 
 func _test_legacy_v1_costs_are_not_recomputed() -> void:
 	var coordinator = CoordinatorScript.new(20_260_905, 50_000)
-	coordinator.terrain_map = CityTerrainMapScript.new()
-	var legacy_tile := _tile(coordinator, 8, 8)
-	var started: Dictionary = coordinator.transport.start_project("build", {
-		"title": "Legacy v1 package",
-		"segments": [{"kind": "road", "tile_path": [legacy_tile]}],
-		"facilities": [],
-		"stations": [],
-	}, coordinator.terrain_map, [], [])
-	_check(bool(started.get("ok", false)), "legacy fixture starts from a valid authoritative project")
-	if not bool(started.get("ok", false)):
+	_check(coordinator.load_game(LEGACY_FIXTURE_PATH), "tracked legacy v1 save fixture loads")
+	if coordinator.transport.segments.is_empty():
+		_check(false, "tracked legacy v1 save fixture contains no transport segment")
 		return
-	var project_id := str(started.get("project", {}).get("id", ""))
-	_check(bool(coordinator.transport.complete_project(project_id).get("ok", false)), "legacy fixture completes its authoritative project")
 	var segment_id := str(coordinator.transport.segments.keys()[0])
 	var legacy_segment: Dictionary = coordinator.transport.segments[segment_id]
-	legacy_segment["price_model"] = "route_package_v1"
-	legacy_segment["route_construction_cost"] = 12_345
-	legacy_segment["route_monthly_maintenance"] = 777
-	coordinator.transport.segments[segment_id] = legacy_segment
-	var legacy_project: Dictionary = coordinator.transport.projects[project_id]
-	var legacy_plan: Dictionary = legacy_project.get("plan", {})
-	legacy_plan["segments"][0] = legacy_segment.duplicate(true)
-	legacy_plan["segments"][0].erase("status")
-	legacy_plan["segments"][0].erase("project_id")
-	legacy_project["plan"] = legacy_plan
-	legacy_project["quote"]["plan"] = legacy_plan.duplicate(true)
-	coordinator.transport.projects[project_id] = legacy_project
+	_check(str(legacy_segment.get("price_model", "")) == "route_package_v1", "tracked fixture is a historical v1 segment")
+	_check(int(legacy_segment.get("route_construction_cost", -1)) == 12_345, "tracked fixture exposes its historical construction cost")
+	_check(int(legacy_segment.get("route_monthly_maintenance", -1)) == 777, "tracked fixture exposes its historical maintenance")
 	_check(coordinator.transport.monthly_maintenance() == 777, "loaded v1 segment keeps its historical maintenance rather than recomputing")
-	_check(coordinator.save_game(LEGACY_SAVE_PATH) == OK, "legacy v1 transport state saves")
+	_check(coordinator.save_game(LEGACY_SAVE_PATH) == OK, "loaded legacy v1 fixture saves without migration")
 	var restored = CoordinatorScript.new(1, 1)
-	_check(restored.load_game(LEGACY_SAVE_PATH), "legacy v1 transport state reloads")
+	_check(restored.load_game(LEGACY_SAVE_PATH), "legacy v1 fixture reloads after save")
 	var restored_segment: Dictionary = restored.transport.segments.get(segment_id, {})
 	_check(str(restored_segment.get("price_model", "")) == "route_package_v1", "legacy v1 price model survives save/load")
 	_check(int(restored_segment.get("route_construction_cost", -1)) == 12_345, "legacy v1 construction cost survives save/load without rewriting")
 	_check(int(restored_segment.get("route_monthly_maintenance", -1)) == 777, "legacy v1 maintenance survives save/load without rewriting")
 	_check(restored.transport.monthly_maintenance() == 777, "legacy v1 loaded authority still uses its stored maintenance")
+	_check(restored.transport.to_dict() == coordinator.transport.to_dict(), "legacy v1 transport authority round-trips without shape drift")
 
 
 func _empty_grid() -> Array[String]:

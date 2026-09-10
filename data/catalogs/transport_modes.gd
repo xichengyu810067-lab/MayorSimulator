@@ -199,15 +199,16 @@ static func route_package_monthly_maintenance(tile_count: int) -> int:
 	return _route_package_scaled_cost(tile_count, ROUTE_BASE_MAINTENANCE_PER_TILE)
 
 
-static func route_package_price_quote(tile_count: int) -> Dictionary:
+static func route_package_price_quote(tile_count: int, network_kind: String = "road") -> Dictionary:
 	var resolved_count := maxi(0, tile_count)
-	var road_spec := segment_spec("road")
+	var network_spec := segment_spec(network_kind)
 	return {
 		"price_model": ROUTE_PACKAGE_PRICE_MODEL,
 		"price_provenance": ROUTE_PACKAGE_PRICE_PROVENANCE,
+		"network_kind": network_kind,
 		"route_tile_count": resolved_count,
-		"construction_cost": int(road_spec.get("build_cost_per_tile", 0)) * resolved_count,
-		"monthly_maintenance": int(road_spec.get("monthly_maintenance_per_tile", 0)) * resolved_count,
+		"construction_cost": int(network_spec.get("build_cost_per_tile", 0)) * resolved_count,
+		"monthly_maintenance": int(network_spec.get("monthly_maintenance_per_tile", 0)) * resolved_count,
 	}
 
 
