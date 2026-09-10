@@ -197,6 +197,11 @@ func _run() -> void:
 		_check_visible_translation(main, locale, "市政服務中心", "municipal hub")
 		_check_visible_translation(main, locale, "選擇市政工作；七項服務皆可直接開啟。", "municipal hub")
 		_check_visible_translation(main, locale, "建設與藍圖", "municipal hub")
+		var municipal_back := main.municipal_overlay.find_child("BackButton", true, false) as Button
+		_check(
+			municipal_back != null and municipal_back.tooltip_text == _l10n.text("返回上一頁（Esc）"),
+			"%s municipal BackButton tooltip is exactly localized: %s" % [locale, "<missing>" if municipal_back == null else municipal_back.tooltip_text]
+		)
 		var municipal_window := main.municipal_overlay.get_node_or_null("MunicipalWindow") as Control
 		_check(municipal_window != null, "municipal window exists for layout checks")
 		if municipal_window != null:
