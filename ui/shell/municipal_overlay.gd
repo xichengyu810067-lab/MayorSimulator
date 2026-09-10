@@ -8,6 +8,7 @@ signal page_opened(page_id: String)
 signal overlay_closed
 
 const HUB_PAGE_ID := "hub"
+const MAX_NAVIGATION_HISTORY_ENTRIES := 16
 const MENU_FONT_SIZE := 22
 const HEADER_FONT_SIZE := 28
 const ACTION_FONT_SIZE := 20
@@ -185,7 +186,7 @@ func open_page(page_id: String) -> void:
 	if not visible or _current_page_id.is_empty():
 		_page_history = _initial_history_for(normalized_id)
 	elif _current_page_id != normalized_id:
-		_page_history.append(_current_page_id)
+		_remember_current_page()
 	_show_page(normalized_id, page)
 
 
@@ -280,7 +281,7 @@ func _build_shell() -> void:
 
 	_back_button = _header_button("← 返回")
 	_back_button.name = "BackButton"
-	_back_button.tooltip_text = "返回市政服務中心（Esc）"
+	_back_button.tooltip_text = "返回上一頁（Esc）"
 	_back_button.pressed.connect(_handle_back)
 	header.add_child(_back_button)
 
@@ -552,6 +553,13 @@ func _handle_back() -> void:
 			return
 		push_warning("MunicipalOverlay skipped an unavailable history page named '%s'." % previous_page_id)
 	open_hub()
+
+
+func _remember_current_page() -> void:
+	_page_history.append(_current_page_id)
+	while _page_history.size() > MAX_NAVIGATION_HISTORY_ENTRIES:
+		var discard_index := 1 if _page_history[0] == HUB_PAGE_ID else 0
+		_page_history.remove_at(discard_index)
 
 
 func _initial_history_for(page_id: String) -> Array[String]:

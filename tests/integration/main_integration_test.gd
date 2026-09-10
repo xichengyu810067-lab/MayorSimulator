@@ -352,6 +352,7 @@ func _run() -> void:
 			main.municipal_overlay.open_hub()
 			await process_frame
 	var municipal_back := main.municipal_overlay.find_child("BackButton", true, false) as Button
+	_check(municipal_back != null and municipal_back.tooltip_text == "返回上一頁（Esc）", "municipal BackButton describes its immediate previous-page behavior")
 	# Navigation is a real visit history, not a static child-to-parent lookup.
 	# Exercise the player-visible sequences first, then a direct-page transition
 	# whose return target cannot be expressed by the legacy static map.
@@ -401,6 +402,46 @@ func _run() -> void:
 		municipal_back.emit_signal("pressed")
 		await process_frame
 		_check(main.municipal_overlay.current_page() == "hub", "opening the same page repeatedly does not create a back-loop")
+	main.municipal_overlay.open_hub()
+	await process_frame
+	for navigation_index in 24:
+		main.municipal_overlay.open_page("governance" if navigation_index % 2 == 0 else "finance")
+		await process_frame
+	var capped_back_steps := 0
+	if municipal_back != null:
+		municipal_back.emit_signal("pressed")
+		await process_frame
+		capped_back_steps += 1
+		_check(main.municipal_overlay.current_page() == "governance", "capped history still returns to the most recently visited prior page")
+		while main.municipal_overlay.current_page() != "hub" and capped_back_steps < 32:
+			municipal_back.emit_signal("pressed")
+			await process_frame
+			capped_back_steps += 1
+		_check(main.municipal_overlay.current_page() == "hub", "capped municipal history still ends at the hub")
+		_check(capped_back_steps <= 16, "repeated municipal page visits retain only the bounded recent navigation path")
+	main.municipal_overlay.open_hub()
+	await process_frame
+	main.municipal_overlay.open_page("buildings")
+	await process_frame
+	main.municipal_overlay.open_page("blueprint")
+	await process_frame
+	var child_escape := InputEventAction.new()
+	child_escape.action = "ui_cancel"
+	child_escape.pressed = true
+	main.municipal_overlay._unhandled_key_input(child_escape)
+	_check(main.get_viewport().is_input_handled(), "Escape from a municipal child page marks its input event handled")
+	await process_frame
+	_check(main.municipal_overlay.current_page() == "buildings", "Escape from a municipal child page returns to its immediate previous page")
+	var hub_escape := InputEventAction.new()
+	hub_escape.action = "ui_cancel"
+	hub_escape.pressed = true
+	main.municipal_overlay._unhandled_key_input(hub_escape)
+	_check(main.get_viewport().is_input_handled(), "Escape from the municipal hub marks its input event handled")
+	await process_frame
+	_check(not main.municipal_overlay.is_open(), "Escape from the municipal hub closes the overlay")
+	main.municipal_button.emit_signal("pressed")
+	await process_frame
+	_check(main.municipal_overlay.is_open() and main.municipal_overlay.current_page() == "hub", "municipal control reopens the overlay after Escape closes it")
 	main.municipal_overlay.open_page("buildings")
 	await process_frame
 	main.municipal_overlay.open_page("unknown_municipal_page")
