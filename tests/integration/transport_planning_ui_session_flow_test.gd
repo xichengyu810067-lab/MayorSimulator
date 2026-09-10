@@ -176,7 +176,7 @@ func _run() -> void:
 	continue_button = main.transport_planning_panel.find_child("TransportPlanningSessionContinue", true, false) as Button
 	_check(continue_button != null and continue_button.text.contains("確認總包") and not continue_button.disabled, "route-edit phase lacks an enabled one-step package confirmation")
 	var package_detail := main.transport_planning_panel.find_child("TransportPlanningSessionDetail", true, false) as Label
-	_check(package_detail != null and package_detail.text.contains("總工程費") and package_detail.text.contains("路線 5 格 $5000") and package_detail.text.contains("月維護"), "package confirmation does not expose the same authoritative route price shown during map selection")
+	_check(package_detail != null and package_detail.text.contains("總工程費") and package_detail.text.contains("路線 5 格 $2600") and package_detail.text.contains("月維護"), "package confirmation does not expose the same authoritative route price shown during map selection")
 	var route_button := main.transport_planning_panel.find_child("PlanRoute_bus", true, false) as Button
 	_check(route_button == null or route_button.disabled, "package workflow still requires a second route-stop planning pass")
 	await _capture_checkpoint("package-confirmation", "02-package-confirmation.png", capture_dir)
@@ -200,7 +200,8 @@ func _run() -> void:
 	_check(main.vertical_slice.transport.routes.size() == 1, "construction completion created duplicate or missing route identities")
 	_check(main.vertical_slice.transport.segments.size() == 1 and main.vertical_slice.transport.facilities.size() == 1, "completed package materialized duplicate or missing topology")
 	var route: Dictionary = main.vertical_slice.transport.routes.values()[0]
-	_check(str(route.get("status", "")) == "operational" and str(route.get("price_model", "")) == "route_package_v1", "automatically materialized route is not operational with versioned pricing")
+	_check(str(route.get("status", "")) == "operational" and str(route.get("price_model", "")) == "route_package_v2", "automatically materialized route is not operational with v2 pricing")
+	_check(str(route.get("price_provenance", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_PROVENANCE, "materialized route lost its quote_project provenance")
 	_check(_negative_ledger_count(main) == negative_ledger_before + 1, "construction completion introduced another package debit")
 	_check(main.map_action_mode == "inspect" and main.transport_route_station_tiles.is_empty(), "automatic route activation left a stale route-selection action")
 

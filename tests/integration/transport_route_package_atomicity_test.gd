@@ -3,8 +3,10 @@ extends SceneTree
 const CoordinatorScript = preload("res://scripts/app/vertical_slice_coordinator.gd")
 const CityTerrainMapScript = preload("res://scripts/world/city_terrain_map.gd")
 const TransportPlanningSessionScript = preload("res://scripts/systems/city/transport_planning_session.gd")
+const TransportModesScript = preload("res://data/catalogs/transport_modes.gd")
 
 const SAVE_PATH := "user://b13_transport_route_package_round_trip.json"
+const LEGACY_SAVE_PATH := "user://b13_transport_route_package_v1_round_trip.json"
 
 var _failed := false
 var _checks := 0
@@ -18,6 +20,7 @@ func _run() -> void:
 	_cleanup()
 	_test_atomic_package_and_automatic_route()
 	_test_insufficient_funds_is_zero_write()
+	_test_legacy_v1_costs_are_not_recomputed()
 	_cleanup()
 	if not _failed:
 		print("Transport route package atomicity test passed. Checks=%d" % _checks)
@@ -49,9 +52,19 @@ func _test_atomic_package_and_automatic_route() -> void:
 	var quote: Dictionary = coordinator.transport_session_package_quote(grid)
 	_check(bool(quote.get("ok", false)), "complete package quotes successfully")
 	_check(int(quote.get("route_tile_count", -1)) == 5, "L counts the unique contiguous guideway cells")
-	_check(int(quote.get("route_construction_cost", -1)) == 5_000, "five-cell route construction uses the package formula")
-	_check(int(quote.get("route_monthly_maintenance", -1)) == 1_500, "five-cell route maintenance uses the package formula")
-	_check(int(quote.get("total_cost", -1)) == int(quote.get("station_building_cost", 0)) + 5_000 + int(quote.get("support_facility_cost", 0)) + int(quote.get("level_crossing_cost", 0)), "total is station buildings plus route and explicit support/crossing fees")
+	var standalone_route_quote: Dictionary = coordinator.transport.quote_project("build", {
+		"segments": [{"kind": "road", "tile_path": route_tiles}],
+		"facilities": [],
+		"stations": [],
+	}, coordinator.terrain_map, [], [])
+	_check(bool(standalone_route_quote.get("ok", false)), "same-topology standalone route quotes successfully")
+	_check(int(quote.get("route_construction_cost", -1)) == int(standalone_route_quote.get("total_cost", -2)), "package route construction equals same-topology standalone quote_project")
+	_check(int(quote.get("route_monthly_maintenance", -1)) == int(standalone_route_quote.get("monthly_maintenance", -2)), "package route maintenance equals same-topology standalone quote_project")
+	_check(int(quote.get("route_construction_cost", -1)) == 2_600, "five-cell v2 road construction uses the authoritative road rate")
+	_check(int(quote.get("route_monthly_maintenance", -1)) == 90, "five-cell v2 road maintenance uses the authoritative road rate")
+	_check(str(quote.get("price_model", "")) == "route_package_v2", "new package quote uses v2 pricing")
+	_check(str(quote.get("price_provenance", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_PROVENANCE, "new package quote names quote_project provenance")
+	_check(int(quote.get("total_cost", -1)) == int(quote.get("station_building_cost", 0)) + 2_600 + int(quote.get("support_facility_cost", 0)) + int(quote.get("level_crossing_cost", 0)), "total is station buildings plus parity route and explicit support/crossing fees")
 	_check(int(quote.get("support_facility_cost", 0)) == 3_600, "missing connected bus depot is included explicitly")
 	var negative_entries_before := _negative_ledger_count(coordinator)
 	var started: Dictionary = coordinator.start_transport_session_package(grid)
@@ -63,6 +76,17 @@ func _test_atomic_package_and_automatic_route() -> void:
 	_check(str(coordinator.transport_planning_session_snapshot().get("state", "")) == "waiting_construction", "package waits in the same session")
 	var persisted_quote: Dictionary = coordinator.transport_planning_session_snapshot().get("route_draft", {}).get("package_quote", {})
 	_check(not persisted_quote.has("station_placements") and not persisted_quote.has("support_plans"), "session persists price provenance without duplicating executable blueprints or project plans")
+	_check(str(persisted_quote.get("price_model", "")) == "route_package_v2" and str(persisted_quote.get("price_provenance", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_PROVENANCE, "session persists v2 model and provenance")
+	var waiting_transport_snapshot: Dictionary = coordinator.transport.to_dict()
+	_check(bool(coordinator.transport.validate_snapshot(waiting_transport_snapshot).get("valid", false)), "waiting v2 project snapshot validates")
+	var corrupted_waiting_snapshot := waiting_transport_snapshot.duplicate(true)
+	var corrupted_project_id := _first_v2_project_id(corrupted_waiting_snapshot)
+	_check(not corrupted_project_id.is_empty(), "waiting snapshot contains the v2 route project")
+	if not corrupted_project_id.is_empty():
+		corrupted_waiting_snapshot["projects"][corrupted_project_id]["plan"]["segments"][0]["route_monthly_maintenance"] += 1
+		corrupted_waiting_snapshot["projects"][corrupted_project_id]["quote"]["plan"] = corrupted_waiting_snapshot["projects"][corrupted_project_id]["plan"].duplicate(true)
+		var corrupted_waiting_validation: Dictionary = coordinator.transport.validate_snapshot(corrupted_waiting_snapshot)
+		_check(not bool(corrupted_waiting_validation.get("valid", true)) and _issues_have(corrupted_waiting_validation, "invalid_build_segment_v2_price_parity"), "tampered waiting v2 project pricing fails closed")
 	_check(coordinator.transport.routes.is_empty(), "route is not activated before construction completes")
 	var max_days := _maximum_active_days(coordinator)
 	coordinator.advance_days(max_days, {}, false)
@@ -71,9 +95,15 @@ func _test_atomic_package_and_automatic_route() -> void:
 	_check(coordinator.transport.routes.size() == 1, "one route is created automatically without reopening the UI")
 	var route: Dictionary = coordinator.transport.routes.values()[0]
 	_check(str(route.get("status", "")) == "operational", "automatic route passes topology and activates")
-	_check(str(route.get("price_model", "")) == "route_package_v1", "route retains its versioned price provenance")
-	_check(int(route.get("route_monthly_maintenance", -1)) == 1_500, "route retains the quoted monthly formula result")
-	_check(coordinator.transport_incremental_monthly_maintenance() == 1_500 + 120 + 2 * 42, "incremental maintenance replaces segment rate, excludes station duplicate, and retains depot/fleet detail")
+	_check(str(route.get("price_model", "")) == "route_package_v2", "route retains its v2 price model")
+	_check(str(route.get("price_provenance", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_PROVENANCE, "route retains its quote_project provenance")
+	_check(int(route.get("route_monthly_maintenance", -1)) == 90, "route retains the quoted monthly result")
+	var corrupted_route_snapshot: Dictionary = coordinator.transport.to_dict().duplicate(true)
+	var route_id := str(coordinator.transport.routes.keys()[0])
+	corrupted_route_snapshot["routes"][route_id]["route_construction_cost"] += 1
+	var corrupted_route_validation: Dictionary = coordinator.transport.validate_snapshot(corrupted_route_snapshot)
+	_check(not bool(corrupted_route_validation.get("valid", true)) and _issues_have(corrupted_route_validation, "invalid_route_v2_price_parity"), "tampered materialized v2 route pricing fails closed")
+	_check(coordinator.transport_incremental_monthly_maintenance() == 90 + 120 + 2 * 42, "incremental maintenance replaces segment rate, excludes station duplicate, and retains depot/fleet detail")
 	_check(coordinator.save_game(SAVE_PATH) == OK, "materialized package saves")
 	var restored = CoordinatorScript.new(1, 1)
 	_check(restored.load_game(SAVE_PATH), "materialized package reloads")
@@ -108,6 +138,46 @@ func _test_insufficient_funds_is_zero_write() -> void:
 	_check(coordinator.blueprint_library_service.snapshot() == blueprint_before, "rejected package does not increment blueprint usage")
 
 
+func _test_legacy_v1_costs_are_not_recomputed() -> void:
+	var coordinator = CoordinatorScript.new(20_260_905, 50_000)
+	coordinator.terrain_map = CityTerrainMapScript.new()
+	var legacy_tile := _tile(coordinator, 8, 8)
+	var started: Dictionary = coordinator.transport.start_project("build", {
+		"title": "Legacy v1 package",
+		"segments": [{"kind": "road", "tile_path": [legacy_tile]}],
+		"facilities": [],
+		"stations": [],
+	}, coordinator.terrain_map, [], [])
+	_check(bool(started.get("ok", false)), "legacy fixture starts from a valid authoritative project")
+	if not bool(started.get("ok", false)):
+		return
+	var project_id := str(started.get("project", {}).get("id", ""))
+	_check(bool(coordinator.transport.complete_project(project_id).get("ok", false)), "legacy fixture completes its authoritative project")
+	var segment_id := str(coordinator.transport.segments.keys()[0])
+	var legacy_segment: Dictionary = coordinator.transport.segments[segment_id]
+	legacy_segment["price_model"] = "route_package_v1"
+	legacy_segment["route_construction_cost"] = 12_345
+	legacy_segment["route_monthly_maintenance"] = 777
+	coordinator.transport.segments[segment_id] = legacy_segment
+	var legacy_project: Dictionary = coordinator.transport.projects[project_id]
+	var legacy_plan: Dictionary = legacy_project.get("plan", {})
+	legacy_plan["segments"][0] = legacy_segment.duplicate(true)
+	legacy_plan["segments"][0].erase("status")
+	legacy_plan["segments"][0].erase("project_id")
+	legacy_project["plan"] = legacy_plan
+	legacy_project["quote"]["plan"] = legacy_plan.duplicate(true)
+	coordinator.transport.projects[project_id] = legacy_project
+	_check(coordinator.transport.monthly_maintenance() == 777, "loaded v1 segment keeps its historical maintenance rather than recomputing")
+	_check(coordinator.save_game(LEGACY_SAVE_PATH) == OK, "legacy v1 transport state saves")
+	var restored = CoordinatorScript.new(1, 1)
+	_check(restored.load_game(LEGACY_SAVE_PATH), "legacy v1 transport state reloads")
+	var restored_segment: Dictionary = restored.transport.segments.get(segment_id, {})
+	_check(str(restored_segment.get("price_model", "")) == "route_package_v1", "legacy v1 price model survives save/load")
+	_check(int(restored_segment.get("route_construction_cost", -1)) == 12_345, "legacy v1 construction cost survives save/load without rewriting")
+	_check(int(restored_segment.get("route_monthly_maintenance", -1)) == 777, "legacy v1 maintenance survives save/load without rewriting")
+	_check(restored.transport.monthly_maintenance() == 777, "legacy v1 loaded authority still uses its stored maintenance")
+
+
 func _empty_grid() -> Array[String]:
 	var result: Array[String] = []
 	result.resize(CityTerrainMapScript.CELL_COUNT)
@@ -134,6 +204,22 @@ func _maximum_active_days(coordinator) -> int:
 	return maxi(1, result)
 
 
+func _first_v2_project_id(snapshot: Dictionary) -> String:
+	for project_id_variant: Variant in Dictionary(snapshot.get("projects", {})).keys():
+		var project: Dictionary = snapshot["projects"][project_id_variant]
+		for segment_value: Variant in Dictionary(project.get("plan", {})).get("segments", []):
+			if segment_value is Dictionary and str((segment_value as Dictionary).get("price_model", "")) == "route_package_v2":
+				return str(project_id_variant)
+	return ""
+
+
+func _issues_have(result: Dictionary, token: String) -> bool:
+	for issue_variant: Variant in result.get("issues", []):
+		if str(issue_variant).contains(token):
+			return true
+	return false
+
+
 func _negative_ledger_count(coordinator) -> int:
 	var result := 0
 	for entry: Dictionary in coordinator.session.state.ledger.get_entries():
@@ -143,7 +229,7 @@ func _negative_ledger_count(coordinator) -> int:
 
 
 func _cleanup() -> void:
-	for path: String in [SAVE_PATH, "%s.bak" % SAVE_PATH, "%s.tmp" % SAVE_PATH]:
+	for path: String in [SAVE_PATH, "%s.bak" % SAVE_PATH, "%s.tmp" % SAVE_PATH, LEGACY_SAVE_PATH, "%s.bak" % LEGACY_SAVE_PATH, "%s.tmp" % LEGACY_SAVE_PATH]:
 		if FileAccess.file_exists(path):
 			DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
 

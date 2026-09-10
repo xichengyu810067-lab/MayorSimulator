@@ -73,18 +73,27 @@ func quote_project(
 		}
 
 	var segment_cost := 0
+	var segment_maintenance := 0
 	for segment: Dictionary in normalized_plan["segments"]:
 		var spec := TransportModesScript.segment_spec(str(segment.get("kind", "")))
 		segment_cost += int(spec.get("build_cost_per_tile", 0)) * Array(segment.get("tile_path", [])).size()
+		segment_maintenance += int(spec.get("monthly_maintenance_per_tile", 0)) * Array(segment.get("tile_path", [])).size()
 	var facility_cost := 0
+	var facility_maintenance := 0
 	for facility: Dictionary in normalized_plan["facilities"]:
-		facility_cost += int(TransportModesScript.facility_spec(str(facility.get("kind", ""))).get("build_cost", 0))
+		var facility_spec := TransportModesScript.facility_spec(str(facility.get("kind", "")))
+		facility_cost += int(facility_spec.get("build_cost", 0))
+		facility_maintenance += int(facility_spec.get("monthly_maintenance", 0))
 	var station_cost := 0
+	var station_maintenance := 0
 	for station: Dictionary in normalized_plan["stations"]:
-		station_cost += int(TransportModesScript.station_spec(str(station.get("building_name", ""))).get("build_cost", 0))
+		var station_spec := TransportModesScript.station_spec(str(station.get("building_name", "")))
+		station_cost += int(station_spec.get("build_cost", 0))
+		station_maintenance += int(station_spec.get("monthly_maintenance", 0))
 	var new_crossing_tiles := _new_crossing_tiles_for_plan(normalized_plan)
 	var crossing_cost := new_crossing_tiles.size() * TransportModesScript.LEVEL_CROSSING_BUILD_COST
 	var total_cost := segment_cost + facility_cost + station_cost + crossing_cost
+	var crossing_maintenance := new_crossing_tiles.size() * TransportModesScript.LEVEL_CROSSING_MONTHLY_MAINTENANCE
 	return {
 		"ok": true,
 		"operation": operation,
@@ -97,6 +106,13 @@ func quote_project(
 			"level_crossings": crossing_cost,
 		},
 		"total_cost": total_cost,
+		"maintenance_breakdown": {
+			"segments": segment_maintenance,
+			"facilities": facility_maintenance,
+			"stations": station_maintenance,
+			"level_crossings": crossing_maintenance,
+		},
+		"monthly_maintenance": segment_maintenance + facility_maintenance + station_maintenance + crossing_maintenance,
 	}
 
 
@@ -485,7 +501,7 @@ func monthly_maintenance() -> int:
 	var total := 0
 	for record_variant: Variant in segments.values():
 		var segment: Dictionary = record_variant
-		if str(segment.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL:
+		if TransportModesScript.is_route_package_price_model(str(segment.get("price_model", ""))):
 			total += int(segment.get("route_monthly_maintenance", 0))
 		else:
 			var spec := TransportModesScript.segment_spec(str(segment.get("kind", "")))
@@ -725,11 +741,7 @@ static func validate_snapshot(snapshot: Dictionary) -> Dictionary:
 		if not record.get("project_id", null) is String or str(record.get("project_id", "")).is_empty():
 			issues.append("invalid_segment_project_id:%s" % str(id_variant))
 		if record.has("price_model"):
-			if str(record.get("price_model", "")) != TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL:
-				issues.append("invalid_segment_price_model:%s" % str(id_variant))
-			for field_name: String in ["route_construction_cost", "route_monthly_maintenance"]:
-				if not _is_integer_value(record.get(field_name, null)) or int(record.get(field_name, -1)) < 0:
-					issues.append("invalid_segment_%s:%s" % [field_name, str(id_variant)])
+			_append_route_package_segment_price_issues(issues, "segment", str(id_variant), record)
 	for id_variant: Variant in facility_records.keys():
 		var record_variant: Variant = facility_records[id_variant]
 		if not record_variant is Dictionary:
@@ -872,11 +884,23 @@ static func validate_snapshot(snapshot: Dictionary) -> Dictionary:
 			route_semantic_network
 		)
 		if record.has("price_model"):
-			if str(record.get("price_model", "")) != TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL:
+			var price_model := str(record.get("price_model", ""))
+			if not TransportModesScript.is_route_package_price_model(price_model):
 				issues.append("invalid_route_price_model:%s" % str(id_variant))
+			elif price_model == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V2 and str(record.get("price_provenance", "")) != TransportModesScript.ROUTE_PACKAGE_PRICE_PROVENANCE:
+				issues.append("invalid_route_price_provenance:%s" % str(id_variant))
 			for field_name: String in ["route_tile_count", "route_construction_cost", "route_monthly_maintenance"]:
 				if not _is_integer_value(record.get(field_name, null)) or int(record.get(field_name, -1)) < 0:
 					issues.append("invalid_route_%s:%s" % [field_name, str(id_variant)])
+			if price_model == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V2:
+				var route_spec := TransportModesScript.route_spec(str(record.get("mode", "")))
+				var guideway_spec := TransportModesScript.segment_spec(str(route_spec.get("guideway_kind", "")))
+				var route_tile_count := int(record.get("route_tile_count", -1))
+				if (
+					int(record.get("route_construction_cost", -1)) != int(guideway_spec.get("build_cost_per_tile", 0)) * route_tile_count
+					or int(record.get("route_monthly_maintenance", -1)) != int(guideway_spec.get("monthly_maintenance_per_tile", 0)) * route_tile_count
+				):
+					issues.append("invalid_route_v2_price_parity:%s" % str(id_variant))
 	return {"valid": issues.is_empty(), "issues": issues, "schema_version": schema_version}
 
 
@@ -887,7 +911,7 @@ func _canonicalize_loaded_state() -> void:
 	for segment_id: String in _sorted_string_keys(segments):
 		var segment: Dictionary = segments[segment_id]
 		segment["tile_path"] = _int_array(segment.get("tile_path", []))
-		if str(segment.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL:
+		if TransportModesScript.is_route_package_price_model(str(segment.get("price_model", ""))):
 			segment["route_construction_cost"] = int(segment.get("route_construction_cost", 0))
 			segment["route_monthly_maintenance"] = int(segment.get("route_monthly_maintenance", 0))
 		segments[segment_id] = segment
@@ -914,6 +938,13 @@ func _canonicalize_loaded_state() -> void:
 		for key: String in ["segments", "facilities", "stations", "level_crossings"]:
 			breakdown[key] = int(breakdown.get(key, 0))
 		quote["breakdown"] = breakdown
+		if quote.has("maintenance_breakdown"):
+			var maintenance_breakdown: Dictionary = quote.get("maintenance_breakdown", {})
+			for key: String in ["segments", "facilities", "stations", "level_crossings"]:
+				maintenance_breakdown[key] = int(maintenance_breakdown.get(key, 0))
+			quote["maintenance_breakdown"] = maintenance_breakdown
+		if quote.has("monthly_maintenance"):
+			quote["monthly_maintenance"] = int(quote.get("monthly_maintenance", 0))
 		project["quote"] = quote
 		projects[project_id] = project
 	for route_id: String in _sorted_string_keys(routes):
@@ -924,7 +955,7 @@ func _canonicalize_loaded_state() -> void:
 		route["path_tile_ids"] = _int_array(route.get("path_tile_ids", []))
 		route["station_tile_ids"] = _int_array(route.get("station_tile_ids", []))
 		route["loop_seconds"] = float(route.get("loop_seconds", 10.0))
-		if str(route.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL:
+		if TransportModesScript.is_route_package_price_model(str(route.get("price_model", ""))):
 			route["route_tile_count"] = int(route.get("route_tile_count", 0))
 			route["route_construction_cost"] = int(route.get("route_construction_cost", 0))
 			route["route_monthly_maintenance"] = int(route.get("route_monthly_maintenance", 0))
@@ -1074,8 +1105,11 @@ func _normalize_build_plan(plan: Dictionary) -> Dictionary:
 			"kind": str(record.get("kind", "")),
 			"tile_path": _int_array(record.get("tile_path", record.get("tile_ids", []))),
 		}
-		if str(record.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL:
-			normalized_segment["price_model"] = TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL
+		var price_model := str(record.get("price_model", ""))
+		if TransportModesScript.is_route_package_price_model(price_model):
+			normalized_segment["price_model"] = price_model
+			if record.has("price_provenance"):
+				normalized_segment["price_provenance"] = str(record.get("price_provenance", ""))
 			normalized_segment["route_construction_cost"] = int(record.get("route_construction_cost", 0))
 			normalized_segment["route_monthly_maintenance"] = int(record.get("route_monthly_maintenance", 0))
 		normalized_segments.append(normalized_segment)
@@ -1131,8 +1165,11 @@ func _normalize_route(route_plan: Dictionary) -> Dictionary:
 		"fare": int(route_plan.get("fare", 0)),
 		"enabled": bool(route_plan.get("enabled", false)),
 	}
-	if str(route_plan.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL:
-		normalized["price_model"] = TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL
+	var price_model := str(route_plan.get("price_model", ""))
+	if TransportModesScript.is_route_package_price_model(price_model):
+		normalized["price_model"] = price_model
+		if route_plan.has("price_provenance"):
+			normalized["price_provenance"] = str(route_plan.get("price_provenance", ""))
 		normalized["route_tile_count"] = int(route_plan.get("route_tile_count", 0))
 		normalized["route_construction_cost"] = int(route_plan.get("route_construction_cost", 0))
 		normalized["route_monthly_maintenance"] = int(route_plan.get("route_monthly_maintenance", 0))
@@ -2394,6 +2431,8 @@ static func _append_snapshot_build_item_shape_issues(
 			item.get("tile_path", null), issues, "build_segment_path:%s" % label,
 			false, true, true, topology_map
 		)
+		if item.has("price_model"):
+			_append_route_package_segment_price_issues(issues, "build_segment", label, item)
 	elif item_kind == "facility":
 		_append_missing_record_fields(issues, "build_facility", label, item, ["id", "kind", "tile_id"])
 		if not item.get("kind", null) is String or str(item.get("kind", "")) not in TransportModesScript.FACILITY_KINDS:
@@ -2404,6 +2443,30 @@ static func _append_snapshot_build_item_shape_issues(
 		if not item.get("building_name", null) is String or str(item.get("building_name", "")) not in TransportModesScript.STATION_KINDS:
 			issues.append("invalid_build_station_kind:%s" % label)
 		_append_snapshot_tile_id_issue(issues, "build_station", label, item.get("tile_id", null))
+
+
+static func _append_route_package_segment_price_issues(
+	issues: Array[String], issue_prefix: String, label: String, record: Dictionary
+) -> void:
+	var price_model := str(record.get("price_model", ""))
+	if not TransportModesScript.is_route_package_price_model(price_model):
+		issues.append("invalid_%s_price_model:%s" % [issue_prefix, label])
+		return
+	if price_model == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V2 and str(record.get("price_provenance", "")) != TransportModesScript.ROUTE_PACKAGE_PRICE_PROVENANCE:
+		issues.append("invalid_%s_price_provenance:%s" % [issue_prefix, label])
+	for field_name: String in ["route_construction_cost", "route_monthly_maintenance"]:
+		if not _is_integer_value(record.get(field_name, null)) or int(record.get(field_name, -1)) < 0:
+			issues.append("invalid_%s_%s:%s" % [issue_prefix, field_name, label])
+	if price_model != TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V2:
+		return
+	var segment_spec := TransportModesScript.segment_spec(str(record.get("kind", "")))
+	var tile_count := Array(record.get("tile_path", [])).size() if record.get("tile_path", null) is Array else -1
+	if (
+		tile_count < 0
+		or int(record.get("route_construction_cost", -1)) != int(segment_spec.get("build_cost_per_tile", 0)) * tile_count
+		or int(record.get("route_monthly_maintenance", -1)) != int(segment_spec.get("monthly_maintenance_per_tile", 0)) * tile_count
+	):
+		issues.append("invalid_%s_v2_price_parity:%s" % [issue_prefix, label])
 
 
 static func _snapshot_build_item_matches_live(

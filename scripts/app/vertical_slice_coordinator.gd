@@ -757,13 +757,13 @@ func transport_session_package_quote(city_grid: Array = []) -> Dictionary:
 	var plan := _transport_plan_for_tiles(network_kind, "build", route_tiles)
 	if plan.is_empty():
 		return {"ok": false, "error": "invalid_transport_kind"}
-	var route_price := TransportModesScript.route_package_price_quote(route_tiles.size())
 	var segments: Array = Array(plan.get("segments", [])).duplicate(true)
 	if not segments.is_empty() and segments[0] is Dictionary:
 		var segment: Dictionary = segments[0]
 		segment["price_model"] = TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL
-		segment["route_construction_cost"] = int(route_price.get("construction_cost", 0))
-		segment["route_monthly_maintenance"] = int(route_price.get("monthly_maintenance", 0))
+		segment["price_provenance"] = TransportModesScript.ROUTE_PACKAGE_PRICE_PROVENANCE
+		segment["route_construction_cost"] = 0
+		segment["route_monthly_maintenance"] = 0
 		segments[0] = segment
 		plan["segments"] = segments
 	var occupied_tiles: Array[int] = _transport_occupied_tile_ids(city_grid)
@@ -776,6 +776,15 @@ func transport_session_package_quote(city_grid: Array = []) -> Dictionary:
 	if not bool(model_quote.get("ok", false)):
 		return _transport_public_quote_error(model_quote)
 	plan = Dictionary(model_quote.get("plan", {})).duplicate(true)
+	var route_construction_cost := int(Dictionary(model_quote.get("breakdown", {})).get("segments", 0))
+	var route_monthly_maintenance := int(Dictionary(model_quote.get("maintenance_breakdown", {})).get("segments", 0))
+	segments = Array(plan.get("segments", [])).duplicate(true)
+	if not segments.is_empty() and segments[0] is Dictionary:
+		var priced_segment: Dictionary = segments[0]
+		priced_segment["route_construction_cost"] = route_construction_cost
+		priced_segment["route_monthly_maintenance"] = route_monthly_maintenance
+		segments[0] = priced_segment
+		plan["segments"] = segments
 	var crossing_tiles: Array = Array(model_quote.get("crossing_tile_ids", [])).duplicate()
 	var crossing_cost := crossing_tiles.size() * TransportModesScript.LEVEL_CROSSING_BUILD_COST
 	var support_plans: Array = []
@@ -797,8 +806,6 @@ func transport_session_package_quote(city_grid: Array = []) -> Dictionary:
 		support_plans.append({"kind": depot_kind, "plan": support_plan, "tile_ids": [support_tile]})
 		support_cost += int(support_quote.get("total_cost", 0))
 		support_maintenance += int(TransportModesScript.facility_spec(depot_kind).get("monthly_maintenance", 0))
-	var route_construction_cost := int(route_price.get("construction_cost", 0))
-	var route_monthly_maintenance := int(route_price.get("monthly_maintenance", 0))
 	var total_cost := station_cost + route_construction_cost + support_cost + crossing_cost
 	var crossing_maintenance := crossing_tiles.size() * TransportModesScript.LEVEL_CROSSING_MONTHLY_MAINTENANCE
 	var available_workers := int(construction.available_workers())
@@ -810,6 +817,7 @@ func transport_session_package_quote(city_grid: Array = []) -> Dictionary:
 		"ok": true,
 		"workflow": TransportPlanningSessionScript.WORKFLOW_ROUTE_PACKAGE_V1,
 		"price_model": TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL,
+		"price_provenance": TransportModesScript.ROUTE_PACKAGE_PRICE_PROVENANCE,
 		"mode": str(current.get("mode", "")),
 		"network_kind": network_kind,
 		"route_tile_ids": route_tiles,
@@ -974,6 +982,7 @@ func start_transport_session_package(city_grid: Array = []) -> Dictionary:
 		"source_id": str(candidate_planning.snapshot().get("id", "transport_package")),
 		"metadata": {
 			"price_model": str(quote.get("price_model", "")),
+			"price_provenance": str(quote.get("price_provenance", "")),
 			"station_building_cost": int(quote.get("station_building_cost", 0)),
 			"route_construction_cost": int(quote.get("route_construction_cost", 0)),
 			"support_facility_cost": int(quote.get("support_facility_cost", 0)),
@@ -1015,6 +1024,7 @@ func _transport_package_persisted_quote(quote: Dictionary) -> Dictionary:
 	return {
 		"workflow": str(quote.get("workflow", "")),
 		"price_model": str(quote.get("price_model", "")),
+		"price_provenance": str(quote.get("price_provenance", "")),
 		"mode": str(quote.get("mode", "")),
 		"network_kind": str(quote.get("network_kind", "")),
 		"route_tile_count": int(quote.get("route_tile_count", 0)),
@@ -1207,7 +1217,7 @@ func create_transport_route(
 		"fare": fare,
 		"enabled": true,
 	}
-	for field_name: String in ["price_model", "route_tile_count", "route_construction_cost", "route_monthly_maintenance"]:
+	for field_name: String in ["price_model", "price_provenance", "route_tile_count", "route_construction_cost", "route_monthly_maintenance"]:
 		if route_metadata.has(field_name):
 			route_plan[field_name] = route_metadata[field_name]
 	var validation: Dictionary = transport.route_quote(route_plan)
@@ -1261,6 +1271,7 @@ func _try_materialize_completed_transport_package() -> Dictionary:
 		[],
 		{
 			"price_model": str(package_quote.get("price_model", "")),
+			"price_provenance": str(package_quote.get("price_provenance", "")),
 			"route_tile_count": int(package_quote.get("route_tile_count", 0)),
 			"route_construction_cost": int(package_quote.get("route_construction_cost", 0)),
 			"route_monthly_maintenance": int(package_quote.get("route_monthly_maintenance", 0)),
