@@ -208,6 +208,9 @@ $renderer = if ($RendererMode -eq 'Mobile') {
 $stdoutPath = Join-Path $OutputRoot 'stdout.log'
 $stderrPath = Join-Path $OutputRoot 'stderr.log'
 $godotLogPath = Join-Path $OutputRoot 'godot.log'
+$importStdoutPath = Join-Path $OutputRoot 'import-stdout.log'
+$importStderrPath = Join-Path $OutputRoot 'import-stderr.log'
+$importGodotLogPath = Join-Path $OutputRoot 'import-godot.log'
 $summaryPath = Join-Path $OutputRoot 'summary.json'
 
 $godotProcessNames = @([IO.Path]::GetFileNameWithoutExtension($GodotExe))
@@ -223,6 +226,49 @@ $fixedArguments = @(
     '--log-file', $godotLogPath
 )
 
+$importStdoutText = ''
+$importStderrText = ''
+$importCompleted = $false
+$importExitCode = -1
+$importLaunchError = $null
+$importProcess = $null
+$importProcessId = -1
+try {
+    $importInfo = New-Object Diagnostics.ProcessStartInfo
+    $importInfo.FileName = $GodotExe
+    $importInfo.WorkingDirectory = $projectRoot
+    $importInfo.UseShellExecute = $false
+    $importInfo.RedirectStandardOutput = $true
+    $importInfo.RedirectStandardError = $true
+    $importInfo.CreateNoWindow = $true
+    $importArguments = @('--headless', '--editor', '--path', $projectRoot, '--import', '--log-file', $importGodotLogPath)
+    $importInfo.Arguments = (($importArguments | ForEach-Object { ConvertTo-WindowsCommandLineArgument -Value ([string]$_) }) -join ' ')
+    $importInfo.EnvironmentVariables['APPDATA'] = $appData
+    $importInfo.EnvironmentVariables['LOCALAPPDATA'] = $localAppData
+    $importProcess = New-Object Diagnostics.Process
+    $importProcess.StartInfo = $importInfo
+    if (-not $importProcess.Start()) { throw 'Godot import process did not start.' }
+    $importProcessId = [int]$importProcess.Id
+    $importOutTask = $importProcess.StandardOutput.ReadToEndAsync()
+    $importErrTask = $importProcess.StandardError.ReadToEndAsync()
+    $importCompleted = $importProcess.WaitForExit($TimeoutSeconds * 1000)
+    if (-not $importCompleted) {
+        & taskkill.exe /PID $importProcessId /T /F *> $null
+        $null = $importProcess.WaitForExit(30000)
+    }
+    if (-not $importProcess.HasExited) { throw 'Godot import process tree did not exit after timeout cleanup.' }
+    if (-not $importOutTask.Wait(15000) -or -not $importErrTask.Wait(15000)) { throw 'Godot import output pipes did not close.' }
+    $importStdoutText = $importOutTask.GetAwaiter().GetResult()
+    $importStderrText = $importErrTask.GetAwaiter().GetResult()
+    if ($importCompleted) { $importExitCode = [int]$importProcess.ExitCode }
+} catch {
+    $importLaunchError = $_.Exception.Message
+} finally {
+    if ($null -ne $importProcess) { $importProcess.Dispose() }
+    [IO.File]::WriteAllText($importStdoutPath, $importStdoutText, [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($importStderrPath, $importStderrText, [Text.UTF8Encoding]::new($false))
+}
+
 $stdoutText = ''
 $stderrText = ''
 $completed = $false
@@ -231,6 +277,9 @@ $launchError = $null
 $process = $null
 $launcherProcessId = -1
 try {
+    if ($importLaunchError) { throw "Godot import failed to launch: $importLaunchError" }
+    if (-not $importCompleted) { throw 'Godot import did not complete before timeout.' }
+    if ($importExitCode -ne 0) { throw "Godot import exit code was $importExitCode." }
     $info = New-Object Diagnostics.ProcessStartInfo
     $info.FileName = $GodotExe
     $info.WorkingDirectory = $projectRoot
@@ -279,7 +328,8 @@ if ($exitCode -ne 0) { $failures.Add("Godot exit code was $exitCode.") }
 if (-not $cleanupConfirmed) { $failures.Add("Godot process cleanup incomplete: $($residualProcessIds -join ',')") }
 
 $godotLogText = if (Test-Path -LiteralPath $godotLogPath -PathType Leaf) { Get-Content -LiteralPath $godotLogPath -Raw } else { '' }
-$plainLog = ($stdoutText + "`n" + $stderrText + "`n" + $godotLogText) -replace "`e\[[0-?]*[ -/]*[@-~]", ''
+$importGodotLogText = if (Test-Path -LiteralPath $importGodotLogPath -PathType Leaf) { Get-Content -LiteralPath $importGodotLogPath -Raw } else { '' }
+$plainLog = ($importStdoutText + "`n" + $importStderrText + "`n" + $importGodotLogText + "`n" + $stdoutText + "`n" + $stderrText + "`n" + $godotLogText) -replace "`e\[[0-?]*[ -/]*[@-~]", ''
 $environmentDiagnostics = @([regex]::Matches($plainLog, '(?im)^.*Failed to read the root certificate store.*$') | ForEach-Object { $_.Value.Trim() } | Sort-Object -Unique)
 $productLog = [regex]::Replace($plainLog, '(?im)^.*Failed to read the root certificate store.*$', '')
 $unexpectedDiagnostics = @([regex]::Matches($productLog, '(?im)^(?:SCRIPT ERROR|ERROR|WARNING):[^\r\n]*') | ForEach-Object { $_.Value.Trim() } | Sort-Object -Unique)
@@ -334,6 +384,9 @@ $summary = [ordered]@{
     markers = [ordered]@{ ready = $readyMarker; ready_count = $readyCount; completion = $completionMarker; completion_count = $completionCount }
     isolation = [ordered]@{ appdata = $appData; localappdata = $localAppData; user_data = $userData; precreated_and_writable = $true }
     process = [ordered]@{
+        import_process_id = $importProcessId
+        import_completed = $importCompleted
+        import_exit_code = $importExitCode
         launcher_process_id = $launcherProcessId
         completed = $completed
         exit_code = $exitCode
