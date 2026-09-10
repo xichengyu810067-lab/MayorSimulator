@@ -212,6 +212,35 @@ func _run() -> void:
 	var route: Dictionary = main.vertical_slice.transport.routes.values()[0]
 	_check(str(route.get("status", "")) == "operational" and str(route.get("price_model", "")) == "route_package_v2", "automatically materialized route is not operational with v2 pricing")
 	_check(str(route.get("price_provenance", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_PROVENANCE, "materialized route lost its quote_project provenance")
+	var completed_station_refs: Array = session.get("station_refs", [])
+	var completed_station_ids: Array[String] = []
+	for ref_value: Variant in completed_station_refs:
+		if ref_value is Dictionary:
+			completed_station_ids.append(str((ref_value as Dictionary).get("station_id", "")))
+	_check(completed_station_ids.size() == 2 and not completed_station_ids.has(""), "station completion lost one or more authoritative station identities")
+	_check(Array(route.get("stop_ids", [])) == completed_station_ids, "route stop IDs no longer match the completed station references")
+	for station_tile: int in [first_tile, second_tile]:
+		var station_building: Dictionary = main.vertical_slice.get_building_by_tile(station_tile)
+		var station_button_after := main.grid_buttons[station_tile] as Button
+		_check(not station_building.is_empty() and str(station_building.get("building_name", "")) == "公車站", "completed package lost its station building at tile %d" % station_tile)
+		_check(main.city_grid[station_tile] == "公車站", "completed package did not retain the station in the player map state at tile %d" % station_tile)
+		_check(station_button_after != null and str(station_button_after.get("building_name")) == "公車站", "completed station is absent from the map tile renderer at tile %d" % station_tile)
+	for station_id: String in completed_station_ids:
+		_check(main.vertical_slice.transport.stations.has(station_id), "completed package lost station authority %s" % station_id)
+
+	var bus_depot_tile := _facility_tile(main, "bus_depot")
+	_check(bus_depot_tile >= 0, "completed package contains no authoritative bus depot")
+	if bus_depot_tile >= 0:
+		main._update_transport_runtime()
+		var runtime: Dictionary = main.vertical_slice.transport_visual_snapshot(main.city_grid)
+		var depot_state: Dictionary = Dictionary(runtime.get("tile_states", {})).get(str(bus_depot_tile), {})
+		_check(Array(depot_state.get("facilities", [])).has("bus_depot"), "bus depot authority is absent from runtime tile state")
+		var layer_state: Dictionary = Dictionary(main.transport_network_layer._network_snapshot.get("tile_states", {})).get(str(bus_depot_tile), {})
+		_check(Array(layer_state.get("facilities", [])).has("bus_depot"), "map layer snapshot dropped the authoritative bus depot")
+		var depot_button := main.grid_buttons[bus_depot_tile] as Button
+		_check(depot_button != null and depot_button.tooltip_text.contains("公車車庫"), "bus depot hover text is blank or disagrees with its map authority: %s" % (depot_button.tooltip_text if depot_button != null else "missing button"))
+		main._on_grid_pressed(bus_depot_tile)
+		_check(main.selected_cell_index == bus_depot_tile and main.hint_label.text.contains("公車車庫"), "bus depot selection is not visible to the player")
 	_check(_negative_ledger_count(main) == negative_ledger_before + 1, "construction completion introduced another package debit")
 	_check(main.map_action_mode == "inspect" and main.transport_route_station_tiles.is_empty(), "automatic route activation left a stale route-selection action")
 
@@ -222,6 +251,24 @@ func _run() -> void:
 	await process_frame
 	session = main.vertical_slice.transport_planning_session_snapshot()
 	_check(str(session.get("state", "")) == "closed", "explicit close did not close the authoritative session")
+	var reused_funds_before := int(main.vertical_slice.treasury_balance())
+	var reused_jobs_before: Dictionary = main.vertical_slice.construction.to_dict()
+	var reused_transport_before: Dictionary = main.vertical_slice.transport.to_dict()
+	var reuse_started: Dictionary = main.vertical_slice.begin_transport_planning_session("公車站", "route_package_v1")
+	_check(bool(reuse_started.get("ok", false)), "a new package can begin after the first completed route")
+	main._enter_building_placement("公車站")
+	main._on_grid_pressed(first_tile)
+	main._on_grid_pressed(second_tile)
+	var reuse_session: Dictionary = main.vertical_slice.transport_planning_session_snapshot()
+	var reuse_placements: Array = Dictionary(reuse_session.get("route_draft", {})).get("station_placements", [])
+	_check(reuse_placements.size() == 2, "map clicks do not select both completed stations into the new package")
+	if reuse_placements.size() == 2:
+		_check(bool(Dictionary(reuse_placements[0]).get("reuse_existing_station", false)) and bool(Dictionary(reuse_placements[1]).get("reuse_existing_station", false)), "completed station map selections are not marked as authoritative reuse")
+		_check(str(Dictionary(reuse_placements[0]).get("existing_station_id", "")) == completed_station_ids[0] and str(Dictionary(reuse_placements[1]).get("existing_station_id", "")) == completed_station_ids[1], "completed station map selections lost their authority IDs")
+	_check(main.hint_label.text.contains("不重複施工") and main.hint_label.text.contains("不重複計費"), "reuse click lacks explicit zero-job/zero-duplicate-cost player feedback")
+	_check(main.vertical_slice.treasury_balance() == reused_funds_before and main.vertical_slice.construction.to_dict() == reused_jobs_before and main.vertical_slice.transport.to_dict() == reused_transport_before, "selecting completed stations through Main mutates treasury, construction, or transport authority")
+	main.vertical_slice.close_transport_planning_session("test_cleanup")
+	main._cancel_building_placement(false)
 	main._on_transport_infrastructure_requested("road", "demolish")
 	_check(main.map_action_mode == "transport_infrastructure" and main.transport_plan_operation == "demolish", "closed session broke the legacy non-session transport flow")
 
@@ -292,6 +339,13 @@ func _negative_ledger_count(main) -> int:
 		if int(entry.get("amount", 0)) < 0:
 			result += 1
 	return result
+
+
+func _facility_tile(main, kind: String) -> int:
+	for facility_value: Variant in main.vertical_slice.transport.facilities.values():
+		if facility_value is Dictionary and str((facility_value as Dictionary).get("kind", "")) == kind:
+			return int((facility_value as Dictionary).get("tile_id", -1))
+	return -1
 
 
 func _press_map_confirm(main, phase: String) -> void:

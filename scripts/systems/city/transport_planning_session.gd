@@ -122,6 +122,56 @@ func record_station_draft(placement: Dictionary, worker_count: int) -> Dictionar
 	return _success({"station_draft_count": placements.size()})
 
 
+func record_existing_station_draft(placement: Dictionary, station: Dictionary) -> Dictionary:
+	if not is_route_package():
+		return _error("transport_session_not_route_package")
+	var preflight := can_place_station(
+		str(session.get("station_blueprint_name", "")),
+		str(session.get("station_blueprint_library_id", ""))
+	)
+	if not bool(preflight.get("ok", false)):
+		return preflight
+	var anchor_tile_id := int(placement.get("anchor_tile_id", -1))
+	var occupied_tile_ids: Array = Array(placement.get("occupied_tile_ids", [])).duplicate()
+	var station_id := str(station.get("id", ""))
+	if (
+		anchor_tile_id < 0
+		or occupied_tile_ids.is_empty()
+		or not occupied_tile_ids.has(anchor_tile_id)
+		or station_id.is_empty()
+		or str(station.get("building_name", "")) != str(session.get("station_blueprint_name", ""))
+		or int(station.get("tile_id", -1)) != anchor_tile_id
+		or str(station.get("status", "")) != "completed"
+	):
+		return _error("invalid_existing_station_reference")
+	var route_draft: Dictionary = Dictionary(session.get("route_draft", {})).duplicate(true)
+	var placements: Array = Array(route_draft.get("station_placements", [])).duplicate(true)
+	for existing_value: Variant in placements:
+		if not existing_value is Dictionary:
+			continue
+		var existing: Dictionary = existing_value
+		if int(existing.get("anchor_tile_id", -1)) == anchor_tile_id:
+			return _error("station_draft_already_recorded")
+		for tile_value: Variant in existing.get("occupied_tile_ids", []):
+			if occupied_tile_ids.has(int(tile_value)):
+				return _error("station_draft_overlap")
+	placements.append({
+		"anchor_tile_id": anchor_tile_id,
+		"occupied_tile_ids": occupied_tile_ids,
+		"footprint_id": str(placement.get("footprint_id", "")),
+		"library_id": "",
+		"blueprint": Dictionary(placement.get("blueprint", {})).duplicate(true),
+		"worker_count": 0,
+		"building_cost": 0,
+		"duration_days": 0,
+		"reuse_existing_station": true,
+		"existing_station_id": station_id,
+	})
+	route_draft["station_placements"] = placements
+	session["route_draft"] = route_draft
+	return _success({"station_draft_count": placements.size(), "station_id": station_id})
+
+
 func remove_station_draft(anchor_tile_id: int) -> Dictionary:
 	if not is_route_package() or str(session.get("state", "")) != STATE_STATION_PLACEMENT:
 		return _error("transport_session_not_placing_stations")
@@ -264,16 +314,34 @@ func record_route_package_jobs(
 ) -> Dictionary:
 	if not is_route_package() or str(session.get("state", "")) != STATE_ROUTE_EDIT:
 		return _error("transport_session_not_route_package_edit")
-	if station_jobs.size() != station_placements.size() or station_jobs.is_empty() or network_jobs.is_empty():
+	if station_placements.is_empty() or network_jobs.is_empty():
 		return _error("invalid_route_package_jobs")
 	var station_refs: Array = []
+	var station_job_index := 0
 	for index in range(station_jobs.size()):
-		var job_value: Variant = station_jobs[index]
-		var placement_value: Variant = station_placements[index]
-		if not job_value is Dictionary or not placement_value is Dictionary:
+		if not station_jobs[index] is Dictionary:
 			return _error("invalid_route_package_jobs")
-		var job: Dictionary = job_value
+	for placement_value: Variant in station_placements:
+		if not placement_value is Dictionary:
+			return _error("invalid_route_package_jobs")
 		var placement: Dictionary = placement_value
+		if bool(placement.get("reuse_existing_station", false)):
+			var station_id := str(placement.get("existing_station_id", ""))
+			if station_id.is_empty():
+				return _error("invalid_existing_station_reference")
+			station_refs.append({
+				"job_id": "",
+				"station_id": station_id,
+				"anchor_tile_id": int(placement.get("anchor_tile_id", -1)),
+				"occupied_tile_ids": Array(placement.get("occupied_tile_ids", [])).duplicate(),
+				"status": "completed",
+				"source": "existing",
+			})
+			continue
+		if station_job_index >= station_jobs.size():
+			return _error("invalid_route_package_jobs")
+		var job: Dictionary = station_jobs[station_job_index]
+		station_job_index += 1
 		station_refs.append({
 			"job_id": str(job.get("id", "")),
 			"station_id": "",
@@ -281,6 +349,8 @@ func record_route_package_jobs(
 			"occupied_tile_ids": Array(placement.get("occupied_tile_ids", [])).duplicate(),
 			"status": "active",
 		})
+	if station_job_index != station_jobs.size():
+		return _error("invalid_route_package_jobs")
 	var network_refs: Array = []
 	for item_value: Variant in network_jobs:
 		if not item_value is Dictionary:
@@ -528,6 +598,7 @@ static func validate_snapshot(data: Dictionary) -> Dictionary:
 		if not current.get(array_field, null) is Array:
 			return {"valid": false, "error": "invalid_session_field:%s" % array_field}
 	var seen_jobs: Dictionary = {}
+	var seen_station_ids: Dictionary = {}
 	for ref_value: Variant in current.get("station_refs", []):
 		if not ref_value is Dictionary:
 			return {"valid": false, "error": "invalid_station_ref"}
@@ -535,9 +606,20 @@ static func validate_snapshot(data: Dictionary) -> Dictionary:
 		if not _valid_ref_strings(ref, ["job_id", "station_id", "status"]):
 			return {"valid": false, "error": "invalid_station_ref"}
 		var station_job_id := str(ref.get("job_id", ""))
-		if station_job_id.is_empty() or seen_jobs.has(station_job_id) or str(ref.get("status", "")) not in STATION_REF_STATUSES:
+		var source := str(ref.get("source", ""))
+		if ref.has("source") and not ref.get("source") is String:
 			return {"valid": false, "error": "invalid_station_ref"}
-		seen_jobs[station_job_id] = true
+		if source not in ["", "existing"]:
+			return {"valid": false, "error": "invalid_station_ref"}
+		if str(ref.get("status", "")) not in STATION_REF_STATUSES:
+			return {"valid": false, "error": "invalid_station_ref"}
+		if source == "existing":
+			if not station_job_id.is_empty() or str(ref.get("status", "")) != "completed":
+				return {"valid": false, "error": "invalid_existing_station_ref"}
+		elif station_job_id.is_empty() or seen_jobs.has(station_job_id):
+			return {"valid": false, "error": "invalid_station_ref"}
+		else:
+			seen_jobs[station_job_id] = true
 		if not _is_integer_value(ref.get("anchor_tile_id", null)) or int(ref.get("anchor_tile_id", -1)) < 0 or int(ref.get("anchor_tile_id", -1)) >= 100:
 			return {"valid": false, "error": "invalid_station_anchor"}
 		if not _valid_unique_integer_array(ref.get("occupied_tile_ids", null)):
@@ -546,6 +628,11 @@ static func validate_snapshot(data: Dictionary) -> Dictionary:
 			return {"valid": false, "error": "station_anchor_not_occupied"}
 		if str(ref.get("status", "")) == "completed" and str(ref.get("station_id", "")).is_empty():
 			return {"valid": false, "error": "completed_station_missing_identity"}
+		var station_id := str(ref.get("station_id", ""))
+		if not station_id.is_empty():
+			if seen_station_ids.has(station_id):
+				return {"valid": false, "error": "duplicate_station_reference"}
+			seen_station_ids[station_id] = true
 	for ref_value: Variant in current.get("network_refs", []):
 		if not ref_value is Dictionary:
 			return {"valid": false, "error": "invalid_network_ref"}
@@ -588,14 +675,29 @@ static func validate_references(
 	var jobs_value: Variant = construction_snapshot.get("jobs", null)
 	var projects_value: Variant = transport_snapshot.get("projects", null)
 	var routes_value: Variant = transport_snapshot.get("routes", null)
-	if not jobs_value is Dictionary or not projects_value is Dictionary or not routes_value is Dictionary:
+	var stations_value: Variant = transport_snapshot.get("stations", null)
+	if not jobs_value is Dictionary or not projects_value is Dictionary or not routes_value is Dictionary or not stations_value is Dictionary:
 		return {"valid": false, "error": "missing_reference_authority"}
 	var jobs: Dictionary = jobs_value
 	var projects: Dictionary = projects_value
 	var routes: Dictionary = routes_value
+	var stations: Dictionary = stations_value
 	for ref_value: Variant in current.get("station_refs", []):
 		var ref: Dictionary = ref_value
 		var job_id := str(ref.get("job_id", ""))
+		if str(ref.get("source", "")) == "existing":
+			var station_id := str(ref.get("station_id", ""))
+			if not stations.has(station_id) or not stations[station_id] is Dictionary:
+				return {"valid": false, "error": "station_reference_missing"}
+			var station: Dictionary = stations[station_id]
+			if (
+				str(station.get("id", "")) != station_id
+				or str(station.get("building_name", "")) != str(current.get("station_blueprint_name", ""))
+				or int(station.get("tile_id", -1)) != int(ref.get("anchor_tile_id", -1))
+				or str(station.get("status", "")) != "completed"
+			):
+				return {"valid": false, "error": "station_reference_mismatch"}
+			continue
 		if not jobs.has(job_id) or not jobs[job_id] is Dictionary:
 			return {"valid": false, "error": "station_job_reference_missing"}
 		var job: Dictionary = jobs[job_id]
@@ -838,7 +940,17 @@ static func _validate_route_package_phase(current: Dictionary, phase: String, ma
 			if seen_tiles.has(tile_id):
 				return "station_draft_overlap"
 			seen_tiles[tile_id] = true
-		if (
+		var reuse_existing := bool(placement.get("reuse_existing_station", false))
+		if reuse_existing:
+			if (
+				str(placement.get("existing_station_id", "")).is_empty()
+				or not placement.get("blueprint", null) is Dictionary
+				or int(placement.get("worker_count", -1)) != 0
+				or int(placement.get("building_cost", -1)) != 0
+				or int(placement.get("duration_days", -1)) != 0
+			):
+				return "invalid_existing_station_draft"
+		elif (
 			str(placement.get("library_id", "")).is_empty()
 			or not placement.get("blueprint", null) is Dictionary
 			or int(placement.get("worker_count", 0)) < 1

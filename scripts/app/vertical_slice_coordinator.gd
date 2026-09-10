@@ -603,6 +603,41 @@ func draft_transport_session_station(
 	}
 
 
+func reuse_transport_session_station(tile_id: int) -> Dictionary:
+	if governance.has_failed():
+		return _terminal_command_error()
+	if transport_planning_session == null or not transport_planning_session.is_route_package():
+		return {"ok": false, "error": "transport_session_not_route_package"}
+	var current: Dictionary = transport_planning_session.snapshot()
+	var station_name := str(current.get("station_blueprint_name", ""))
+	var active := active_blueprint_status(station_name)
+	var library_id := str(active.get("library_id", active.get("id", "")))
+	var preflight: Dictionary = transport_planning_session.can_place_station(station_name, library_id)
+	if not bool(preflight.get("ok", false)):
+		return preflight
+	var reusable := _transport_reusable_station_placement(tile_id, current)
+	if not bool(reusable.get("ok", false)):
+		return reusable
+	var recorded: Dictionary = transport_planning_session.record_existing_station_draft(
+		Dictionary(reusable.get("placement", {})),
+		Dictionary(reusable.get("station", {}))
+	)
+	if not bool(recorded.get("ok", false)):
+		return recorded
+	_push_ui_event("transport_session_station_reused", {
+		"station": Dictionary(reusable.get("station", {})).duplicate(true),
+		"session": transport_planning_session.snapshot(),
+	})
+	_emit_changed()
+	return {
+		"ok": true,
+		"station": Dictionary(reusable.get("station", {})).duplicate(true),
+		"placement": Dictionary(reusable.get("placement", {})).duplicate(true),
+		"session": transport_planning_session.snapshot(),
+		"authoritative_changes_applied": false,
+	}
+
+
 func remove_transport_session_station_draft(anchor_tile_id: int) -> Dictionary:
 	if transport_planning_session == null:
 		return {"ok": false, "error": "transport_planning_session_unavailable"}
@@ -728,26 +763,40 @@ func transport_session_package_quote(city_grid: Array = []) -> Dictionary:
 		if not placement_value is Dictionary:
 			return {"ok": false, "error": "invalid_station_draft"}
 		var placement: Dictionary = placement_value
+		var reuse_existing := bool(placement.get("reuse_existing_station", false))
 		var workers := int(placement.get("worker_count", 0))
-		var refreshed := placement_footprint_quote(
-			str(current.get("station_blueprint_name", "")),
-			int(placement.get("anchor_tile_id", -1)),
-			workers
-		)
+		var refreshed: Dictionary
+		if reuse_existing:
+			var reusable := _transport_reusable_station_placement(
+				int(placement.get("anchor_tile_id", -1)), current
+			)
+			if not bool(reusable.get("ok", false)):
+				return reusable
+			var current_station_id := str(Dictionary(reusable.get("station", {})).get("id", ""))
+			if current_station_id != str(placement.get("existing_station_id", "")):
+				return {"ok": false, "error": "transport_station_reference_changed"}
+			refreshed = Dictionary(reusable.get("placement", {})).duplicate(true)
+		else:
+			refreshed = placement_footprint_quote(
+				str(current.get("station_blueprint_name", "")),
+				int(placement.get("anchor_tile_id", -1)),
+				workers
+			)
 		if not bool(refreshed.get("ok", false)):
 			return refreshed
-		if str(refreshed.get("library_id", "")) != str(placement.get("library_id", "")):
+		if not reuse_existing and str(refreshed.get("library_id", "")) != str(placement.get("library_id", "")):
 			return {"ok": false, "error": "transport_session_station_blueprint_changed"}
 		for tile_value: Variant in refreshed.get("occupied_tile_ids", []):
 			var tile_id := int(tile_value)
 			if occupied_station_tiles.has(tile_id):
 				return {"ok": false, "error": "station_draft_overlap"}
 			occupied_station_tiles.append(tile_id)
-		station_cost += int(refreshed.get("total_cost", 0))
+		station_cost += 0 if reuse_existing else int(refreshed.get("total_cost", 0))
 		var normalized := placement.duplicate(true)
 		normalized["blueprint"] = Dictionary(refreshed.get("blueprint", {})).duplicate(true)
-		normalized["building_cost"] = int(refreshed.get("total_cost", 0))
-		normalized["duration_days"] = int(refreshed.get("duration_days", 0))
+		normalized["building_cost"] = 0 if reuse_existing else int(refreshed.get("total_cost", 0))
+		normalized["duration_days"] = 0 if reuse_existing else int(refreshed.get("duration_days", 0))
+		normalized["worker_count"] = 0 if reuse_existing else workers
 		normalized_placements.append(normalized)
 	var network_draft: Dictionary = current.get("network_draft", {})
 	var network_kind := str(network_draft.get("kind", ""))
@@ -812,7 +861,8 @@ func transport_session_package_quote(city_grid: Array = []) -> Dictionary:
 	var workers_per_network_job := int(network_draft.get("worker_count", 5))
 	var requested_workers := workers_per_network_job * (1 + support_plans.size())
 	for placement: Dictionary in normalized_placements:
-		requested_workers += int(placement.get("worker_count", 0))
+		if not bool(placement.get("reuse_existing_station", false)):
+			requested_workers += int(placement.get("worker_count", 0))
 	return {
 		"ok": true,
 		"workflow": TransportPlanningSessionScript.WORKFLOW_ROUTE_PACKAGE_V1,
@@ -886,6 +936,8 @@ func start_transport_session_package(city_grid: Array = []) -> Dictionary:
 	var placements: Array = Array(quote.get("station_placements", [])).duplicate(true)
 	for placement_value: Variant in placements:
 		var placement: Dictionary = placement_value
+		if bool(placement.get("reuse_existing_station", false)):
+			continue
 		var blueprint: Dictionary = Dictionary(placement.get("blueprint", {})).duplicate(true)
 		var library_id := str(placement.get("library_id", ""))
 		var anchor := int(placement.get("anchor_tile_id", -1))
@@ -3093,6 +3145,62 @@ func _transport_station_ids_for_tiles(mode: String, station_tile_ids: Array) -> 
 			}
 		stop_ids.append(matched_id)
 	return {"ok": true, "stop_ids": stop_ids}
+
+
+func _transport_reusable_station_placement(tile_id: int, current: Dictionary) -> Dictionary:
+	if tile_id < 0 or tile_id >= CityTerrainMapScript.CELL_COUNT:
+		return {"ok": false, "error": "invalid_tile_id"}
+	if not active_construction_for_tile(tile_id).is_empty():
+		return {"ok": false, "error": "station_under_construction", "tile_index": tile_id}
+	var building := get_building_by_tile(tile_id)
+	if building.is_empty():
+		return {"ok": false, "error": "transport_station_not_found", "tile_index": tile_id}
+	var anchor_tile_id := int(building.get("anchor_tile_id", building.get("tile_index", -1)))
+	if not active_construction_for_tile(anchor_tile_id).is_empty():
+		return {"ok": false, "error": "station_under_construction", "tile_index": anchor_tile_id}
+	var expected_name := str(current.get("station_blueprint_name", ""))
+	if str(building.get("building_name", "")) != expected_name:
+		return {
+			"ok": false,
+			"error": "transport_station_incompatible",
+			"tile_index": anchor_tile_id,
+			"expected_building_name": expected_name,
+		}
+	if str(building.get("status", "")) != "active":
+		return {"ok": false, "error": "transport_station_not_completed", "tile_index": anchor_tile_id}
+	var station_id := str(building.get("building_id", ""))
+	if station_id.is_empty() or transport == null or not transport.stations.has(station_id):
+		return {"ok": false, "error": "transport_station_not_found", "tile_index": anchor_tile_id}
+	var station_value: Variant = transport.stations.get(station_id, null)
+	if not station_value is Dictionary:
+		return {"ok": false, "error": "transport_station_not_found", "tile_index": anchor_tile_id}
+	var station: Dictionary = station_value
+	if (
+		str(station.get("id", "")) != station_id
+		or str(station.get("building_name", "")) != expected_name
+		or int(station.get("tile_id", -1)) != anchor_tile_id
+		or str(station.get("status", "")) != "completed"
+	):
+		return {"ok": false, "error": "transport_station_authority_mismatch", "tile_index": anchor_tile_id}
+	var occupied_tile_ids := _building_record_occupied_tile_ids_canonical(building)
+	if occupied_tile_ids.is_empty() or not occupied_tile_ids.has(anchor_tile_id):
+		return {"ok": false, "error": "invalid_station_footprint", "tile_index": anchor_tile_id}
+	return {
+		"ok": true,
+		"station": station.duplicate(true),
+		"placement": {
+			"ok": true,
+			"anchor_tile_id": anchor_tile_id,
+			"occupied_tile_ids": occupied_tile_ids.duplicate(),
+			"footprint_id": str(building.get("footprint_id", "")),
+			"blueprint": Dictionary(building.get("blueprint", {})).duplicate(true),
+			"worker_count": 0,
+			"total_cost": 0,
+			"duration_days": 0,
+			"reuse_existing_station": true,
+			"existing_station_id": station_id,
+		},
+	}
 
 
 func _register_transport_station_for_building(record: Dictionary) -> bool:

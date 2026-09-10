@@ -2560,9 +2560,11 @@ func _transport_planning_overlay_for_tile(tile_index: int) -> Dictionary:
 			var footprint_index := occupied_tile_ids.find(tile_index)
 			if footprint_index < 0:
 				continue
+			var reused_station := bool(placement.get("reuse_existing_station", false))
 			return {
 				"kind": "station_draft",
-				"non_authoritative": true,
+				"non_authoritative": not reused_station,
+				"reuse_existing_station": reused_station,
 				"building_name": str(session.get("station_blueprint_name", "交通站點")),
 				"mode": str(session.get("mode", "")),
 				"draft_order": placement_index + 1,
@@ -5278,6 +5280,31 @@ func _on_grid_pressed(index: int) -> void:
 		return
 	var active_job: Dictionary = vertical_slice.active_construction_for_tile(index) if vertical_slice != null else {}
 	var building_record: Dictionary = vertical_slice.get_building_by_tile(index) if vertical_slice != null else {}
+	if (
+		placement_mode_active
+		and not building_record.is_empty()
+		and _is_transport_station_session_placement()
+		and _transport_session_is_route_package()
+	):
+		var station_anchor := int(building_record.get("anchor_tile_id", building_record.get("tile_index", index)))
+		var planning_snapshot := _transport_session_snapshot()
+		if _transport_session_has_station_draft(planning_snapshot, station_anchor):
+			var removed: Dictionary = vertical_slice.call("remove_transport_session_station_draft", station_anchor)
+			if bool(removed.get("ok", false)):
+				_sync_placement_banner()
+				_update_transport_runtime()
+				_refresh_transport_planning_panel()
+				_set_hint("已取消沿用這座既有站點；既有建築與路網權威不受影響。", false)
+			return
+		var reused: Dictionary = vertical_slice.call("reuse_transport_session_station", station_anchor)
+		if bool(reused.get("ok", false)):
+			_sync_placement_banner()
+			_update_transport_runtime()
+			_refresh_transport_planning_panel()
+			_set_hint("已沿用這座完工站點；不重複施工、不重複計費。", false)
+		else:
+			_set_hint(_vertical_error_text(str(reused.get("error", "transport_station_not_found"))), true)
+		return
 	if placement_mode_active and (not building_record.is_empty() or not active_job.is_empty()):
 		_set_hint("此地格已有建築或工程，請選擇其他空地。", true)
 		return
@@ -5299,6 +5326,14 @@ func _on_grid_pressed(index: int) -> void:
 		_update_ui()
 		return
 	if vertical_slice == null:
+		return
+	var transport_tile_state := _transport_tile_visual_state(index)
+	if not placement_mode_active and _transport_tile_has_player_content(transport_tile_state):
+		selected_cell_index = index
+		_close_building_context()
+		_hide_npc_dialogue()
+		_set_hint(_transport_tile_player_text(transport_tile_state), false)
+		_update_ui()
 		return
 	if not placement_mode_active:
 		selected_cell_index = -1
@@ -6470,6 +6505,11 @@ func _vertical_error_text(error_code: String) -> String:
 		"transport_overlap_invalid": "這些交通設施不能重疊興建",
 		"transport_route_invalid": "站點、路網、機廠、號誌或跑道條件尚未完整",
 		"transport_station_not_found": "找不到相容且已完工的交通站點",
+		"transport_station_incompatible": "該站點與目前規劃的運具不相容",
+		"transport_station_not_completed": "該站點尚未完工，不能沿用",
+		"transport_station_authority_mismatch": "站點的建築與交通權威資料不一致",
+		"station_under_construction": "該站點仍有工程進行中",
+		"station_draft_already_recorded": "這個站點已加入目前的路線規劃",
 		"duplicate_station_tile": "同一路線不能重複加入同一站點",
 		"route_not_found": "找不到指定交通路線",
 		"review_rules_satisfied": "審核通過",
@@ -7561,9 +7601,44 @@ func _update_tile_visual(index: int, building_name: String) -> void:
 			"placement_preview": preview,
 			"transport_planning_overlay": _transport_planning_overlay_for_tile(index),
 		})
+		if visual_building_name.is_empty() and active_construction.is_empty():
+			var transport_state := _transport_tile_visual_state(index)
+			if _transport_tile_has_player_content(transport_state):
+				cell.tooltip_text = _transport_tile_player_text(transport_state)
 	else:
 		cell.text = _tile_text(building_name, index)
 		_apply_cell_style(cell, building_name)
+
+
+func _transport_tile_visual_state(tile_index: int) -> Dictionary:
+	if vertical_slice == null or vertical_slice.transport == null:
+		return {}
+	return vertical_slice.transport.tile_visual_state(tile_index, _terrain_map())
+
+
+func _transport_tile_has_player_content(state: Dictionary) -> bool:
+	return not Array(state.get("facilities", [])).is_empty() or not Array(state.get("segments", [])).is_empty() or not str(state.get("crossing", "")).is_empty()
+
+
+func _transport_tile_player_text(state: Dictionary) -> String:
+	var labels_for_tile: Array[String] = []
+	for facility_value: Variant in state.get("facilities", []):
+		var facility_label := L10n.text(_transport_kind_label(str(facility_value)))
+		if not labels_for_tile.has(facility_label):
+			labels_for_tile.append(facility_label)
+	for segment_value: Variant in state.get("segments", []):
+		var segment_label := L10n.text(_transport_kind_label(str(segment_value)))
+		if not labels_for_tile.has(segment_label):
+			labels_for_tile.append(segment_label)
+	if not str(state.get("crossing", "")).is_empty():
+		labels_for_tile.append(L10n.text("平交道"))
+	var status := str(state.get("project_status", ""))
+	var status_label := L10n.text({
+		"planned": "已規劃",
+		"under_construction": "施工中",
+		"demolishing": "拆除中",
+	}.get(status, "已完工"))
+	return "%s｜%s" % ["、".join(PackedStringArray(labels_for_tile)), status_label]
 
 func _has_approved_blueprint_for_selected() -> bool:
 	if vertical_slice == null:

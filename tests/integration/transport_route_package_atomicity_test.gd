@@ -20,6 +20,7 @@ func _initialize() -> void:
 func _run() -> void:
 	_cleanup()
 	_test_atomic_package_and_automatic_route()
+	_test_existing_station_reuse_and_fail_closed()
 	_test_insufficient_funds_is_zero_write()
 	_test_legacy_v1_costs_are_not_recomputed()
 	_cleanup()
@@ -137,6 +138,121 @@ func _test_insufficient_funds_is_zero_write() -> void:
 	_check(coordinator.transport.to_dict() == transport_before, "rejected package leaves transport unchanged")
 	_check(coordinator.transport_planning_session.to_dict() == planning_before, "rejected package retains the editable session without authoritative refs")
 	_check(coordinator.blueprint_library_service.snapshot() == blueprint_before, "rejected package does not increment blueprint usage")
+
+
+func _test_existing_station_reuse_and_fail_closed() -> void:
+	var coordinator = CoordinatorScript.new(20_260_906, 3_000_000)
+	coordinator.terrain_map = CityTerrainMapScript.new()
+	var grid := _empty_grid()
+	var station_a_tile := _tile(coordinator, 2, 3)
+	var station_b_tile := _tile(coordinator, 6, 3)
+	var route_tiles := _horizontal_tiles(coordinator, 2, 6, 4)
+	var station_a: Dictionary = coordinator.register_existing_building(station_a_tile, "公車站")
+	var station_b: Dictionary = coordinator.register_existing_building(station_b_tile, "公車站")
+	var station_a_id := str(station_a.get("building_id", ""))
+	var station_b_id := str(station_b.get("building_id", ""))
+	_check(not station_a_id.is_empty() and not station_b_id.is_empty(), "reuse fixture registers two completed bus-station buildings")
+	_check(coordinator.transport.stations.has(station_a_id) and coordinator.transport.stations.has(station_b_id), "reuse fixture exposes both completed station authorities")
+	_check(bool(coordinator.begin_transport_planning_session("公車站", TransportPlanningSessionScript.WORKFLOW_ROUTE_PACKAGE_V1).get("ok", false)), "reuse package session begins")
+	if not coordinator.has_method("reuse_transport_session_station"):
+		_check(false, "route-package coordinator exposes no completed-station reuse command")
+		return
+	var treasury_before := coordinator.treasury_balance()
+	var jobs_before: Dictionary = coordinator.construction.to_dict()
+	var transport_before: Dictionary = coordinator.transport.to_dict()
+	var reused_a: Dictionary = coordinator.call("reuse_transport_session_station", station_a_tile)
+	var reused_b: Dictionary = coordinator.call("reuse_transport_session_station", station_b_tile)
+	_check(bool(reused_a.get("ok", false)) and bool(reused_b.get("ok", false)), "same-mode completed stations can be selected into one new package")
+	_check(coordinator.treasury_balance() == treasury_before and coordinator.construction.to_dict() == jobs_before, "selecting completed stations creates no charge or station construction job")
+	_check(coordinator.transport.to_dict() == transport_before, "selecting completed stations does not rewrite transport authority")
+
+	var session_before_duplicate: Dictionary = coordinator.transport_planning_session.to_dict()
+	var duplicate: Dictionary = coordinator.call("reuse_transport_session_station", station_a_tile)
+	_check(str(duplicate.get("error", "")) == "station_draft_already_recorded", "duplicate completed-station selection fails closed")
+	_check(coordinator.transport_planning_session.to_dict() == session_before_duplicate, "duplicate station rejection leaves the planning session byte-for-byte unchanged")
+	_check(coordinator.treasury_balance() == treasury_before and coordinator.construction.to_dict() == jobs_before and coordinator.transport.to_dict() == transport_before, "duplicate station rejection leaves every authority unchanged")
+
+	_check(bool(coordinator.begin_transport_session_network_placement("road", {}).get("ok", false)), "reuse package advances to network placement")
+	_check(bool(coordinator.draft_transport_session_network("road", route_tiles, 5).get("ok", false)), "reuse package drafts a continuous road")
+	_check(bool(coordinator.begin_transport_session_route_edit({"fleet_size": 2, "headway_minutes": 8, "fare": 25}).get("ok", false)), "reuse package reaches confirmation")
+	var quote: Dictionary = coordinator.transport_session_package_quote(grid)
+	_check(bool(quote.get("ok", false)), "reuse package quotes successfully: %s" % [quote])
+	_check(int(quote.get("station_building_cost", -1)) == 0, "reused stations contribute zero duplicate building cost")
+	_check(int(quote.get("requested_workers", -1)) == 10, "reused stations request only route and depot workers")
+	var negative_before := _negative_ledger_count(coordinator)
+	var started: Dictionary = coordinator.start_transport_session_package(grid)
+	_check(bool(started.get("ok", false)), "reuse package starts after candidate preflight: %s" % [started])
+	if not bool(started.get("ok", false)):
+		return
+	_check(coordinator.construction.jobs.size() == 2, "reuse package creates route and depot jobs but zero station jobs")
+	_check(_negative_ledger_count(coordinator) == negative_before + 1 and coordinator.treasury_balance() == treasury_before - int(quote.get("total_cost", 0)), "reuse package applies its non-station quote exactly once")
+	var waiting_session: Dictionary = coordinator.transport_planning_session_snapshot()
+	var station_refs: Array = waiting_session.get("station_refs", [])
+	_check(station_refs.size() == 2, "reuse package retains two station references")
+	if station_refs.size() == 2:
+		_check(str(Dictionary(station_refs[0]).get("station_id", "")) == station_a_id and str(Dictionary(station_refs[1]).get("station_id", "")) == station_b_id, "reuse references point at the existing station authority identities")
+		_check(str(Dictionary(station_refs[0]).get("status", "")) == "completed" and str(Dictionary(station_refs[1]).get("status", "")) == "completed", "reuse references are completed without synthetic station jobs")
+		_check(str(Dictionary(station_refs[0]).get("job_id", "")).is_empty() and str(Dictionary(station_refs[1]).get("job_id", "")).is_empty(), "reuse references do not invent construction job identities")
+	coordinator.advance_days(_maximum_active_days(coordinator), {}, false)
+	var materialized: Dictionary = coordinator.transport_planning_session_snapshot()
+	_check(str(materialized.get("state", "")) == "materialized", "reuse package materializes after only network construction")
+	_check(coordinator.transport.routes.size() == 1, "reuse package creates exactly one route")
+	if coordinator.transport.routes.size() == 1:
+		var route: Dictionary = coordinator.transport.routes.values()[0]
+		_check(Array(route.get("stop_ids", [])) == [station_a_id, station_b_id], "materialized route stop IDs retain the reused station authorities")
+	_check(not coordinator.get_building_by_tile(station_a_tile).is_empty() and not coordinator.get_building_by_tile(station_b_tile).is_empty(), "reuse package preserves both completed station buildings")
+	_check(coordinator.transport.stations.has(station_a_id) and coordinator.transport.stations.has(station_b_id), "reuse package preserves both completed station authorities")
+	var planning_snapshot: Dictionary = coordinator.transport_planning_session.to_dict()
+	var transport_snapshot: Dictionary = coordinator.transport.to_dict()
+	_check(bool(TransportPlanningSessionScript.validate_references(planning_snapshot, coordinator.construction.to_dict(), transport_snapshot).get("valid", false)), "materialized reuse references validate against existing station authority")
+	var tampered_planning := planning_snapshot.duplicate(true)
+	tampered_planning["session"]["station_refs"][0]["source"] = "untrusted"
+	_check(not bool(TransportPlanningSessionScript.validate_references(tampered_planning, coordinator.construction.to_dict(), transport_snapshot).get("valid", true)), "unknown reused station reference source fails closed")
+	var tampered_transport := transport_snapshot.duplicate(true)
+	tampered_transport["stations"][station_a_id]["status"] = "removed"
+	_check(not bool(TransportPlanningSessionScript.validate_references(planning_snapshot, coordinator.construction.to_dict(), tampered_transport).get("valid", true)), "reused station reference fails closed when its authority is no longer completed")
+	_check(coordinator.save_game(SAVE_PATH) == OK, "materialized reuse package saves")
+	var restored = CoordinatorScript.new(1, 1)
+	_check(restored.load_game(SAVE_PATH), "materialized reuse package reloads")
+	var restored_session: Dictionary = restored.transport_planning_session_snapshot()
+	_check(Array(restored_session.get("route_refs", [])).size() == 1 and Array(restored_session.get("station_refs", [])).size() == 2, "reuse station and route references survive save/load")
+	_check(not restored.get_building_by_tile(station_a_tile).is_empty() and not restored.get_building_by_tile(station_b_tile).is_empty(), "reused station buildings survive save/load")
+	_check(restored.transport.stations.has(station_a_id) and restored.transport.stations.has(station_b_id), "reused station authorities survive save/load")
+	if restored.transport.routes.size() == 1:
+		_check(Array(restored.transport.routes.values()[0].get("stop_ids", [])) == [station_a_id, station_b_id], "reused route stop IDs survive save/load")
+	else:
+		_check(false, "reuse route identity was lost during save/load")
+
+	_test_reuse_rejection_zero_write("incompatible", "捷運站", false)
+	_test_reuse_rejection_zero_write("under_construction", "公車站", true)
+	_test_reuse_rejection_zero_write("demolished", "公車站", false, true)
+
+
+func _test_reuse_rejection_zero_write(label: String, building_name: String, under_construction: bool, removed: bool = false) -> void:
+	var coordinator = CoordinatorScript.new(20_260_910 + _checks, 500_000)
+	coordinator.terrain_map = CityTerrainMapScript.new()
+	var tile_id := _tile(coordinator, 4, 5)
+	var building: Dictionary = {}
+	if under_construction:
+		building = coordinator.start_approved_building(building_name, tile_id, 5)
+	else:
+		building = coordinator.register_existing_building(tile_id, building_name)
+	if removed and not building.is_empty():
+		var building_id := str(building.get("building_id", ""))
+		coordinator.session.state.buildings.erase(building_id)
+		# Deliberately retain a stale station record: the command must require both
+		# live building and transport authorities, not trust either one alone.
+	coordinator.begin_transport_planning_session("公車站", TransportPlanningSessionScript.WORKFLOW_ROUTE_PACKAGE_V1)
+	var core_before: Dictionary = coordinator.session.make_envelope().to_dict()
+	var construction_before: Dictionary = coordinator.construction.to_dict()
+	var transport_before: Dictionary = coordinator.transport.to_dict()
+	var planning_before: Dictionary = coordinator.transport_planning_session.to_dict()
+	var result: Dictionary = coordinator.call("reuse_transport_session_station", tile_id) if coordinator.has_method("reuse_transport_session_station") else {"ok": false, "error": "missing_reuse_command"}
+	_check(not bool(result.get("ok", false)), "%s station reuse is rejected" % label)
+	_check(coordinator.session.make_envelope().to_dict() == core_before, "%s rejection leaves treasury/core unchanged" % label)
+	_check(coordinator.construction.to_dict() == construction_before, "%s rejection leaves construction unchanged" % label)
+	_check(coordinator.transport.to_dict() == transport_before, "%s rejection leaves transport unchanged" % label)
+	_check(coordinator.transport_planning_session.to_dict() == planning_before, "%s rejection leaves session unchanged" % label)
 
 
 func _test_legacy_v1_costs_are_not_recomputed() -> void:
