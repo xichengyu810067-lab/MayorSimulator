@@ -6,6 +6,7 @@ const TransportPlanningSessionScript = preload("res://scripts/systems/city/trans
 const TransportModesScript = preload("res://data/catalogs/transport_modes.gd")
 
 const SAVE_PATH := "user://b13_transport_route_package_round_trip.json"
+const STALE_BUILDING_SAVE_PATH := "user://b13_transport_route_package_stale_building.json"
 const LEGACY_SAVE_PATH := "user://b13_transport_route_package_v1_round_trip.json"
 const LEGACY_FIXTURE_PATH := "res://tests/fixtures/save_schema/route_package_v1_transport.json"
 
@@ -204,14 +205,31 @@ func _test_existing_station_reuse_and_fail_closed() -> void:
 	_check(coordinator.transport.stations.has(station_a_id) and coordinator.transport.stations.has(station_b_id), "reuse package preserves both completed station authorities")
 	var planning_snapshot: Dictionary = coordinator.transport_planning_session.to_dict()
 	var transport_snapshot: Dictionary = coordinator.transport.to_dict()
-	_check(bool(TransportPlanningSessionScript.validate_references(planning_snapshot, coordinator.construction.to_dict(), transport_snapshot).get("valid", false)), "materialized reuse references validate against existing station authority")
+	var buildings_snapshot: Dictionary = coordinator.session.state.buildings.duplicate(true)
+	_check(bool(TransportPlanningSessionScript.validate_references(planning_snapshot, coordinator.construction.to_dict(), transport_snapshot, buildings_snapshot).get("valid", false)), "materialized reuse references validate against station and building authorities")
+	var swapped_references := planning_snapshot.duplicate(true)
+	var original_references: Array = Array(swapped_references["session"].get("station_refs", [])).duplicate(true)
+	if original_references.size() == 2:
+		swapped_references["session"]["station_refs"] = [original_references[1], original_references[0]]
+		_check(not bool(TransportPlanningSessionScript.validate_references(swapped_references, coordinator.construction.to_dict(), transport_snapshot, buildings_snapshot).get("valid", true)), "swapping two same-mode existing station references fails closed against their route placements")
 	var tampered_planning := planning_snapshot.duplicate(true)
 	tampered_planning["session"]["station_refs"][0]["source"] = "untrusted"
-	_check(not bool(TransportPlanningSessionScript.validate_references(tampered_planning, coordinator.construction.to_dict(), transport_snapshot).get("valid", true)), "unknown reused station reference source fails closed")
+	_check(not bool(TransportPlanningSessionScript.validate_references(tampered_planning, coordinator.construction.to_dict(), transport_snapshot, buildings_snapshot).get("valid", true)), "unknown reused station reference source fails closed")
 	var tampered_transport := transport_snapshot.duplicate(true)
 	tampered_transport["stations"][station_a_id]["status"] = "removed"
-	_check(not bool(TransportPlanningSessionScript.validate_references(planning_snapshot, coordinator.construction.to_dict(), tampered_transport).get("valid", true)), "reused station reference fails closed when its authority is no longer completed")
+	_check(not bool(TransportPlanningSessionScript.validate_references(planning_snapshot, coordinator.construction.to_dict(), tampered_transport, buildings_snapshot).get("valid", true)), "reused station reference fails closed when its authority is no longer completed")
+	var tampered_buildings := buildings_snapshot.duplicate(true)
+	tampered_buildings.erase(station_a_id)
+	_check(not bool(TransportPlanningSessionScript.validate_references(planning_snapshot, coordinator.construction.to_dict(), transport_snapshot, tampered_buildings).get("valid", true)), "reused station reference fails closed when its building authority is missing")
 	_check(coordinator.save_game(SAVE_PATH) == OK, "materialized reuse package saves")
+	var stale_building_payload := _read_save_payload(SAVE_PATH)
+	if stale_building_payload.is_empty():
+		_check(false, "materialized reuse save can be read for stale-building load test")
+	else:
+		stale_building_payload["state"]["buildings"].erase(station_a_id)
+		_check(_write_save_payload(STALE_BUILDING_SAVE_PATH, stale_building_payload), "stale-building fixture writes")
+		var stale_building_restore = CoordinatorScript.new(1, 1)
+		_check(not stale_building_restore.load_game(STALE_BUILDING_SAVE_PATH), "GameSession load fails closed when a reused station building was removed while its transport authority remains")
 	var restored = CoordinatorScript.new(1, 1)
 	_check(restored.load_game(SAVE_PATH), "materialized reuse package reloads")
 	var restored_session: Dictionary = restored.transport_planning_session_snapshot()
@@ -361,9 +379,31 @@ func _negative_ledger_count(coordinator) -> int:
 
 
 func _cleanup() -> void:
-	for path: String in [SAVE_PATH, "%s.bak" % SAVE_PATH, "%s.tmp" % SAVE_PATH, LEGACY_SAVE_PATH, "%s.bak" % LEGACY_SAVE_PATH, "%s.tmp" % LEGACY_SAVE_PATH]:
+	for path: String in [SAVE_PATH, "%s.bak" % SAVE_PATH, "%s.tmp" % SAVE_PATH, STALE_BUILDING_SAVE_PATH, "%s.bak" % STALE_BUILDING_SAVE_PATH, "%s.tmp" % STALE_BUILDING_SAVE_PATH, LEGACY_SAVE_PATH, "%s.bak" % LEGACY_SAVE_PATH, "%s.tmp" % LEGACY_SAVE_PATH]:
 		if FileAccess.file_exists(path):
 			DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+
+func _read_save_payload(path: String) -> Dictionary:
+	if not FileAccess.file_exists(path):
+		return {}
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return {}
+	var parsed: Variant = JSON.parse_string(file.get_as_text())
+	file.close()
+	return parsed if parsed is Dictionary else {}
+
+
+func _write_save_payload(path: String, payload: Dictionary) -> bool:
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		return false
+	file.store_string(JSON.stringify(payload, "\t", false))
+	file.flush()
+	var write_error := file.get_error()
+	file.close()
+	return write_error == OK
 
 
 func _check(condition: bool, label: String) -> void:

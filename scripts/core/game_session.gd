@@ -654,7 +654,8 @@ func _validate_vertical_slice_metadata(restored_state, runtime: Dictionary) -> b
 			var planning_reference_validation: Dictionary = TransportPlanningSessionScript.validate_references(
 				planning_value as Dictionary,
 				vertical.get("construction", {}),
-				transport_value as Dictionary
+				transport_value as Dictionary,
+				restored_state.buildings
 			)
 			if not bool(planning_reference_validation.get("valid", false)):
 				return false

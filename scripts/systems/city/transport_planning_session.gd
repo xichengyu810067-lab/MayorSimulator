@@ -664,7 +664,8 @@ static func validate_snapshot(data: Dictionary) -> Dictionary:
 static func validate_references(
 	data: Dictionary,
 	construction_snapshot: Dictionary,
-	transport_snapshot: Dictionary
+	transport_snapshot: Dictionary,
+	buildings_snapshot: Dictionary = {}
 ) -> Dictionary:
 	var shape := validate_snapshot(data)
 	if not bool(shape.get("valid", false)):
@@ -682,11 +683,21 @@ static func validate_references(
 	var projects: Dictionary = projects_value
 	var routes: Dictionary = routes_value
 	var stations: Dictionary = stations_value
-	for ref_value: Variant in current.get("station_refs", []):
+	var route_draft: Dictionary = Dictionary(current.get("route_draft", {}))
+	var station_placements: Array = Array(route_draft.get("station_placements", []))
+	var station_refs: Array = current.get("station_refs", [])
+	for ref_index in range(station_refs.size()):
+		var ref_value: Variant = station_refs[ref_index]
 		var ref: Dictionary = ref_value
 		var job_id := str(ref.get("job_id", ""))
 		if str(ref.get("source", "")) == "existing":
 			var station_id := str(ref.get("station_id", ""))
+			if not _existing_station_reference_matches_placement(
+				ref,
+				station_placements,
+				ref_index
+			):
+				return {"valid": false, "error": "existing_station_placement_mismatch"}
 			if not stations.has(station_id) or not stations[station_id] is Dictionary:
 				return {"valid": false, "error": "station_reference_missing"}
 			var station: Dictionary = stations[station_id]
@@ -697,6 +708,13 @@ static func validate_references(
 				or str(station.get("status", "")) != "completed"
 			):
 				return {"valid": false, "error": "station_reference_mismatch"}
+			if not buildings_snapshot.is_empty() and not _existing_station_building_matches_reference(
+				station_id,
+				ref,
+				current,
+				buildings_snapshot
+			):
+				return {"valid": false, "error": "station_building_reference_mismatch"}
 			continue
 		if not jobs.has(job_id) or not jobs[job_id] is Dictionary:
 			return {"valid": false, "error": "station_job_reference_missing"}
@@ -749,6 +767,43 @@ static func validate_references(
 			if not stop_id_value is String or not completed_station_ids.has(str(stop_id_value)):
 				return {"valid": false, "error": "route_reference_station_mismatch"}
 	return {"valid": true, "error": ""}
+
+
+static func _existing_station_reference_matches_placement(
+	ref: Dictionary,
+	station_placements: Array,
+	ref_index: int
+) -> bool:
+	if ref_index < 0 or ref_index >= station_placements.size():
+		return false
+	var placement_value: Variant = station_placements[ref_index]
+	if not placement_value is Dictionary:
+		return false
+	var placement: Dictionary = placement_value
+	return (
+		bool(placement.get("reuse_existing_station", false))
+		and str(placement.get("existing_station_id", "")) == str(ref.get("station_id", ""))
+		and int(placement.get("anchor_tile_id", -1)) == int(ref.get("anchor_tile_id", -1))
+		and _integer_arrays_equal(placement.get("occupied_tile_ids", []), ref.get("occupied_tile_ids", []))
+	)
+
+
+static func _existing_station_building_matches_reference(
+	station_id: String,
+	ref: Dictionary,
+	current: Dictionary,
+	buildings: Dictionary
+) -> bool:
+	if not buildings.has(station_id) or not buildings[station_id] is Dictionary:
+		return false
+	var building: Dictionary = buildings[station_id]
+	return (
+		str(building.get("building_id", "")) == station_id
+		and str(building.get("status", "")) == "active"
+		and str(building.get("building_name", "")) == str(current.get("station_blueprint_name", ""))
+		and int(building.get("anchor_tile_id", building.get("tile_index", -1))) == int(ref.get("anchor_tile_id", -1))
+		and _integer_arrays_equal(building.get("occupied_tile_ids", []), ref.get("occupied_tile_ids", []))
+	)
 
 
 func _resume_after_jobs_if_ready() -> void:
