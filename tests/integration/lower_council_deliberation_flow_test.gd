@@ -90,7 +90,7 @@ func _test_main_stage_and_single_autosave() -> void:
 	main._submit_bill("環境保護法案")
 	var decision_day := int(main.vertical_slice.governance.pending_bill.get("decision_day", -1))
 	var days_due: int = decision_day - main.vertical_slice.game_day()
-	var events: Array[Dictionary] = main.vertical_slice.advance_days(days_due, _supportive_context(), false)
+	var events: Array[Dictionary] = main.vertical_slice.advance_days(days_due, main._vertical_city_context(), false)
 	main._consume_vertical_events(events)
 	main._update_ui()
 	main.municipal_overlay.open_page("governance")
@@ -128,7 +128,8 @@ func _test_main_stage_and_single_autosave() -> void:
 	var first_bill_id := str(first_hearing_pending.get("bill_id", ""))
 	var first_bill_definition: Dictionary = main.vertical_slice.governance.bill_definitions.get(first_bill_id, {}).duplicate(true)
 	var authority_history_before: int = main.vertical_slice.governance.lower_council_database.vote_history.size()
-	stage.select_response_for_test(0)
+	var rejected_response_index := _first_rejecting_response_index(main)
+	stage.select_response_for_test(rejected_response_index if rejected_response_index >= 0 else 0)
 	await _settle(2)
 	var preview_signature: Dictionary = stage.debug_signature()
 	var first_preview: Dictionary = stage._latest_preview.duplicate(true)
@@ -154,18 +155,17 @@ func _test_main_stage_and_single_autosave() -> void:
 	var second_hearing_answerable: Dictionary = stage.debug_signature()
 	_check(bool(second_hearing_answerable.get("readonly_preview", false)) and not bool(second_hearing_answerable.get("confirm_disabled", true)), "same-option second hearing can accept a fresh preview and enable confirmation")
 
-	var rejected_bill_id := "industry_act"
-	var rejected_definition: Dictionary = main.vertical_slice.governance.bill_definitions.get(rejected_bill_id, {})
-	var rejected_decision := _rejected_bill_fixture(main.vertical_slice.governance.legislative_history.back(), rejected_definition, main.vertical_slice.game_day())
+	var rejected_decision := _latest_real_rejected_decision(main)
+	if rejected_decision.is_empty():
+		rejected_decision = _resolve_real_rejected_bill(main)
+	var rejected_bill_id := str(rejected_decision.get("bill_id", ""))
 	var rejected_final_vote: Dictionary = rejected_decision.get("final_vote", {})
-	_check(str(rejected_decision.get("bill_id", "")) == rejected_bill_id and str(rejected_decision.get("name", "")) == str(rejected_definition.get("name", "")), "rejected fixture matches the selected bill definition")
-	_check(str(rejected_decision.get("status", "")) == "rejected" and not bool(rejected_decision.get("passed", true)) and not bool(rejected_decision.get("lower_passed", true)), "rejected fixture has a consistent terminal rejection state")
-	_check(_vote_fixture_is_consistent(rejected_final_vote, rejected_bill_id), "rejected fixture preserves a consistent 30-seat vote below threshold 16")
-	main.vertical_slice.governance.active_laws.erase(rejected_bill_id)
-	main.vertical_slice.governance.legislative_history.append(rejected_decision.duplicate(true))
-	main.vertical_slice.governance.rejected_bills[rejected_bill_id] = rejected_decision.duplicate(true)
-	_check(main.vertical_slice.governance.rejected_bills.get(rejected_bill_id, {}) == rejected_decision, "rejected map stores the same terminal decision as legislative history")
-	_check(main.vertical_slice.latest_rejected_bill_id() == rejected_bill_id, "coordinator identifies the fixture bill as the latest eligible rejection")
+	_check(not rejected_bill_id.is_empty(), "a built-in bill and mayor response in a new game produce a terminal rejection")
+	_check(str(rejected_decision.get("status", "")) == "rejected" and not bool(rejected_decision.get("passed", true)), "authoritative legislative completion records the terminal rejection")
+	_check((rejected_final_vote.get("votes", []) as Array).size() == 30 and int(rejected_final_vote.get("majority_threshold", 0)) == 16, "authoritative rejection preserves the actual 30-seat lower-house final vote")
+	_check(main.vertical_slice.governance.rejected_bills.get(rejected_bill_id, {}) == rejected_decision, "authoritative rejected map stores the same terminal decision as legislative history")
+	_check(main.vertical_slice.latest_rejected_bill_id() == rejected_bill_id, "coordinator identifies the genuine latest eligible rejection")
+	print("R4P0 genuine rejection: bill=%s response=%s votes_for=%d votes_against=%d lower_passed=%s upper_passed=%s" % [rejected_bill_id, str(rejected_decision.get("mayor_response", {}).get("id", "")), int(rejected_final_vote.get("votes_for", -1)), int(rejected_final_vote.get("votes_against", -1)), str(rejected_decision.get("lower_passed", false)), str(rejected_decision.get("upper_vote", {}).get("passed", false))])
 	main._update_ui()
 	main.municipal_overlay.open_hub()
 	main.municipal_overlay.open_page("governance")
@@ -190,6 +190,8 @@ func _test_main_stage_and_single_autosave() -> void:
 	await _settle(2)
 	var reloaded_signature: Dictionary = resumed.lower_council_stage.debug_signature()
 	_check(not resumed.vertical_slice.governance.legislative_history.is_empty(), "reload preserves legislative history without using it as current workflow state")
+	var reloaded_rejection: Dictionary = resumed.vertical_slice.governance.rejected_bills.get(rejected_bill_id, {})
+	_check(_decision_authority_signature(reloaded_rejection) == _decision_authority_signature(rejected_decision), "reload round-trips the genuine rejected decision identity, selected response, 30-seat tally, and upper-house result through governance authority")
 	_check(str(reloaded_signature.get("stage_state", "")) == "idle" and bool(reloaded_signature.get("catalog_visible", false)), "reload opens completed governance state on the catalog instead of a stale final page")
 	_check(resumed.governance_catalog_title.visible and resumed.governance_status_tabs.visible, "reload keeps the governance catalog controls operable")
 	_check(resumed.governance_force_panel.visible and not resumed.governance_force_button.disabled, "reload preserves the rejected bill force-enact entry")
@@ -221,72 +223,83 @@ func _supportive_context() -> Dictionary:
 	}
 
 
-func _rejected_bill_fixture(source_decision: Dictionary, definition: Dictionary, resolved_day: int) -> Dictionary:
-	var bill_id := str(definition.get("id", ""))
+func _first_rejecting_response_index(main) -> int:
+	var options: Array = main.vertical_slice.governance.pending_bill.get("lower_house_hearing", {}).get("response_options", [])
+	var context: Dictionary = main._vertical_city_context()
+	for index in range(options.size()):
+		var response_id := str((options[index] as Dictionary).get("id", ""))
+		var preview: Dictionary = main.vertical_slice.preview_lower_house_response(response_id, context)
+		if bool(preview.get("ok", false)) and not bool(preview.get("passed", true)):
+			return index
+	return -1
+
+
+func _latest_real_rejected_decision(main) -> Dictionary:
+	if main.vertical_slice.governance.legislative_history.is_empty():
+		return {}
+	var latest: Dictionary = main.vertical_slice.governance.legislative_history.back()
+	return latest.duplicate(true) if str(latest.get("status", "")) == "rejected" else {}
+
+
+func _decision_authority_signature(decision: Dictionary) -> Dictionary:
+	var final_vote: Dictionary = decision.get("final_vote", {})
+	var upper_vote: Dictionary = decision.get("upper_vote", {})
 	return {
-		"bill_id": bill_id,
-		"name": str(definition.get("name", bill_id)),
-		"submitted_day": maxi(0, resolved_day - 1),
-		"resolved_day": resolved_day,
-		"first_vote": _rejected_vote_fixture(source_decision.get("first_vote", {}), bill_id, "initial", resolved_day),
-		"debate": {},
-		"mayor_response": {},
-		"final_vote": _rejected_vote_fixture(source_decision.get("final_vote", {}), bill_id, "final", resolved_day),
-		"lower_passed": false,
-		"upper_vote": {"passed": false, "votes": [], "veto_regions": []},
-		"passed": false,
-		"status": "rejected",
+		"bill_id": str(decision.get("bill_id", "")),
+		"status": str(decision.get("status", "")),
+		"passed": bool(decision.get("passed", false)),
+		"lower_passed": bool(decision.get("lower_passed", false)),
+		"resolved_day": int(decision.get("resolved_day", -1)),
+		"mayor_response_id": str(decision.get("mayor_response", {}).get("id", "")),
+		"votes_for": int(final_vote.get("votes_for", -1)),
+		"votes_against": int(final_vote.get("votes_against", -1)),
+		"abstentions": int(final_vote.get("abstentions", -1)),
+		"absences": int(final_vote.get("absences", -1)),
+		"seat_count": (final_vote.get("votes", []) as Array).size(),
+		"majority_threshold": int(final_vote.get("majority_threshold", -1)),
+		"upper_passed": bool(upper_vote.get("passed", false)),
+		"upper_vote_count": (upper_vote.get("votes", []) as Array).size(),
 	}
 
 
-func _rejected_vote_fixture(source_vote: Dictionary, bill_id: String, stage: String, game_day: int) -> Dictionary:
-	var source_votes: Array = source_vote.get("votes", [])
-	var votes: Array[Dictionary] = []
-	for index in range(30):
-		var vote: Dictionary = (source_votes[index] as Dictionary).duplicate(true) if index < source_votes.size() and source_votes[index] is Dictionary else {}
-		var member_id := str(vote.get("member_id", "LC-%03d" % (index + 1)))
-		var supports := index < 15
-		vote["vote_id"] = "fixture_%s_%s_%s" % [bill_id, stage, member_id]
-		vote["member_id"] = member_id
-		vote["bill_id"] = bill_id
-		vote["bill_version"] = 1
-		vote["game_day"] = game_day
-		vote["choice"] = "for" if supports else "against"
-		vote["supports"] = supports
-		vote["primary_reason"] = "feasibility"
-		vote["concern"] = "feasibility"
-		votes.append(vote)
-	return {
-		"ok": true,
-		"votes_for": 15,
-		"votes_against": 15,
-		"abstentions": 0,
-		"absences": 0,
-		"majority_threshold": 16,
-		"passed": false,
-		"stage": stage,
-		"model": "lower_council_30_member",
-		"votes": votes,
-	}
-
-
-func _vote_fixture_is_consistent(vote: Dictionary, bill_id: String) -> bool:
-	var votes: Array = vote.get("votes", [])
-	if votes.size() != 30 or int(vote.get("majority_threshold", 0)) != 16 or bool(vote.get("passed", true)):
-		return false
-	var counted_for := 0
-	var counted_against := 0
-	for vote_variant: Variant in votes:
-		var member_vote: Dictionary = vote_variant
-		if str(member_vote.get("bill_id", "")) != bill_id:
-			return false
-		if str(member_vote.get("choice", "")) == "for":
-			counted_for += 1
-		elif str(member_vote.get("choice", "")) == "against":
-			counted_against += 1
-		else:
-			return false
-	return counted_for == int(vote.get("votes_for", -1)) and counted_against == int(vote.get("votes_against", -1)) and counted_for < int(vote.get("majority_threshold", 0))
+func _resolve_real_rejected_bill(main) -> Dictionary:
+	# This is a characterization search over the actual new-game Main scene,
+	# built-in bill catalog, live city context, and persisted 30-seat vote model.
+	# It intentionally never writes rejected_bills or legislative_history directly.
+	for bill_id in ["transit_act", "commerce_act", "welfare_act", "security_act", "utility_relief_act", "industry_act", "social_housing_act"]:
+		if main.vertical_slice.governance.active_laws.has(bill_id):
+			continue
+		var submitted: Dictionary = main.vertical_slice.submit_bill(bill_id, main._vertical_city_context())
+		if not bool(submitted.get("ok", false)):
+			continue
+		var decision_day := int(main.vertical_slice.governance.pending_bill.get("decision_day", -1))
+		var days_due: int = decision_day - main.vertical_slice.game_day()
+		var events: Array[Dictionary] = main.vertical_slice.advance_days(days_due, main._vertical_city_context(), false)
+		main._consume_vertical_events(events)
+		var options: Array = main.vertical_slice.governance.pending_bill.get("lower_house_hearing", {}).get("response_options", [])
+		for option_variant: Variant in options:
+			var response_id := str((option_variant as Dictionary).get("id", ""))
+			var preview: Dictionary = main.vertical_slice.preview_lower_house_response(response_id, main._vertical_city_context())
+			if not bool(preview.get("ok", false)) or bool(preview.get("passed", true)):
+				continue
+			var result: Dictionary = main.vertical_slice.answer_lower_house_hearing(response_id, main._vertical_city_context())
+			main._consume_vertical_events(main.vertical_slice.drain_ui_events())
+			main._update_ui()
+			var decision: Dictionary = result.get("decision", {})
+			if bool(result.get("ok", false)) and str(decision.get("status", "")) == "rejected":
+				return decision.duplicate(true)
+			return {}
+		# Every preview passed for this bill. Resolve it through the same authority
+		# path before trying another built-in bill; no terminal state is injected.
+		if not options.is_empty():
+			var fallback_response_id := str((options[0] as Dictionary).get("id", ""))
+			var fallback: Dictionary = main.vertical_slice.answer_lower_house_hearing(fallback_response_id, main._vertical_city_context())
+			main._consume_vertical_events(main.vertical_slice.drain_ui_events())
+			main._update_ui()
+			var fallback_decision: Dictionary = fallback.get("decision", {})
+			if bool(fallback.get("ok", false)) and str(fallback_decision.get("status", "")) == "rejected":
+				return fallback_decision.duplicate(true)
+	return {}
 
 
 func _settle(frames: int = 2) -> void:
