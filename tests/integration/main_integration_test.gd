@@ -432,6 +432,10 @@ func _run() -> void:
 	_check(main.get_viewport().is_input_handled(), "Escape from a municipal child page marks its input event handled")
 	await process_frame
 	_check(main.municipal_overlay.current_page() == "buildings", "Escape from a municipal child page returns to its immediate previous page")
+	if municipal_back != null:
+		municipal_back.emit_signal("pressed")
+		await process_frame
+	_check(main.municipal_overlay.current_page() == "hub", "Back returns the child-Escape route to the hub before hub Escape is tested")
 	var hub_escape := InputEventAction.new()
 	hub_escape.action = "ui_cancel"
 	hub_escape.pressed = true
