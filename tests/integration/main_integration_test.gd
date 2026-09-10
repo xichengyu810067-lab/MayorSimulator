@@ -174,15 +174,29 @@ func _run() -> void:
 			var caption := captions[0] as Label
 			_check(caption.get_theme_font_size("font_size") >= 18, "compact action '%s' caption remains readable" % action_name)
 			_check(caption.autowrap_mode == TextServer.AUTOWRAP_WORD_SMART, "compact action '%s' caption wraps instead of clipping" % action_name)
-	_check(not main.labels["month"].tooltip_text.contains("2 分鐘"), "date HUD no longer explains the real-time day conversion")
-	_check(not main.vertical_slice.is_time_paused() and main.labels["month"].text.begins_with("▶"), "live map exposes its running state in the date HUD")
+	var date_hud := main.labels["month"] as Label
+	_check(not main.vertical_slice.is_time_paused() and date_hud.text.ends_with("· 自動"), "live map describes automatic time without a play-button affordance")
+	_check(date_hud.tooltip_text == "遊戲時間每 120 秒自動推進一天，日期區不需點擊。", "running date HUD explains the automatic clock and that it is not a button")
+	var day_before_date_hud_input := int(main.vertical_slice.game_day())
+	var date_hud_click := InputEventMouseButton.new()
+	date_hud_click.button_index = MOUSE_BUTTON_LEFT
+	date_hud_click.pressed = true
+	date_hud.emit_signal("gui_input", date_hud_click)
+	var date_hud_accept := InputEventAction.new()
+	date_hud_accept.action = "ui_accept"
+	date_hud_accept.pressed = true
+	date_hud.emit_signal("gui_input", date_hud_accept)
+	await process_frame
+	_check(int(main.vertical_slice.game_day()) == day_before_date_hud_input, "clicking or accepting the non-interactive date HUD does not advance time")
+	_check(date_hud.focus_mode == Control.FOCUS_NONE, "date HUD cannot receive keyboard focus or impersonate a button")
 
 	_check(main.settings_overlay != null and not main.settings_overlay.is_open(), "settings overlay starts closed")
 	main.settings_button.emit_signal("pressed")
 	await process_frame
 	await process_frame
 	_check(main.settings_overlay.is_open(), "settings button opens the unified settings overlay")
-	_check(main.vertical_slice.is_time_paused() and main.labels["month"].text.begins_with("Ⅱ"), "settings pauses simulation and exposes the paused state")
+	_check(main.vertical_slice.is_time_paused() and main.labels["month"].text.ends_with("· 暫停"), "settings pauses simulation and exposes the paused state without a pause-button affordance")
+	_check(main.labels["month"].tooltip_text == "管理或教學畫面開啟時會自動暫停，日期區不需點擊。", "paused date HUD explains automatic modal pausing and that it is not a button")
 	_check(main.settings_overlay.language_selector.choice_count() == 5, "settings preserves all five language choices")
 	_check(main.settings_overlay.language_selector.visible_popup_item_count() == 5, "settings exposes all five language choices on one popup page")
 	_check(main.settings_overlay.language_selector.shows_all_choices(), "settings language selector disables More paging")
@@ -190,7 +204,7 @@ func _run() -> void:
 	_check(main.find_child("GameLanguageSelector", true, false) == null, "language selector is no longer exposed as a separate HUD control")
 	main.settings_overlay.close()
 	await process_frame
-	_check(not main.vertical_slice.is_time_paused() and main.labels["month"].text.begins_with("▶"), "closing settings resumes the live map")
+	_check(not main.vertical_slice.is_time_paused() and main.labels["month"].text.ends_with("· 自動"), "closing settings resumes the automatic clock")
 
 	# Bounds checks use the live viewport instead of assuming a fixed capture size.
 	for key in ["month", "funds", "population", "satisfaction", "grievance", "trust", "score", "rating"]:
@@ -205,7 +219,7 @@ func _run() -> void:
 	await process_frame
 	await process_frame
 	_check(main.municipal_overlay.is_open() and main.municipal_overlay.current_page() == "hub", "municipal button opens the hub")
-	_check(main.vertical_slice.is_time_paused() and main.labels["month"].text.begins_with("Ⅱ"), "municipal management pauses simulation while the player reads")
+	_check(main.vertical_slice.is_time_paused() and main.labels["month"].text.ends_with("· 暫停"), "municipal management pauses simulation while the player reads")
 	_check(main.get_visible_npc_actors().all(func(button: Button) -> bool: return button.tooltip_text.is_empty() and button.mouse_filter == Control.MOUSE_FILTER_IGNORE), "modal opening disables resident hover tooltips and pointer input")
 	_check(main.grid_buttons.all(func(button: Button) -> bool: return button.tooltip_text.is_empty() and button.mouse_filter == Control.MOUSE_FILTER_IGNORE), "modal opening disables tile hover tooltips and pointer input")
 	var municipal_root := main.municipal_overlay.find_child("MunicipalHubRoot", true, false) as Control
@@ -494,7 +508,7 @@ func _run() -> void:
 		overlay_close_button.emit_signal("pressed")
 	await process_frame
 	_check(not main.municipal_overlay.is_open(), "clicking the municipal close button restores the map")
-	_check(not main.vertical_slice.is_time_paused() and main.labels["month"].text.begins_with("▶"), "closing municipal management resumes simulation")
+	_check(not main.vertical_slice.is_time_paused() and main.labels["month"].text.ends_with("· 自動"), "closing municipal management resumes the automatic clock")
 	_check(main.get_visible_npc_actors().all(func(button: Button) -> bool: return not button.tooltip_text.is_empty() and button.mouse_filter == Control.MOUSE_FILTER_STOP), "closing the modal restores resident interaction")
 	_check(main.grid_buttons.all(func(button: Button) -> bool: return not button.tooltip_text.is_empty() and button.mouse_filter == Control.MOUSE_FILTER_STOP), "closing the modal restores tile interaction")
 

@@ -1694,7 +1694,7 @@ func _header_metric_card(key: String) -> PanelContainer:
 	card.name = "StatusMetric_%s" % key.capitalize()
 	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var minimum_widths := {
-		"month": 92.0,
+		"month": 126.0,
 		"funds": 116.0,
 		"population": 108.0,
 		"satisfaction": 108.0,
@@ -7305,8 +7305,13 @@ func _refresh_time_hud() -> void:
 	if vertical_slice == null or not labels.has("month"):
 		return
 	var paused: bool = bool(vertical_slice.is_time_paused())
-	labels["month"].text = "%s %d/%d" % ["Ⅱ" if paused else "▶", month, day]
-	labels["month"].tooltip_text = ""
+	var status_text := L10n.text("暫停") if paused else L10n.text("自動")
+	labels["month"].text = "%d/%d · %s" % [month, day, status_text]
+	labels["month"].tooltip_text = L10n.text(
+		"管理或教學畫面開啟時會自動暫停，日期區不需點擊。"
+		if paused
+		else "遊戲時間每 120 秒自動推進一天，日期區不需點擊。"
+	)
 	if header_bars.has("month"):
 		_set_bar_visual(header_bars["month"], (float((month - 1) * 30 + day) / 360.0) * 100.0, COLOR_CAUTION if paused else COLOR_INFO)
 
