@@ -645,6 +645,7 @@ func _notification(what: int) -> void:
 		_request_application_quit()
 	elif what == NOTIFICATION_APPLICATION_FOCUS_OUT:
 		_npc_keyboard_dismiss_waiting_for_cancel_release = false
+		_clear_map_pan_drag_state()
 		if vertical_slice != null:
 			vertical_slice.set_time_paused(true)
 	elif what == NOTIFICATION_APPLICATION_FOCUS_IN and vertical_slice != null:
@@ -1532,7 +1533,7 @@ func _dismiss_hovered_map_control(control: BaseButton) -> void:
 
 func _set_map_interaction_enabled(enabled: bool) -> void:
 	if not enabled:
-		_map_pan_drag_active = false
+		_clear_map_pan_drag_state()
 	_set_map_npc_tooltips_enabled(enabled)
 	_set_map_tile_tooltips_enabled(enabled)
 

@@ -95,6 +95,7 @@ func _run() -> void:
 	await _drive_zoom(main, main.MAP_ZOOM_MIN, MOUSE_BUTTON_WHEEL_DOWN, "wheel down to 65%")
 	await _validate_zoom_snapshot(main, target_button, building_button, representative_npc, centers, transport_snapshot, target_tile, 0.65, "65%")
 	await _verify_left_drag_and_reset_contract(main, target_button, target_tile)
+	await _verify_left_drag_lifecycle_cleanup(main, target_button, target_tile)
 
 	await _finish([main])
 
@@ -306,6 +307,96 @@ func _verify_left_drag_and_reset_contract(main, target_button: Button, target_ti
 	main._input(right_reset)
 	_check(is_equal_approx(main.map_zoom, zoom_before_modal_right_click), "right click behind a visible modal does not reset the map")
 	main.settings_overlay.hide()
+
+
+func _verify_left_drag_lifecycle_cleanup(main, target_button: Button, target_tile: int) -> void:
+	main.call("_reset_map_camera")
+	await _drive_zoom(main, 1.20, MOUSE_BUTTON_WHEEL_UP, "wheel up before drag lifecycle cleanup")
+	var viewport_rect: Rect2 = main.map_viewport.get_global_rect()
+	var origin: Vector2 = target_button.get_global_rect().get_center()
+	var outside_viewport := viewport_rect.end + Vector2(12.0, 12.0)
+	_check(viewport_rect.has_point(origin) and not viewport_rect.has_point(outside_viewport), "drag lifecycle fixture has distinct map and outside-map pointer positions")
+
+	for activates_drag in [false, true]:
+		var state_name := "active" if activates_drag else "pending"
+		await _start_left_drag(main, origin, activates_drag)
+		_check(main._map_pan_drag_pending or main._map_pan_drag_active, "%s left drag state is established before modal disable" % state_name)
+		main.settings_overlay.show()
+		main.call("_sync_map_interaction_for_ui")
+		await process_frame
+		_check(_map_drag_state_is_clear(main), "%s left drag state clears when a modal disables map interaction" % state_name)
+		main.settings_overlay.hide()
+		main.call("_sync_map_interaction_for_ui")
+		await _release_left_outside_viewport(outside_viewport)
+		await _assert_no_button_motion_does_not_pan(main, origin, "%s drag after modal re-enable" % state_name)
+		await _click_target(main, target_button, target_tile, "%s drag cleanup retains ordinary tile click after modal" % state_name)
+
+		await _start_left_drag(main, origin, activates_drag)
+		_check(main._map_pan_drag_pending or main._map_pan_drag_active, "%s left drag state is established before focus loss" % state_name)
+		main.notification(NOTIFICATION_APPLICATION_FOCUS_OUT)
+		await process_frame
+		main.notification(NOTIFICATION_APPLICATION_FOCUS_IN)
+		await process_frame
+		await _release_left_outside_viewport(outside_viewport)
+		_check(_map_drag_state_is_clear(main), "%s left drag state clears across focus out/in before an outside release" % state_name)
+		await _assert_no_button_motion_does_not_pan(main, origin, "%s drag after focus re-entry" % state_name)
+		await _click_target(main, target_button, target_tile, "%s drag cleanup retains ordinary tile click after focus re-entry" % state_name)
+
+
+func _start_left_drag(main, origin: Vector2, activate: bool) -> void:
+	var hover_motion := InputEventMouseMotion.new()
+	hover_motion.position = origin
+	hover_motion.global_position = origin
+	root.push_input(hover_motion, true)
+	await process_frame
+	var left_down := InputEventMouseButton.new()
+	left_down.button_index = MOUSE_BUTTON_LEFT
+	left_down.button_mask = MOUSE_BUTTON_MASK_LEFT
+	left_down.pressed = true
+	left_down.position = origin
+	left_down.global_position = origin
+	root.push_input(left_down, true)
+	await process_frame
+	if activate:
+		var drag_motion := InputEventMouseMotion.new()
+		drag_motion.position = origin + Vector2(32.0, -20.0)
+		drag_motion.global_position = drag_motion.position
+		drag_motion.relative = Vector2(32.0, -20.0)
+		drag_motion.button_mask = MOUSE_BUTTON_MASK_LEFT
+		root.push_input(drag_motion, true)
+		await process_frame
+
+
+func _release_left_outside_viewport(position: Vector2) -> void:
+	var left_up := InputEventMouseButton.new()
+	left_up.button_index = MOUSE_BUTTON_LEFT
+	left_up.pressed = false
+	left_up.position = position
+	left_up.global_position = position
+	root.push_input(left_up, true)
+	await process_frame
+
+
+func _map_drag_state_is_clear(main) -> bool:
+	return (
+		not main._map_pan_drag_active
+		and not main._map_pan_drag_pending
+		and not main._map_pan_drag_uses_left_button
+		and main._map_pan_drag_origin.is_equal_approx(Vector2.ZERO)
+		and main._map_pan_drag_last_position.is_equal_approx(Vector2.ZERO)
+	)
+
+
+func _assert_no_button_motion_does_not_pan(main, position: Vector2, phase: String) -> void:
+	var pan_before: Vector2 = main.map_pan_offset
+	var no_button_motion := InputEventMouseMotion.new()
+	no_button_motion.position = position + Vector2(44.0, 28.0)
+	no_button_motion.global_position = no_button_motion.position
+	no_button_motion.relative = Vector2(44.0, 28.0)
+	no_button_motion.button_mask = 0
+	root.push_input(no_button_motion, true)
+	await process_frame
+	_check(main.map_pan_offset.is_equal_approx(pan_before), "%s does not pan on a subsequent no-button motion" % phase)
 
 
 func _click_target(main, button: Button, target_tile: int, phase: String) -> void:
