@@ -1,7 +1,8 @@
 # Mayor Simulator MVP
 
 這是一個以 Godot 4.7 製作的單機城市治理模擬專案。程式以 GDScript 為主，主場景是
-`res://scenes/Main.tscn`，使用 Compatibility renderer，並以 `L10n` Autoload 提供五語系介面。
+`res://scenes/Main.tscn`，預設使用 Mobile renderer 與 Vulkan driver，並以 `L10n` Autoload 提供五語系介面。
+Compatibility／OpenGL 3 是遇到 Vulkan 或驅動問題時可明確選用的 fallback，不是目前專案預設值。
 
 目前定位是可供內部驗證的 alpha／release staging，**不是已完成公開發佈驗收的正式版**。
 測試通過只代表目前自動化契約成立，不代表素材授權、平台簽章或真實 Linux 執行環境已完成。
@@ -38,11 +39,48 @@ CI 會先驗證 SDK manifest、skill 參考與測試清單沒有漂移。
 
 ## 從原始碼啟動
 
-在專案根目錄設定 Godot 執行檔路徑後啟動：
+在專案根目錄設定 Godot 執行檔路徑後，以預設 Mobile／Vulkan 啟動遊戲：
 
 ```powershell
 $GodotExe = 'C:\path\to\Godot_v4.7-stable_win64.exe'
-& $GodotExe --path .
+& $GodotExe --path . --rendering-method mobile --rendering-driver vulkan
+```
+
+若要開啟 Godot 編輯器並明確沿用相同 renderer：
+
+```powershell
+& $GodotExe --editor --path . --rendering-method mobile --rendering-driver vulkan
+& .\builds\windows\MayorSimulator.exe --rendering-method mobile --rendering-driver vulkan
+```
+
+只有在 Mobile／Vulkan 無法於該機器正常啟動時，才改用下列 Compatibility／OpenGL 3 命令；參數必須成對使用：
+
+```powershell
+# Godot 編輯器
+& $GodotExe --editor --path . --rendering-method gl_compatibility --rendering-driver opengl3
+
+# 由 Godot 執行專案
+& $GodotExe --path . --rendering-method gl_compatibility --rendering-driver opengl3
+
+# 已匯出的 Windows 成品
+& .\builds\windows\MayorSimulator.exe --rendering-method gl_compatibility --rendering-driver opengl3
+```
+
+需要隔離 `APPDATA`、`LOCALAPPDATA` 與 Godot `user://` 的人工遊玩時，使用固定模式 runner。每個 `ProfileName`
+只能建立一次，runner 不接受額外 Godot 參數，也不會重用既有輸出：
+
+```powershell
+& .\tools\run_isolated_playtest.ps1 -RendererMode Mobile -ProfileName 'mobile-manual-01'
+& .\tools\run_isolated_playtest.ps1 -RendererMode Compatibility -ProfileName 'compatibility-manual-01'
+```
+
+提交乾淨後，可用 intro CG 可見驗收確認 renderer 啟動與完整播放標記。輸出必須是
+`.tmp\renderer-smoke` 下全新的目錄；失敗證據會保留，不能把 Compatibility 的 driver crash 當成通過：
+
+```powershell
+$GodotConsole = 'C:\path\to\Godot_v4.7-stable_win64_console.exe'
+& .\tools\run_renderer_smoke.ps1 -GodotExe $GodotConsole -RendererMode Mobile -OutputRoot '.\.tmp\renderer-smoke\mobile-01'
+& .\tools\run_renderer_smoke.ps1 -GodotExe $GodotConsole -RendererMode Compatibility -OutputRoot '.\.tmp\renderer-smoke\compatibility-01'
 ```
 
 目前 staging 內也有本機匯出結果：
