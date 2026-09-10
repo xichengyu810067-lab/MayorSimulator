@@ -131,7 +131,7 @@ func register_page(page_id: String, title: String, control: Control, hub_child: 
 		return
 
 	if _pages.has(normalized_id):
-		var previous := _pages[normalized_id] as Control
+		var previous := _page_control(normalized_id)
 		if is_instance_valid(previous) and previous != control and previous.get_parent() == _page_host:
 			_page_host.remove_child(previous)
 
@@ -178,7 +178,7 @@ func open_page(page_id: String) -> void:
 	if not _pages.has(normalized_id):
 		push_warning("MunicipalOverlay has no registered page named '%s'." % normalized_id)
 		return
-	var page := _pages[normalized_id] as Control
+	var page := _page_control(normalized_id)
 	if not is_instance_valid(page):
 		push_warning("MunicipalOverlay page '%s' is no longer valid." % normalized_id)
 		return
@@ -222,11 +222,21 @@ func current_page() -> String:
 	return _current_page_id
 
 
+func _page_control(page_id: String) -> Control:
+	var page_variant: Variant = _pages.get(page_id)
+	# A dictionary keeps an Object reference after queue_free(). Casting that
+	# stale Variant raises before is_instance_valid() can run, so validity must
+	# be checked while the value is still untyped.
+	if not is_instance_valid(page_variant):
+		return null
+	return page_variant as Control
+
+
 func set_dark_mode(enabled: bool) -> void:
 	_dark_mode = enabled
 	_apply_palette()
-	for page_variant in _pages.values():
-		var page := page_variant as Control
+	for page_id_variant in _pages.keys():
+		var page := _page_control(str(page_id_variant))
 		if is_instance_valid(page) and page.has_method("set_dark_mode"):
 			page.call("set_dark_mode", enabled)
 
@@ -547,7 +557,7 @@ func _handle_back() -> void:
 		if previous_page_id == HUB_PAGE_ID:
 			_show_hub()
 			return
-		var previous_page: Control = _pages.get(previous_page_id) as Control
+		var previous_page := _page_control(previous_page_id)
 		if is_instance_valid(previous_page):
 			_show_page(previous_page_id, previous_page)
 			return
@@ -568,7 +578,7 @@ func _initial_history_for(page_id: String) -> Array[String]:
 	var contextual_parent := str(HUB_CONTEXT_PARENTS.get(page_id, ""))
 	while not contextual_parent.is_empty() and contextual_parent != HUB_PAGE_ID and not visited.has(contextual_parent):
 		visited[contextual_parent] = true
-		var parent_page := _pages.get(contextual_parent) as Control
+		var parent_page := _page_control(contextual_parent)
 		if not is_instance_valid(parent_page):
 			break
 		history.append(contextual_parent)
@@ -648,8 +658,8 @@ func _show_only(active_control: Control) -> void:
 func _set_all_pages_hidden() -> void:
 	if is_instance_valid(_hub_page):
 		_hub_page.visible = false
-	for page_variant in _pages.values():
-		var page := page_variant as Control
+	for page_id_variant in _pages.keys():
+		var page := _page_control(str(page_id_variant))
 		if is_instance_valid(page):
 			page.visible = false
 

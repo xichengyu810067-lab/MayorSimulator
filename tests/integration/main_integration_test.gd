@@ -463,6 +463,11 @@ func _run() -> void:
 	await process_frame
 	released_page.queue_free()
 	await process_frame
+	main.municipal_overlay.open_page("released_navigation_test")
+	await process_frame
+	_check(main.municipal_overlay.current_page() == "released_navigation_test", "opening a freed registered page fails safe without changing the current route")
+	main.municipal_overlay.set_dark_mode(true)
+	main.municipal_overlay.set_dark_mode(false)
 	main.municipal_overlay.open_page("blueprint")
 	await process_frame
 	if municipal_back != null:
