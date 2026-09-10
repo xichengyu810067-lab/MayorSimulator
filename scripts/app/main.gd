@@ -56,6 +56,7 @@ const ISO_TILE_SIZE := GRID_CELL_SIZE
 const ISO_TILE_STEP := GRID_CELL_SIZE
 const ISO_MAP_ORIGIN := SquareGridLayoutScript.GRID_ORIGIN
 const MAP_STAGE_SIZE := SquareGridLayoutScript.STAGE_SIZE
+const MAP_BACKGROUND_PATH := "res://assets/images/world/backgrounds/city-map-background.png"
 const MAP_ZOOM_MIN := 0.65
 const MAP_ZOOM_MAX := 1.75
 const MAP_ZOOM_STEP := 0.10
@@ -275,6 +276,7 @@ var bill_status_label: Label
 var map_viewport: Control
 var map_stage: Control
 var city_backdrop: Control
+var map_viewport_background: TextureRect
 var tile_layer: Control
 var npc_layer: Control
 var transport_network_layer
@@ -2374,6 +2376,19 @@ func _build_map_panel() -> Control:
 	map_viewport.set_anchors_preset(Control.PRESET_FULL_RECT)
 	map_viewport.resized.connect(Callable(self, "_layout_map_stage"))
 	panel.add_child(map_viewport)
+	# Keep a non-interactive viewport-sized copy of the existing terrain art
+	# behind map_stage. At zooms below one it fills only the newly exposed edges;
+	# buildings, tiles, vehicles, and residents retain their shared stage
+	# transform and hit targets.
+	map_viewport_background = TextureRect.new()
+	map_viewport_background.name = "ViewportTerrainBackground"
+	map_viewport_background.texture = load(MAP_BACKGROUND_PATH) as Texture2D
+	map_viewport_background.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	map_viewport_background.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	map_viewport_background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	map_viewport_background.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	map_viewport_background.z_index = -1
+	map_viewport.add_child(map_viewport_background)
 
 	map_stage = Control.new()
 	map_stage.custom_minimum_size = MAP_STAGE_SIZE

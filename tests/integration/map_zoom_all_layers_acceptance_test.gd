@@ -4,6 +4,7 @@ const TestCleanup := preload("res://tests/helpers/scene_tree_test_cleanup.gd")
 const TEST_SAVE_PATH := "user://mayor_simulator/tests/map_zoom_all_layers_acceptance.json"
 const TRANSFORM_EPSILON := 0.75
 const ROUND_TRIP_EPSILON := 0.02
+const MAP_COVERAGE_EPSILON := 0.75
 
 var _failed := false
 var _checks := 0
@@ -117,9 +118,15 @@ func _validate_zoom_snapshot(
 	main.transport_network_layer.set_network_snapshot(transport_snapshot, centers)
 	main.transport_vehicle_controller.set_runtime_snapshot(transport_snapshot, centers)
 	_check(is_equal_approx(main.map_zoom, expected_zoom), "%s reaches the exact map zoom contract" % phase)
+	_check(_viewport_is_covered_by_terrain_background(main), "%s map_viewport is fully covered by terrain background visual" % phase)
 	var expected_stage_scale := float(main.call("_base_map_scale")) * expected_zoom
 	_check(is_equal_approx(main.map_stage.scale.x, expected_stage_scale), "%s map_stage applies base scale times map zoom" % phase)
 	_check(is_equal_approx(main.map_stage.scale.x, main.map_stage.scale.y), "%s map_stage scale remains uniform" % phase)
+	if is_equal_approx(expected_zoom, 1.0):
+		_check(
+			is_equal_approx(float(main.call("_base_map_scale")), _legacy_base_map_scale(main)),
+			"100% preserves the established content base scale"
+		)
 
 	var local_probe := Vector2(centers.get(str(target_tile), Vector2.INF))
 	_check(local_probe != Vector2.INF, "%s has a canonical transport/tile point" % phase)
@@ -190,6 +197,38 @@ func _validate_zoom_snapshot(
 
 	if target_button != null:
 		await _click_target(main, target_button, target_tile, phase)
+
+
+func _viewport_is_covered_by_terrain_background(main) -> bool:
+	if (
+		main.map_viewport == null
+		or main.map_viewport_background == null
+		or main.map_viewport_background.get_parent() != main.map_viewport
+		or main.map_viewport_background.texture == null
+		or main.map_viewport_background.mouse_filter != Control.MOUSE_FILTER_IGNORE
+	):
+		return false
+	var viewport_rect: Rect2 = main.map_viewport.get_global_rect()
+	var background_rect: Rect2 = main.map_viewport_background.get_global_rect().grow(MAP_COVERAGE_EPSILON)
+	var viewport_corners: Array[Vector2] = [
+		viewport_rect.position,
+		Vector2(viewport_rect.end.x, viewport_rect.position.y),
+		Vector2(viewport_rect.position.x, viewport_rect.end.y),
+		viewport_rect.end,
+	]
+	for corner in viewport_corners:
+		if not background_rect.has_point(corner):
+			return false
+	return true
+
+
+func _legacy_base_map_scale(main) -> float:
+	if main.map_viewport == null or main.map_viewport.size.x <= 0.0 or main.map_viewport.size.y <= 0.0:
+		return 1.0
+	var viewport_size: Vector2 = main.map_viewport.size
+	var fill_scale: float = maxf(viewport_size.x / main.MAP_STAGE_SIZE.x, viewport_size.y / main.MAP_STAGE_SIZE.y)
+	var fit_scale: float = minf(viewport_size.x / main.MAP_STAGE_SIZE.x, viewport_size.y / main.MAP_STAGE_SIZE.y)
+	return maxf(0.72, minf(2.55, maxf(fill_scale * 1.04, fit_scale)))
 
 
 func _drive_zoom(main, target_zoom: float, wheel_button: int, phase: String) -> void:
@@ -313,12 +352,13 @@ func _verify_left_drag_lifecycle_cleanup(main, target_button: Button, target_til
 	main.call("_reset_map_camera")
 	await _drive_zoom(main, 1.20, MOUSE_BUTTON_WHEEL_UP, "wheel up before drag lifecycle cleanup")
 	var viewport_rect: Rect2 = main.map_viewport.get_global_rect()
-	var origin: Vector2 = target_button.get_global_rect().get_center()
 	var outside_viewport := viewport_rect.end + Vector2(12.0, 12.0)
-	_check(viewport_rect.has_point(origin) and not viewport_rect.has_point(outside_viewport), "drag lifecycle fixture has distinct map and outside-map pointer positions")
+	_check(not viewport_rect.has_point(outside_viewport), "drag lifecycle fixture has an outside-map pointer position")
 
 	for activates_drag in [false, true]:
 		var state_name := "active" if activates_drag else "pending"
+		var origin: Vector2 = target_button.get_global_rect().get_center()
+		_check(viewport_rect.has_point(origin), "%s drag source remains inside the map viewport before modal disable" % state_name)
 		await _start_left_drag(main, origin, activates_drag)
 		_check(main._map_pan_drag_pending or main._map_pan_drag_active, "%s left drag state is established before modal disable" % state_name)
 		main.settings_overlay.show()
@@ -331,6 +371,8 @@ func _verify_left_drag_lifecycle_cleanup(main, target_button: Button, target_til
 		await _assert_no_button_motion_does_not_pan(main, origin, "%s drag after modal re-enable" % state_name)
 		await _click_target(main, target_button, target_tile, "%s drag cleanup retains ordinary tile click after modal" % state_name)
 
+		origin = target_button.get_global_rect().get_center()
+		_check(viewport_rect.has_point(origin), "%s drag source remains inside the map viewport before focus loss" % state_name)
 		await _start_left_drag(main, origin, activates_drag)
 		_check(main._map_pan_drag_pending or main._map_pan_drag_active, "%s left drag state is established before focus loss" % state_name)
 		main.notification(NOTIFICATION_APPLICATION_FOCUS_OUT)
