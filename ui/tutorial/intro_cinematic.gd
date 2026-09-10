@@ -2,6 +2,8 @@ class_name IntroCinematic
 extends Control
 
 const StorySequence = preload("res://data/tutorial/story_sequence.gd")
+const PORTRAIT_ATLAS_PATH := "res://assets/images/tutorial/cg_v1/xiaoli_expressions_atlas.png"
+const PORTRAIT_COUNT := 4
 
 signal completed
 signal load_failed(message: String)
@@ -9,12 +11,16 @@ signal load_failed(message: String)
 var current_index := 0
 var current_texture: Texture2D
 var next_texture: Texture2D
+var current_foreground_texture: Texture2D
+var current_portrait_texture: AtlasTexture
 var _completed_emitted := false
 var _closing := false
 var _transition: Tween
 var _ambient_tween: Tween
 var current_layer: TextureRect
 var next_layer: TextureRect
+var foreground_layer: TextureRect
+var portrait_layer: TextureRect
 var parallax_tint: ColorRect
 var title_label: Label
 var subtitle_label: Label
@@ -102,23 +108,33 @@ func _set_initial_shot() -> bool:
 		return false
 	current_layer.texture = current_texture
 	current_layer.modulate.a = 1.0
+	current_layer.show()
 	next_layer.texture = next_texture
 	next_layer.modulate.a = 0.0
+	next_layer.show()
+	if not _apply_current_overlay_layers():
+		return false
 	_apply_text()
 	_start_parallax()
 	return true
 
 
 func _commit_advanced_shot() -> void:
-	current_texture = next_texture
+	var committed_texture := next_texture
+	current_layer.texture = null
+	current_texture = null
+	next_layer.texture = null
+	next_texture = null
+	current_texture = committed_texture
 	current_layer.texture = current_texture
 	current_layer.modulate.a = 1.0
 	next_layer.hide()
-	next_layer.texture = null
 	next_texture = _load_fixed_shot(current_index + 1) if current_index + 1 < StorySequence.SHOTS.size() else null
 	if current_index + 1 < StorySequence.SHOTS.size() and next_texture == null:
 		return
 	next_layer.texture = next_texture
+	if not _apply_current_overlay_layers():
+		return
 	_apply_text()
 	_start_parallax()
 
@@ -137,6 +153,61 @@ func _load_fixed_shot(index: int) -> Texture2D:
 	return resource as Texture2D
 
 
+func _load_fixed_foreground(index: int) -> Texture2D:
+	if index < 0 or index >= StorySequence.SHOTS.size():
+		return null
+	var path := str(StorySequence.SHOTS[index]["foreground"])
+	if not path.begins_with("res://assets/images/tutorial/cg_v1/foreground_") or not ResourceLoader.exists(path):
+		_fail_closed("開場 CG 前景素材遺失：%s" % path)
+		return null
+	var resource := load(path)
+	if not resource is Texture2D:
+		_fail_closed("開場 CG 前景素材格式無效：%s" % path)
+		return null
+	return resource as Texture2D
+
+
+func _load_fixed_portrait(index: int) -> AtlasTexture:
+	if index < 0 or index >= StorySequence.SHOTS.size():
+		return null
+	var portrait_index := int(StorySequence.SHOTS[index]["portrait"])
+	if portrait_index < 0 or portrait_index >= PORTRAIT_COUNT or not ResourceLoader.exists(PORTRAIT_ATLAS_PATH):
+		_fail_closed("小莉表情素材遺失或索引無效。")
+		return null
+	var resource := load(PORTRAIT_ATLAS_PATH)
+	if not resource is Texture2D:
+		_fail_closed("小莉表情素材格式無效。")
+		return null
+	var atlas := resource as Texture2D
+	var portrait := AtlasTexture.new()
+	portrait.atlas = atlas
+	portrait.region = Rect2(
+		float(portrait_index * atlas.get_width()) / float(PORTRAIT_COUNT),
+		0.0,
+		float(atlas.get_width()) / float(PORTRAIT_COUNT),
+		float(atlas.get_height())
+	)
+	return portrait
+
+
+func _apply_current_overlay_layers() -> bool:
+	foreground_layer.texture = null
+	portrait_layer.texture = null
+	current_foreground_texture = null
+	current_portrait_texture = null
+	current_foreground_texture = _load_fixed_foreground(current_index)
+	if current_foreground_texture == null:
+		return false
+	current_portrait_texture = _load_fixed_portrait(current_index)
+	if current_portrait_texture == null:
+		return false
+	foreground_layer.texture = current_foreground_texture
+	portrait_layer.texture = current_portrait_texture
+	foreground_layer.show()
+	portrait_layer.show()
+	return true
+
+
 func _apply_text() -> void:
 	var shot: Dictionary = StorySequence.SHOTS[current_index]
 	title_label.text = _l10n(str(shot["title"]))
@@ -149,11 +220,13 @@ func _start_parallax() -> void:
 		_ambient_tween.kill()
 	current_layer.scale = Vector2(1.0, 1.0)
 	current_layer.position = Vector2.ZERO
+	foreground_layer.position = Vector2.ZERO
 	parallax_tint.modulate.a = 0.18
 	animation_player.play("shot_ambient")
 	_ambient_tween = create_tween().set_pause_mode(Tween.TWEEN_PAUSE_PROCESS).set_parallel(true)
 	_ambient_tween.tween_property(current_layer, "scale", Vector2(1.06, 1.06), 5.0)
 	_ambient_tween.tween_property(current_layer, "position", Vector2(-28, -16), 5.0)
+	_ambient_tween.tween_property(foreground_layer, "position", Vector2(16, 8), 5.0)
 	_ambient_tween.tween_property(parallax_tint, "modulate:a", 0.30, 2.5).set_trans(Tween.TRANS_SINE)
 
 
@@ -172,6 +245,8 @@ func _fail_closed(message: String) -> void:
 	_release_textures()
 	current_layer.hide()
 	next_layer.hide()
+	foreground_layer.hide()
+	portrait_layer.hide()
 	error_label.text = message
 	error_label.show()
 	show()
@@ -181,10 +256,16 @@ func _fail_closed(message: String) -> void:
 func _release_textures() -> void:
 	current_texture = null
 	next_texture = null
+	current_foreground_texture = null
+	current_portrait_texture = null
 	if is_instance_valid(current_layer):
 		current_layer.texture = null
 	if is_instance_valid(next_layer):
 		next_layer.texture = null
+	if is_instance_valid(foreground_layer):
+		foreground_layer.texture = null
+	if is_instance_valid(portrait_layer):
+		portrait_layer.texture = null
 
 
 func _l10n(source: String) -> String:
@@ -205,6 +286,13 @@ func _build() -> void:
 			current_layer = layer
 		else:
 			next_layer = layer
+	foreground_layer = TextureRect.new()
+	foreground_layer.name = "ForegroundLayer"
+	foreground_layer.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	foreground_layer.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	foreground_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	foreground_layer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(foreground_layer)
 	var shade := ColorRect.new()
 	shade.color = Color(0.02, 0.04, 0.06, 0.28)
 	shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -215,6 +303,16 @@ func _build() -> void:
 	parallax_tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	parallax_tint.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(parallax_tint)
+	portrait_layer = TextureRect.new()
+	portrait_layer.name = "XiaoLiPortraitLayer"
+	portrait_layer.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	portrait_layer.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	portrait_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	portrait_layer.anchor_left = 0.66
+	portrait_layer.anchor_top = 0.24
+	portrait_layer.anchor_right = 0.96
+	portrait_layer.anchor_bottom = 0.82
+	add_child(portrait_layer)
 	var text_box := VBoxContainer.new()
 	text_box.name = "CinematicSubtitles"
 	text_box.anchor_left = 0.08

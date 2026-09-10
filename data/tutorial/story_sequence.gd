@@ -5,7 +5,7 @@ extends RefCounted
 ## has no deserialization API: callers cannot inject paths, methods, or saves.
 const SHOTS: Array[Dictionary] = [
 	{"id": "prosperity", "title": "城諾市：重光之日", "subtitle": "五業共榮，城市曾是豐饒的應許之地", "asset": "res://assets/images/tutorial/cg_v1/shot_01_prosperity.png", "foreground": "res://assets/images/tutorial/cg_v1/foreground_foliage.png", "portrait": 0, "seconds": 5.0},
-	{"id": "decline", "title": "榮光褪色", "subtitle": "貪腐與失政讓橋梁、商街與家庭逐漸失去依靠", "asset": "res://assets/images/tutorial/cg_v1/shot_02_decline.png", "foreground": "res://assets/images/tutorial/cg_v1/foreground_rain_lanterns.png", "portrait": 2, "seconds": 5.0},
+	{"id": "decline", "title": "榮光褪色", "subtitle": "賴依德的獨裁與貪腐，讓橋梁、商街與家庭逐漸失去依靠", "asset": "res://assets/images/tutorial/cg_v1/shot_02_decline.png", "foreground": "res://assets/images/tutorial/cg_v1/foreground_rain_lanterns.png", "portrait": 2, "seconds": 5.0},
 	{"id": "uprising", "title": "致諾三年五月三日", "subtitle": "市民走上街頭，決定把城市的未來拿回手中", "asset": "res://assets/images/tutorial/cg_v1/shot_03_uprising.png", "foreground": "res://assets/images/tutorial/cg_v1/foreground_rain_lanterns.png", "portrait": 1, "seconds": 5.0},
 	{"id": "leader", "title": "年輕的引路人", "subtitle": "二十二歲的程安致，與留守居民一起點燃希望", "asset": "res://assets/images/tutorial/cg_v1/shot_04_leader.png", "foreground": "res://assets/images/tutorial/cg_v1/foreground_foliage.png", "portrait": 1, "seconds": 5.0},
 	{"id": "mayor", "title": "臨危受命", "subtitle": "在百廢待興之中，他被託付為城諾市的新任市長", "asset": "res://assets/images/tutorial/cg_v1/shot_05_mayor.png", "foreground": "res://assets/images/tutorial/cg_v1/foreground_dawn_plans.png", "portrait": 2, "seconds": 5.0},
