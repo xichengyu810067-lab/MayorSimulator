@@ -140,6 +140,16 @@ func _test_insufficient_funds_is_zero_write() -> void:
 
 
 func _test_legacy_v1_costs_are_not_recomputed() -> void:
+	var fixture_variant: Variant = JSON.parse_string(FileAccess.get_file_as_string(LEGACY_FIXTURE_PATH))
+	_check(fixture_variant is Dictionary, "tracked legacy v1 fixture parses as a dictionary")
+	if not fixture_variant is Dictionary:
+		return
+	var fixture: Dictionary = fixture_variant
+	var raw_transport: Dictionary = fixture.get("state", {}).get("metadata", {}).get("vertical_slice", {}).get("transport", {})
+	var raw_project: Dictionary = raw_transport.get("projects", {}).get("transport_project_000001", {})
+	var raw_quote: Dictionary = raw_project.get("quote", {})
+	_check(not raw_quote.has("maintenance_breakdown"), "pre-v2 fixture does not contain the v2 maintenance breakdown")
+	_check(not raw_quote.has("monthly_maintenance"), "pre-v2 fixture does not contain the v2 aggregate quote maintenance")
 	var coordinator = CoordinatorScript.new(20_260_905, 50_000)
 	_check(coordinator.load_game(LEGACY_FIXTURE_PATH), "tracked legacy v1 save fixture loads")
 	if coordinator.transport.segments.is_empty():
@@ -151,6 +161,10 @@ func _test_legacy_v1_costs_are_not_recomputed() -> void:
 	_check(int(legacy_segment.get("route_construction_cost", -1)) == 12_345, "tracked fixture exposes its historical construction cost")
 	_check(int(legacy_segment.get("route_monthly_maintenance", -1)) == 777, "tracked fixture exposes its historical maintenance")
 	_check(coordinator.transport.monthly_maintenance() == 777, "loaded v1 segment keeps its historical maintenance rather than recomputing")
+	var first_loaded_transport: Dictionary = coordinator.transport.to_dict()
+	_check(_same_shape(raw_transport, first_loaded_transport), "first load preserves the pre-v2 transport key shape")
+	var first_loaded_quote: Dictionary = first_loaded_transport.get("projects", {}).get("transport_project_000001", {}).get("quote", {})
+	_check(not first_loaded_quote.has("maintenance_breakdown") and not first_loaded_quote.has("monthly_maintenance"), "first load does not silently inject v2 quote fields")
 	_check(coordinator.save_game(LEGACY_SAVE_PATH) == OK, "loaded legacy v1 fixture saves without migration")
 	var restored = CoordinatorScript.new(1, 1)
 	_check(restored.load_game(LEGACY_SAVE_PATH), "legacy v1 fixture reloads after save")
@@ -160,6 +174,24 @@ func _test_legacy_v1_costs_are_not_recomputed() -> void:
 	_check(int(restored_segment.get("route_monthly_maintenance", -1)) == 777, "legacy v1 maintenance survives save/load without rewriting")
 	_check(restored.transport.monthly_maintenance() == 777, "legacy v1 loaded authority still uses its stored maintenance")
 	_check(restored.transport.to_dict() == coordinator.transport.to_dict(), "legacy v1 transport authority round-trips without shape drift")
+
+
+func _same_shape(left: Variant, right: Variant) -> bool:
+	if left is Dictionary:
+		if not right is Dictionary or (left as Dictionary).size() != (right as Dictionary).size():
+			return false
+		for key: Variant in (left as Dictionary).keys():
+			if not (right as Dictionary).has(key) or not _same_shape((left as Dictionary)[key], (right as Dictionary)[key]):
+				return false
+		return true
+	if left is Array:
+		if not right is Array or (left as Array).size() != (right as Array).size():
+			return false
+		for index: int in (left as Array).size():
+			if not _same_shape((left as Array)[index], (right as Array)[index]):
+				return false
+		return true
+	return true
 
 
 func _empty_grid() -> Array[String]:

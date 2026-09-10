@@ -724,13 +724,6 @@
 									"stations": 0,
 									"level_crossings": 0
 								},
-								"maintenance_breakdown": {
-									"segments": 18,
-									"facilities": 0,
-									"stations": 0,
-									"level_crossings": 0
-								},
-								"monthly_maintenance": 18,
 								"total_cost": 520
 							},
 							"total_cost": 520

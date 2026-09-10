@@ -202,7 +202,15 @@ static func route_package_monthly_maintenance(tile_count: int) -> int:
 static func route_package_price_quote(tile_count: int, network_kind: String = "road") -> Dictionary:
 	var resolved_count := maxi(0, tile_count)
 	var network_spec := segment_spec(network_kind)
+	if network_spec.is_empty():
+		return {
+			"ok": false,
+			"error": "invalid_network_kind",
+			"network_kind": network_kind,
+			"route_tile_count": resolved_count,
+		}
 	return {
+		"ok": true,
 		"price_model": ROUTE_PACKAGE_PRICE_MODEL,
 		"price_provenance": ROUTE_PACKAGE_PRICE_PROVENANCE,
 		"network_kind": network_kind,

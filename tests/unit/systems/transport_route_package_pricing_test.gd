@@ -22,6 +22,7 @@ func _initialize() -> void:
 		_check(int(legacy_quote.get("monthly_maintenance", -1)) == int(expected[1]), "legacy maintenance fixture L=%d" % tile_count)
 		_check(str(legacy_quote.get("price_model", "")) == "route_package_v1", "legacy quote stays versioned L=%d" % tile_count)
 		var current_quote: Dictionary = TransportModesScript.route_package_price_quote(tile_count)
+		_check(bool(current_quote.get("ok", false)), "known v2 road quote succeeds L=%d" % tile_count)
 		_check(int(current_quote.get("construction_cost", -1)) == tile_count * 520, "v2 road construction follows the segment catalog L=%d" % tile_count)
 		_check(int(current_quote.get("monthly_maintenance", -1)) == tile_count * 18, "v2 road maintenance follows the segment catalog L=%d" % tile_count)
 		_check(int(current_quote.get("route_tile_count", -1)) == tile_count, "v2 quote retains route tile count L=%d" % tile_count)
@@ -32,6 +33,10 @@ func _initialize() -> void:
 	_check(TransportModesScript.is_route_package_price_model("route_package_v1"), "v1 remains a supported historical model")
 	_check(TransportModesScript.is_route_package_price_model("route_package_v2"), "v2 is supported for new packages")
 	_check(not TransportModesScript.is_route_package_price_model("route_package_v3"), "unknown models fail closed")
+	var unknown_quote: Dictionary = TransportModesScript.route_package_price_quote(3, "hover_lane")
+	_check(not bool(unknown_quote.get("ok", true)), "unknown network kind fails closed")
+	_check(str(unknown_quote.get("error", "")) == "invalid_network_kind", "unknown network kind reports a stable error")
+	_check(not unknown_quote.has("construction_cost") and not unknown_quote.has("monthly_maintenance"), "unknown network kind exposes no zero-cost price fields")
 	if not _failed:
 		print("Transport route package pricing test passed. Checks=%d" % _checks)
 	quit(1 if _failed else 0)

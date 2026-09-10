@@ -2,6 +2,7 @@ extends SceneTree
 
 const TestCleanup := preload("res://tests/helpers/scene_tree_test_cleanup.gd")
 const TransportModesScript := preload("res://data/catalogs/transport_modes.gd")
+const TransportNetworkSystemScript := preload("res://scripts/systems/city/transport_network_system.gd")
 
 var _failed := false
 var _checks := 0
@@ -26,7 +27,6 @@ func _run() -> void:
 	if main.tutorial_overlay != null and main.tutorial_overlay.is_open():
 		main.tutorial_overlay.close_as_completed(false)
 	main._set_map_interaction_enabled(true)
-	_check_route_package_visible_cost_kinds(main)
 
 	main.municipal_overlay.open_page("buildings")
 	main._select_building_group("economy")
@@ -55,6 +55,7 @@ func _run() -> void:
 	if fixture.is_empty():
 		await TestCleanup.finish(self, [main], 1)
 		return
+	_check_route_package_visible_cost_kinds(main, Array(fixture["road_tiles"]).slice(0, 3))
 	var existing_building_tile := _find_existing_building_tile(main, fixture)
 	_check(existing_building_tile >= 0, "bus-session fixture has no independent tile for an existing-building visibility check")
 	if existing_building_tile < 0:
@@ -156,6 +157,14 @@ func _run() -> void:
 		var visible_route_cost := int(TransportModesScript.route_package_price_quote(road_index + 1, "road").get("construction_cost", -1))
 		_check(main.placement_label.text.contains("預估 $%d" % visible_route_cost), "route-package banner does not show its authoritative route price at L=%d: %s" % [road_index + 1, main.placement_label.text])
 		_check(main.hint_label.text.contains("估價 $%d" % visible_route_cost), "route-package hint disagrees with the banner at L=%d: %s" % [road_index + 1, main.hint_label.text])
+	var valid_network_kind: String = main.transport_plan_kind
+	main.transport_plan_kind = "hover_lane"
+	main._sync_placement_banner()
+	_check(main._transport_visible_plan_cost({}, road_tiles.size(), session) == -1, "unknown route-package kind does not return the fail-closed UI sentinel")
+	_check(main.placement_label.text.contains("不可用") and not main.placement_label.text.contains("預估 $0"), "unknown route-package kind renders a misleading zero-cost quote: %s" % main.placement_label.text)
+	_check(main.placement_confirm_button.disabled, "unknown route-package kind leaves package confirmation enabled")
+	main.transport_plan_kind = valid_network_kind
+	main._sync_placement_banner()
 	_check(existing_building_button != null and existing_building_button.is_visible_in_tree(), "route placement hides a pre-existing building visual")
 	if existing_building_button != null:
 		var building_visual: Dictionary = existing_building_button.call("get_visual_animation_debug_snapshot")
@@ -222,11 +231,12 @@ func _run() -> void:
 	await TestCleanup.finish(self, [main], exit_code)
 
 
-func _check_route_package_visible_cost_kinds(main) -> void:
+func _check_route_package_visible_cost_kinds(main, tile_path: Array) -> void:
 	var original_kind: String = main.transport_plan_kind
 	var original_operation: String = main.transport_plan_operation
 	main.transport_plan_operation = "build"
 	var session := {"workflow": "route_package_v1", "state": "network_placement"}
+	var authoritative_network = TransportNetworkSystemScript.new()
 	for mode: String in ["bus", "metro", "train", "air"]:
 		var network_kind := str({
 			"bus": "road",
@@ -235,9 +245,18 @@ func _check_route_package_visible_cost_kinds(main) -> void:
 			"air": "runway",
 		}.get(mode, ""))
 		main.transport_plan_kind = network_kind
-		var authoritative: Dictionary = TransportModesScript.route_package_price_quote(3, network_kind)
-		var visible: int = int(main._transport_visible_plan_cost({}, 3, session))
-		_check(visible == int(authoritative.get("construction_cost", -1)), "%s route-package visible quote is not kind-aware: %s" % [mode, authoritative])
+		var catalog_quote: Dictionary = TransportModesScript.route_package_price_quote(tile_path.size(), network_kind)
+		var authoritative: Dictionary = authoritative_network.quote_project(
+			"build",
+			{"segments": [{"kind": network_kind, "tile_path": tile_path}], "facilities": [], "stations": []},
+			main.vertical_slice.terrain_map,
+			[],
+			[]
+		)
+		var visible: int = int(main._transport_visible_plan_cost({}, tile_path.size(), session))
+		_check(bool(authoritative.get("ok", false)), "%s direct TransportNetworkSystem quote failed: %s" % [mode, authoritative])
+		_check(visible == int(authoritative.get("breakdown", {}).get("segments", -1)), "%s visible construction cost diverges from TransportNetworkSystem: %s" % [mode, authoritative])
+		_check(int(catalog_quote.get("monthly_maintenance", -1)) == int(authoritative.get("maintenance_breakdown", {}).get("segments", -2)), "%s catalog maintenance diverges from TransportNetworkSystem: %s" % [mode, authoritative])
 	main.transport_plan_kind = original_kind
 	main.transport_plan_operation = original_operation
 

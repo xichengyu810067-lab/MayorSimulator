@@ -5528,6 +5528,12 @@ func _sync_placement_banner() -> void:
 			var package_route := _transport_session_is_route_package(session) and transport_plan_operation == "build"
 			var cost := _transport_visible_plan_cost(quote, transport_plan_tiles.size(), session)
 			var operation_label := "興建" if transport_plan_operation == "build" else "拆除"
+			if package_route and cost < 0:
+				placement_label.text = L10n.text("此路網規劃不可用：%s") % _vertical_error_text("invalid_transport_kind")
+				if placement_confirm_button != null:
+					placement_confirm_button.text = L10n.text("下一步：確認總包")
+					placement_confirm_button.disabled = true
+				return
 			placement_label.text = L10n.text("%s步驟 2/3｜%s%s｜已選 %d 格｜預估 $%d") % [
 				session_prefix, L10n.text(operation_label), L10n.text(_transport_kind_label(transport_plan_kind)),
 				transport_plan_tiles.size(), cost,
@@ -5563,7 +5569,10 @@ func _sync_placement_banner() -> void:
 
 func _transport_visible_plan_cost(quote: Dictionary, tile_count: int, session: Dictionary = {}) -> int:
 	if _transport_session_is_route_package(session) and transport_plan_operation == "build":
-		return int(TransportModesScript.route_package_price_quote(tile_count, transport_plan_kind).get("construction_cost", 0))
+		var package_quote: Dictionary = TransportModesScript.route_package_price_quote(tile_count, transport_plan_kind)
+		if not bool(package_quote.get("ok", false)):
+			return -1
+		return int(package_quote.get("construction_cost", -1))
 	return int(quote.get("total_cost", quote.get("cost", 0)))
 
 
