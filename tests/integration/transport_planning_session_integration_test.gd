@@ -277,9 +277,10 @@ func _test_continuous_session_and_round_trip() -> void:
 	var authoritative_planning: Dictionary = restored.transport_planning_session.to_dict()
 	var authoritative_construction: Dictionary = restored.construction.to_dict()
 	var authoritative_transport: Dictionary = restored.transport.to_dict()
+	var authoritative_buildings: Dictionary = restored.session.state.buildings.duplicate(true)
 	_check(
 		bool(TransportPlanningSessionScript.validate_references(
-			authoritative_planning, authoritative_construction, authoritative_transport
+			authoritative_planning, authoritative_construction, authoritative_transport, authoritative_buildings
 		).get("valid", false)),
 		"materialized session validates against authoritative jobs and topology"
 	)
@@ -288,7 +289,7 @@ func _test_continuous_session_and_round_trip() -> void:
 	cross_mode_transport["routes"][route_id]["mode"] = "train"
 	_check(
 		not bool(TransportPlanningSessionScript.validate_references(
-			authoritative_planning, authoritative_construction, cross_mode_transport
+			authoritative_planning, authoritative_construction, cross_mode_transport, authoritative_buildings
 		).get("valid", false)),
 		"cross-mode authoritative route reference fails closed"
 	)
@@ -296,7 +297,7 @@ func _test_continuous_session_and_round_trip() -> void:
 	foreign_station_transport["routes"][route_id]["stop_ids"][0] = "station_outside_session"
 	_check(
 		not bool(TransportPlanningSessionScript.validate_references(
-			authoritative_planning, authoritative_construction, foreign_station_transport
+			authoritative_planning, authoritative_construction, foreign_station_transport, authoritative_buildings
 		).get("valid", false)),
 		"route cannot reference a station outside this session's completed station identities"
 	)
@@ -307,7 +308,7 @@ func _test_continuous_session_and_round_trip() -> void:
 	dangling_closed_transport["routes"].erase(route_id)
 	_check(
 		not bool(TransportPlanningSessionScript.validate_references(
-			dangling_closed_planning, authoritative_construction, dangling_closed_transport
+			dangling_closed_planning, authoritative_construction, dangling_closed_transport, authoritative_buildings
 		).get("valid", false)),
 		"closed session still rejects a dangling route reference"
 	)

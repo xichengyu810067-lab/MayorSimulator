@@ -765,6 +765,7 @@ func transport_session_package_quote(city_grid: Array = []) -> Dictionary:
 		var placement: Dictionary = placement_value
 		var reuse_existing := bool(placement.get("reuse_existing_station", false))
 		var workers := int(placement.get("worker_count", 0))
+		var current_station_id := ""
 		var refreshed: Dictionary
 		if reuse_existing:
 			var reusable := _transport_reusable_station_placement(
@@ -772,7 +773,7 @@ func transport_session_package_quote(city_grid: Array = []) -> Dictionary:
 			)
 			if not bool(reusable.get("ok", false)):
 				return reusable
-			var current_station_id := str(Dictionary(reusable.get("station", {})).get("id", ""))
+			current_station_id = str(Dictionary(reusable.get("station", {})).get("id", ""))
 			if current_station_id != str(placement.get("existing_station_id", "")):
 				return {"ok": false, "error": "transport_station_reference_changed"}
 			refreshed = Dictionary(reusable.get("placement", {})).duplicate(true)
@@ -792,11 +793,26 @@ func transport_session_package_quote(city_grid: Array = []) -> Dictionary:
 				return {"ok": false, "error": "station_draft_overlap"}
 			occupied_station_tiles.append(tile_id)
 		station_cost += 0 if reuse_existing else int(refreshed.get("total_cost", 0))
-		var normalized := placement.duplicate(true)
-		normalized["blueprint"] = Dictionary(refreshed.get("blueprint", {})).duplicate(true)
-		normalized["building_cost"] = 0 if reuse_existing else int(refreshed.get("total_cost", 0))
-		normalized["duration_days"] = 0 if reuse_existing else int(refreshed.get("duration_days", 0))
-		normalized["worker_count"] = 0 if reuse_existing else workers
+		var normalized: Dictionary
+		if reuse_existing:
+			normalized = {
+				"anchor_tile_id": int(refreshed.get("anchor_tile_id", -1)),
+				"occupied_tile_ids": Array(refreshed.get("occupied_tile_ids", [])).duplicate(),
+				"footprint_id": str(refreshed.get("footprint_id", "")),
+				"library_id": "",
+				"blueprint": Dictionary(refreshed.get("blueprint", {})).duplicate(true),
+				"worker_count": 0,
+				"building_cost": 0,
+				"duration_days": 0,
+				"reuse_existing_station": true,
+				"existing_station_id": current_station_id,
+			}
+		else:
+			normalized = placement.duplicate(true)
+			normalized["blueprint"] = Dictionary(refreshed.get("blueprint", {})).duplicate(true)
+			normalized["building_cost"] = int(refreshed.get("total_cost", 0))
+			normalized["duration_days"] = int(refreshed.get("duration_days", 0))
+			normalized["worker_count"] = workers
 		normalized_placements.append(normalized)
 	var network_draft: Dictionary = current.get("network_draft", {})
 	var network_kind := str(network_draft.get("kind", ""))

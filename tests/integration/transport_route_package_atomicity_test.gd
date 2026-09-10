@@ -7,6 +7,7 @@ const TransportModesScript = preload("res://data/catalogs/transport_modes.gd")
 
 const SAVE_PATH := "user://b13_transport_route_package_round_trip.json"
 const STALE_BUILDING_SAVE_PATH := "user://b13_transport_route_package_stale_building.json"
+const TAMPERED_DRAFT_SAVE_PATH := "user://b13_transport_route_package_tampered_draft.json"
 const LEGACY_SAVE_PATH := "user://b13_transport_route_package_v1_round_trip.json"
 const LEGACY_FIXTURE_PATH := "res://tests/fixtures/save_schema/route_package_v1_transport.json"
 
@@ -166,6 +167,49 @@ func _test_existing_station_reuse_and_fail_closed() -> void:
 	_check(bool(reused_a.get("ok", false)) and bool(reused_b.get("ok", false)), "same-mode completed stations can be selected into one new package")
 	_check(coordinator.treasury_balance() == treasury_before and coordinator.construction.to_dict() == jobs_before, "selecting completed stations creates no charge or station construction job")
 	_check(coordinator.transport.to_dict() == transport_before, "selecting completed stations does not rewrite transport authority")
+	var pre_materialization_planning: Dictionary = coordinator.transport_planning_session.to_dict()
+	var pre_materialization_buildings: Dictionary = coordinator.session.state.buildings.duplicate(true)
+	var tampered_tile := _tile(coordinator, 0, 0)
+	_check(bool(TransportPlanningSessionScript.validate_references(
+		pre_materialization_planning,
+		coordinator.construction.to_dict(),
+		coordinator.transport.to_dict(),
+		pre_materialization_buildings
+	).get("valid", false)), "reuse placements validate before station references exist")
+	var tampered_pre_materialization := pre_materialization_planning.duplicate(true)
+	var tampered_placement: Dictionary = tampered_pre_materialization["session"]["route_draft"]["station_placements"][0]
+	tampered_placement["footprint_id"] = "forged_footprint"
+	tampered_placement["occupied_tile_ids"] = [station_a_tile, tampered_tile]
+	tampered_pre_materialization["session"]["route_draft"]["station_placements"][0] = tampered_placement
+	_check(not bool(TransportPlanningSessionScript.validate_references(
+		tampered_pre_materialization,
+		coordinator.construction.to_dict(),
+		coordinator.transport.to_dict(),
+		pre_materialization_buildings
+	).get("valid", true)), "pre-materialization reused placement footprint and occupied-tile tampering fails closed without station refs")
+	_check(coordinator.transport_planning_session.to_dict() == pre_materialization_planning, "static rejected draft snapshot does not write live session state")
+	_check(coordinator.save_game(SAVE_PATH) == OK, "valid pre-materialization reuse session saves")
+	var tampered_draft_payload := _read_save_payload(SAVE_PATH)
+	if tampered_draft_payload.is_empty():
+		_check(false, "valid pre-materialization reuse save can be read for tampered-draft load test")
+	else:
+		tampered_draft_payload["state"]["metadata"]["vertical_slice"]["transport_planning_session"]["session"]["route_draft"]["station_placements"][0]["footprint_id"] = "forged_footprint"
+		tampered_draft_payload["state"]["metadata"]["vertical_slice"]["transport_planning_session"]["session"]["route_draft"]["station_placements"][0]["occupied_tile_ids"] = [station_a_tile, tampered_tile]
+		_check(_write_save_payload(TAMPERED_DRAFT_SAVE_PATH, tampered_draft_payload), "tampered pre-materialization draft fixture writes")
+		var tampered_draft_restore = CoordinatorScript.new(1, 1)
+		_check(not tampered_draft_restore.load_game(TAMPERED_DRAFT_SAVE_PATH), "GameSession load fails closed for pre-materialization reused placement footprint and occupied-tile tampering")
+	coordinator.transport_planning_session.session = tampered_pre_materialization["session"].duplicate(true)
+	_check(bool(coordinator.begin_transport_session_network_placement("road", {}).get("ok", false)), "tampered quote fixture advances to route drawing")
+	_check(bool(coordinator.draft_transport_session_network("road", route_tiles, 5).get("ok", false)), "tampered quote fixture drafts a continuous road")
+	_check(bool(coordinator.begin_transport_session_route_edit({"fleet_size": 2, "headway_minutes": 8, "fare": 25}).get("ok", false)), "tampered quote fixture reaches confirmation")
+	var normalized_quote: Dictionary = coordinator.transport_session_package_quote(grid)
+	_check(bool(normalized_quote.get("ok", false)), "quote rebuilds reusable station placement from authority despite stale draft footprint fields")
+	if bool(normalized_quote.get("ok", false)):
+		var normalized_first: Dictionary = normalized_quote.get("station_placements", [])[0]
+		var canonical_first: Dictionary = pre_materialization_planning["session"]["route_draft"]["station_placements"][0]
+		_check(str(normalized_first.get("footprint_id", "")) == str(canonical_first.get("footprint_id", "")), "quote does not retain forged reusable footprint ID")
+		_check(Array(normalized_first.get("occupied_tile_ids", [])) == Array(canonical_first.get("occupied_tile_ids", [])), "quote does not retain forged reusable occupied tiles")
+	coordinator.transport_planning_session.session = pre_materialization_planning["session"].duplicate(true)
 
 	var session_before_duplicate: Dictionary = coordinator.transport_planning_session.to_dict()
 	var duplicate: Dictionary = coordinator.call("reuse_transport_session_station", station_a_tile)
@@ -379,7 +423,7 @@ func _negative_ledger_count(coordinator) -> int:
 
 
 func _cleanup() -> void:
-	for path: String in [SAVE_PATH, "%s.bak" % SAVE_PATH, "%s.tmp" % SAVE_PATH, STALE_BUILDING_SAVE_PATH, "%s.bak" % STALE_BUILDING_SAVE_PATH, "%s.tmp" % STALE_BUILDING_SAVE_PATH, LEGACY_SAVE_PATH, "%s.bak" % LEGACY_SAVE_PATH, "%s.tmp" % LEGACY_SAVE_PATH]:
+	for path: String in [SAVE_PATH, "%s.bak" % SAVE_PATH, "%s.tmp" % SAVE_PATH, STALE_BUILDING_SAVE_PATH, "%s.bak" % STALE_BUILDING_SAVE_PATH, "%s.tmp" % STALE_BUILDING_SAVE_PATH, TAMPERED_DRAFT_SAVE_PATH, "%s.bak" % TAMPERED_DRAFT_SAVE_PATH, "%s.tmp" % TAMPERED_DRAFT_SAVE_PATH, LEGACY_SAVE_PATH, "%s.bak" % LEGACY_SAVE_PATH, "%s.tmp" % LEGACY_SAVE_PATH]:
 		if FileAccess.file_exists(path):
 			DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
 

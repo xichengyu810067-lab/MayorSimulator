@@ -6,6 +6,8 @@ extends RefCounted
 ## authorities; it never owns or duplicates topology records.
 
 const TransportModesScript = preload("res://data/catalogs/transport_modes.gd")
+const BuildingFootprintsScript = preload("res://data/catalogs/building_footprints.gd")
+const CityTerrainMapScript = preload("res://scripts/world/city_terrain_map.gd")
 
 const SCHEMA_VERSION := 1
 const WORKFLOW_ROUTE_PACKAGE_V1 := "route_package_v1"
@@ -665,7 +667,7 @@ static func validate_references(
 	data: Dictionary,
 	construction_snapshot: Dictionary,
 	transport_snapshot: Dictionary,
-	buildings_snapshot: Dictionary = {}
+	buildings_snapshot: Dictionary
 ) -> Dictionary:
 	var shape := validate_snapshot(data)
 	if not bool(shape.get("valid", false)):
@@ -685,6 +687,8 @@ static func validate_references(
 	var stations: Dictionary = stations_value
 	var route_draft: Dictionary = Dictionary(current.get("route_draft", {}))
 	var station_placements: Array = Array(route_draft.get("station_placements", []))
+	if not _reused_route_draft_placements_match_authority(current, station_placements, stations, buildings_snapshot):
+		return {"valid": false, "error": "existing_station_placement_authority_mismatch"}
 	var station_refs: Array = current.get("station_refs", [])
 	for ref_index in range(station_refs.size()):
 		var ref_value: Variant = station_refs[ref_index]
@@ -708,7 +712,7 @@ static func validate_references(
 				or str(station.get("status", "")) != "completed"
 			):
 				return {"valid": false, "error": "station_reference_mismatch"}
-			if not buildings_snapshot.is_empty() and not _existing_station_building_matches_reference(
+			if not _existing_station_building_matches_reference(
 				station_id,
 				ref,
 				current,
@@ -767,6 +771,47 @@ static func validate_references(
 			if not stop_id_value is String or not completed_station_ids.has(str(stop_id_value)):
 				return {"valid": false, "error": "route_reference_station_mismatch"}
 	return {"valid": true, "error": ""}
+
+
+static func _reused_route_draft_placements_match_authority(
+	current: Dictionary,
+	station_placements: Array,
+	stations: Dictionary,
+	buildings: Dictionary
+) -> bool:
+	var terrain_mapping = CityTerrainMapScript.new()
+	for placement_value: Variant in station_placements:
+		if not placement_value is Dictionary:
+			return false
+		var placement: Dictionary = placement_value
+		if not bool(placement.get("reuse_existing_station", false)):
+			continue
+		var station_id := str(placement.get("existing_station_id", ""))
+		if station_id.is_empty() or not stations.has(station_id) or not stations[station_id] is Dictionary:
+			return false
+		if not buildings.has(station_id) or not buildings[station_id] is Dictionary:
+			return false
+		var station: Dictionary = stations[station_id]
+		var building: Dictionary = buildings[station_id]
+		var footprint_validation := BuildingFootprintsScript.validate_persisted_record(building, terrain_mapping)
+		if not bool(footprint_validation.get("valid", false)):
+			return false
+		var anchor_tile_id := int(placement.get("anchor_tile_id", -1))
+		var canonical_tiles: Array = Array(footprint_validation.get("occupied_tile_ids", []))
+		if (
+			str(station.get("id", "")) != station_id
+			or str(station.get("building_name", "")) != str(current.get("station_blueprint_name", ""))
+			or int(station.get("tile_id", -1)) != anchor_tile_id
+			or str(station.get("status", "")) != "completed"
+			or str(building.get("building_id", "")) != station_id
+			or str(building.get("status", "")) != "active"
+			or str(building.get("building_name", "")) != str(current.get("station_blueprint_name", ""))
+			or int(building.get("anchor_tile_id", building.get("tile_index", -1))) != anchor_tile_id
+			or str(placement.get("footprint_id", "")) != str(footprint_validation.get("footprint_id", ""))
+			or not _integer_arrays_equal(placement.get("occupied_tile_ids", []), canonical_tiles)
+		):
+			return false
+	return true
 
 
 static func _existing_station_reference_matches_placement(
