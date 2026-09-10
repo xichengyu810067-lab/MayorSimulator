@@ -4015,13 +4015,14 @@ func _fiscal_dirty_count() -> int:
 
 
 func _fiscal_display_value(kind: String, key: String, suffix: String) -> String:
-	var value := _fiscal_value(kind, key)
+	var authoritative_value := _fiscal_value(kind, key)
 	if not _fiscal_draft_active:
-		return "%d%s" % [value, suffix]
-	var base := int(_fiscal_draft_base_dictionary(kind).get(key, value))
-	if base == value:
-		return "%d%s" % [value, suffix]
-	return "%d%s → %d%s" % [base, suffix, value, suffix]
+		return "%d%s" % [authoritative_value, suffix]
+	var draft_value := int(_fiscal_draft_dictionary(kind).get(key, authoritative_value))
+	var base := int(_fiscal_draft_base_dictionary(kind).get(key, authoritative_value))
+	if base == draft_value:
+		return "%d%s" % [draft_value, suffix]
+	return "%d%s → %d%s" % [base, suffix, draft_value, suffix]
 
 
 func _set_fiscal_draft_value(kind: String, key: String, value: int, do_refresh: bool = true) -> void:

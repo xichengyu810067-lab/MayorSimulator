@@ -70,7 +70,8 @@ func _run() -> void:
 	if reasonable_card != null:
 		reasonable_card.pressed.emit()
 	await process_frame
-	main.call("_on_tax_changed", float(int(original_tax["income"]) + 4), "income")
+	var income_slider := main.tax_sliders["income"] as HSlider
+	income_slider.value = float(int(original_tax["income"]) + 4)
 	main.call("_on_utility_fee_changed", float(int(original_utility["water"]) + 7), "water")
 	main.call("_on_service_fee_changed", float(int(original_service["stadium"]) + 9), "stadium")
 	var edited: Dictionary = main.call("debug_fiscal_draft_state")
@@ -78,6 +79,9 @@ func _run() -> void:
 	_check(int(edited.get("dirty_count", -1)) == 3, "three edits become one cross-category draft")
 	_check(int(edited.get("projected_net", 0)) != int(edited.get("authoritative_net", 0)), "EDIT forecast uses the whole draft")
 	_check(preview_button != null and not preview_button.disabled and preview_button.text.contains("3"), "EDIT exposes its sole primary preview action with the change count")
+	_check(str(main.labels["tax_value_income"].text).contains("%d%% → %d%%" % [int(original_tax["income"]), int(original_tax["income"]) + 4]), "slider change updates the visible tax value from authority to draft")
+	_check(str(main.labels["utility_water"].text).contains("%d" % (int(original_utility["water"]) + 7)), "utility header shows its draft value")
+	_check(str(main.labels["service_stadium"].text).contains("%d" % (int(original_service["stadium"]) + 9)), "service header shows its draft value")
 
 	var autosaves_before_preview := int(main._autosave_count)
 	if preview_button != null:
@@ -103,8 +107,11 @@ func _run() -> void:
 	if preview_button != null:
 		preview_button.pressed.emit()
 	await process_frame
-	main.call("_on_tax_changed", float(int(original_tax["income"]) + 5), "income")
+	var income_input := main.tax_inputs["income"] as LineEdit
+	income_input.text_submitted.emit(str(int(original_tax["income"]) + 5))
 	await process_frame
+	_check(str(main.labels["tax_value_income"].text).contains("%d%% → %d%%" % [int(original_tax["income"]), int(original_tax["income"]) + 5]), "number input submission updates the visible tax draft value")
+	_check(main.tax_rates == original_tax, "number input submission still leaves tax authority unchanged before execute")
 	var stale_autosaves := int(main._autosave_count)
 	if execute != null:
 		execute.pressed.emit()
@@ -127,6 +134,7 @@ func _run() -> void:
 	_check(int(main.service_fees["stadium"]) == int(original_service["stadium"]) + 9, "execute commits the service snapshot")
 	_check(int(main._autosave_count) == autosaves_before_execute + 1, "execute performs exactly one autosave")
 	_check(int(applied.get("dirty_count", -1)) == 0 and str(applied.get("flow_step", "")) == "edit", "successful execute returns to clean EDIT")
+	_check(str(main.labels["tax_value_income"].text).contains("%d%%" % (int(original_tax["income"]) + 5)) and not str(main.labels["tax_value_income"].text).contains("→"), "execute collapses the visible tax value to the new authority")
 	var autosaves_after_execute := int(main._autosave_count)
 	if execute != null:
 		execute.pressed.emit()
