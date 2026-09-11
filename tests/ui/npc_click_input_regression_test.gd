@@ -130,9 +130,9 @@ func _verify_transport_planning_input_isolation(main, npc_index: int) -> void:
 	_check(_npc_press_count == npc_presses_before, "transport planning allowed an NPC press")
 	_check(not bool(main.get_npc_dialogue_snapshot().get("visible", false)), "transport planning opened NPC dialogue")
 	_check(str(main.vertical_slice.selected_npc_id) == selected_npc_before, "transport planning changed the selected NPC")
-	_check(not main.municipal_overlay.is_open(), "NPC click opened a municipal route during transport planning")
+	_check(main.municipal_overlay == null or not main.municipal_overlay.is_open(), "NPC click opened a municipal route during transport planning")
 	main.call("_open_selected_npc_request")
-	_check(not main.municipal_overlay.is_open(), "stale NPC action reached public affairs during transport planning")
+	_check(main.municipal_overlay == null or not main.municipal_overlay.is_open(), "stale NPC action reached public affairs during transport planning")
 
 	var target_tile_index := _first_quoteable_road_tile(main)
 	_check(target_tile_index >= 0, "no quoteable road tile was available during NPC isolation")

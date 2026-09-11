@@ -143,7 +143,7 @@ func _verify_transport_planning_npc_barrier(main) -> void:
 	var card := main.get_npc_dialogue_card_control() as Control
 	_check(card != null and not card.visible, "planning allowed a programmatic NPC dialogue route")
 	main.call("_open_selected_npc_request")
-	_check(not main.municipal_overlay.is_open(), "planning allowed the stale public-affairs action")
+	_check(main.municipal_overlay == null or not main.municipal_overlay.is_open(), "planning allowed the stale public-affairs action")
 	main.call("_on_grid_pressed", target_tile_index)
 	_check(main.transport_plan_tiles.has(target_tile_index), "planning tile intent was unavailable while NPC input was disabled")
 	_check(str(main.vertical_slice.selected_npc_id) == selected_npc_before, "planning input changed the selected NPC")
