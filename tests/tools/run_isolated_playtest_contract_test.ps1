@@ -15,10 +15,31 @@ function Invoke-IsolatedRunner {
         [Parameter(Mandatory)][string]$Runner,
         [Parameter(Mandatory)][string]$Child,
         [Parameter(Mandatory)][string]$ProfileName,
-        [Parameter(Mandatory)][int]$MinimumRuntimeSeconds
+        [Parameter(Mandatory)][int]$MinimumRuntimeSeconds,
+        [Parameter(Mandatory)][string]$RendererMode
     )
-    & $script:WindowsPowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Runner -GodotExe $Child -ProfileName $ProfileName -RendererMode Mobile -MinimumRuntimeSeconds $MinimumRuntimeSeconds 2>$null | Out-Null
-    return [int]$LASTEXITCODE
+    $parts = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Runner, '-GodotExe', $Child, '-ProfileName', $ProfileName, '-RendererMode', $RendererMode, '-MinimumRuntimeSeconds', [string]$MinimumRuntimeSeconds)
+    $commandLine = (($parts | ForEach-Object {
+        $part = [string]$_
+        if ($part -match '[\s"]') { '"' + ($part -replace '(\\*)"', '$1$1\\"' -replace '(\\*)$', '$1$1') + '"' } else { $part }
+    }) -join ' ')
+    $info = New-Object Diagnostics.ProcessStartInfo
+    $info.FileName = $script:WindowsPowerShellExe
+    $info.Arguments = $commandLine
+    $info.UseShellExecute = $false
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $process = New-Object Diagnostics.Process
+    $process.StartInfo = $info
+    if (-not $process.Start()) { throw 'Synthetic runner process did not start.' }
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    $process.WaitForExit()
+    $stdout = $stdoutTask.GetAwaiter().GetResult()
+    $stderr = $stderrTask.GetAwaiter().GetResult()
+    $exitCode = [int]$process.ExitCode
+    $process.Dispose()
+    return [pscustomobject]@{ exit_code = $exitCode; stdout = $stdout; stderr = $stderr }
 }
 
 function New-SyntheticChild {
@@ -80,7 +101,8 @@ $expectedTree = (& git -c "safe.directory=$projectRoot" -C $projectRoot rev-pars
 if ($LASTEXITCODE -ne 0) { throw 'Could not resolve test source identity.' }
 
 $successProfile = 'synthetic-success-' + $profileSuffix
-$successExit = Invoke-IsolatedRunner -Runner $runner -Child $successChild -ProfileName $successProfile -MinimumRuntimeSeconds 1
+$successResult = Invoke-IsolatedRunner -Runner $runner -Child $successChild -ProfileName $successProfile -MinimumRuntimeSeconds 1 -RendererMode Mobile
+$successExit = [int]$successResult.exit_code
 Assert-True -Condition ($successExit -eq 0) -Message "success child runner exit was $successExit, expected 0"
 $successSummaryPath = Join-Path $projectRoot ('.tmp\isolated-playtest\' + $successProfile + '\playtest-result.json')
 $successSummary = Get-Content -LiteralPath $successSummaryPath -Raw | ConvertFrom-Json
@@ -91,7 +113,8 @@ Assert-True -Condition ($successSummary.source.head -eq $expectedHead -and $succ
 Assert-True -Condition (-not [string]::IsNullOrWhiteSpace([string]$successSummary.isolation.godot_log_sha256)) -Message 'success log SHA-256 was not recorded'
 
 $crashProfile = 'synthetic-crash-' + $profileSuffix
-$crashExit = Invoke-IsolatedRunner -Runner $runner -Child $crashChild -ProfileName $crashProfile -MinimumRuntimeSeconds 0
+$crashResult = Invoke-IsolatedRunner -Runner $runner -Child $crashChild -ProfileName $crashProfile -MinimumRuntimeSeconds 0 -RendererMode Mobile
+$crashExit = [int]$crashResult.exit_code
 Assert-True -Condition ($crashExit -ne 0) -Message 'synthetic crash child unexpectedly passed'
 $crashSummaryPath = Join-Path $projectRoot ('.tmp\isolated-playtest\' + $crashProfile + '\playtest-result.json')
 $crashSummary = Get-Content -LiteralPath $crashSummaryPath -Raw | ConvertFrom-Json
@@ -99,7 +122,8 @@ Assert-True -Condition ($crashSummary.status -eq 'child_failed') -Message 'synth
 Assert-True -Condition ([int]$crashSummary.process.child_exit_code -eq -1073741819) -Message 'synthetic Windows crash exit code was not preserved as signed Int32'
 
 $shortProfile = 'synthetic-short-' + $profileSuffix
-$shortExit = Invoke-IsolatedRunner -Runner $runner -Child $shortChild -ProfileName $shortProfile -MinimumRuntimeSeconds 2
+$shortResult = Invoke-IsolatedRunner -Runner $runner -Child $shortChild -ProfileName $shortProfile -MinimumRuntimeSeconds 2 -RendererMode Mobile
+$shortExit = [int]$shortResult.exit_code
 Assert-True -Condition ($shortExit -eq 3) -Message "short child runner exit was $shortExit, expected 3"
 $shortSummaryPath = Join-Path $projectRoot ('.tmp\isolated-playtest\' + $shortProfile + '\playtest-result.json')
 $shortSummary = Get-Content -LiteralPath $shortSummaryPath -Raw | ConvertFrom-Json
@@ -107,13 +131,14 @@ Assert-True -Condition ($shortSummary.status -eq 'short_process') -Message 'shor
 Assert-True -Condition ([int]$shortSummary.process.child_exit_code -eq 0) -Message 'short child exit code was not preserved'
 
 $beforeReuseHash = (Get-FileHash -LiteralPath $successSummaryPath -Algorithm SHA256).Hash
-$reuseExit = Invoke-IsolatedRunner -Runner $runner -Child $successChild -ProfileName $successProfile -MinimumRuntimeSeconds 1
+$reuseResult = Invoke-IsolatedRunner -Runner $runner -Child $successChild -ProfileName $successProfile -MinimumRuntimeSeconds 1 -RendererMode Mobile
+$reuseExit = [int]$reuseResult.exit_code
 Assert-True -Condition ($reuseExit -ne 0) -Message 'reused profile unexpectedly launched'
 $afterReuseHash = (Get-FileHash -LiteralPath $successSummaryPath -Algorithm SHA256).Hash
 Assert-True -Condition ($beforeReuseHash -eq $afterReuseHash) -Message 'reused profile changed prior result evidence'
 
-& $WindowsPowerShellExe -NoProfile -ExecutionPolicy Bypass -File $runner -GodotExe $successChild -ProfileName ('synthetic-invalid-' + $profileSuffix) -RendererMode 'Mobile;--path=C:\escape' 2>$null
-$invalidRendererExit = [int]$LASTEXITCODE
+$invalidRendererResult = Invoke-IsolatedRunner -Runner $runner -Child $successChild -ProfileName ('synthetic-invalid-' + $profileSuffix) -MinimumRuntimeSeconds 1 -RendererMode 'Mobile;--path=C:\escape'
+$invalidRendererExit = [int]$invalidRendererResult.exit_code
 Assert-True -Condition ($invalidRendererExit -ne 0) -Message 'renderer argument injection unexpectedly passed validation'
 
 Write-Output 'ISOLATED_PLAYTEST_RUNNER_CONTRACT_PASSED: checks=15'
