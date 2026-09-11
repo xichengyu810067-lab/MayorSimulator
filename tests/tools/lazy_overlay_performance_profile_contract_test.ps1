@@ -14,6 +14,16 @@ function Assert-NotContains {
     param([string]$Text, [string]$Pattern, [string]$Message)
     if ($Text -match $Pattern) { throw $Message }
 }
+function Assert-True {
+    param([bool]$Condition, [string]$Message)
+    if (-not $Condition) { throw $Message }
+}
+
+$trimChars = [char[]]@([char]92, [char]'/' )
+$outputsRoot = [IO.Path]::GetFullPath((Join-Path $projectRoot '.tmp\performance-profile-lazy-overlay'))
+$outputsRootAlias = [IO.Path]::GetFullPath((Join-Path $projectRoot '.tmp\PERFORMANCE-PROFILE-LAZY-OVERLAY'))
+$pathComparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+$outputsRootIsAlias = $outputsRootAlias.TrimEnd($trimChars).Equals($outputsRoot.TrimEnd($trimChars), $pathComparison)
 
 Assert-Contains $runner 'ValidateRange\(50, 100\)' 'Sampling interval is not constrained to 50-100ms.'
 Assert-Contains $runner 'performance-profile-lazy-overlay' 'Runner does not use a canonical .tmp profile root.'
@@ -27,6 +37,13 @@ Assert-Contains $runner '(?s)@\(''startup_ready'', ''first_open_completed'', ''v
 Assert-Contains $runner 'ObjectDB instances\? \(\?:was\|were\) leaked at exit' 'Runner does not fail closed on ObjectDB leak diagnostics.'
 Assert-Contains $runner 'GPU counter unavailable' 'Runner does not retain a concrete GPU-unavailable reason.'
 Assert-Contains $runner 'not a RAM-total claim' 'Runner does not state its RAM claim boundary.'
+if ($IsWindows) {
+    Assert-Contains $runner 'StringComparison]::OrdinalIgnoreCase' 'Runner does not switch fixed-root exact-match comparison to Windows case-insensitive semantics.'
+    Assert-True $outputsRootIsAlias 'Windows fixed profile root component comparison is not case-normalizing the alias variant.'
+} else {
+    Assert-NotContains $runner 'StringComparison]::OrdinalIgnoreCase' 'Runner should not force Windows-only case-insensitive fixed-root comparison on non-Windows.'
+    Assert-True (-not $outputsRootIsAlias) 'Non-Windows fixed profile root canonical equality is unexpectedly case-insensitive.'
+}
 Assert-Contains $integration '--performance-profile-lazy-overlay' 'Integration test has no explicit performance-profile opt-in.'
 Assert-Contains $integration 'if performance_profile_only:\s*\r?\n\s*_emit_performance_profile_phase\("startup_ready"\)' 'Startup marker is not guarded by explicit opt-in.'
 Assert-Contains $integration 'if performance_profile_only:\s*\r?\n\s*_emit_performance_profile_phase\("first_open_completed"\)' 'First-open marker is not guarded by explicit opt-in.'

@@ -49,7 +49,10 @@ function Assert-NewOutputRoot {
         throw 'OutputRoot must be a fresh child of .tmp\\performance-profile-lazy-overlay; absolute and traversal escapes are rejected.'
     }
     $trimChars = [char[]]@([char]'\', [char]'/' )
-    if ($Candidate.TrimEnd($trimChars) -ceq $outputsRoot.TrimEnd($trimChars)) { throw 'OutputRoot must be a child directory, not the canonical profile root itself.' }
+    $comparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+    if ($Candidate.TrimEnd($trimChars).Equals($outputsRoot.TrimEnd($trimChars), $comparison)) {
+        throw 'OutputRoot must be a child directory, not the canonical profile root itself.'
+    }
     if (Test-Path -LiteralPath $Candidate) { throw 'OutputRoot already exists; evidence is append-only.' }
     if (Test-Path -LiteralPath $outputsRoot -PathType Leaf) { throw 'Canonical profile root must be a directory.' }
     if (Test-Path -LiteralPath $outputsRoot) { $null = Assert-MayorNotReparsePoint -Path $outputsRoot -Label 'Canonical profile root' }
