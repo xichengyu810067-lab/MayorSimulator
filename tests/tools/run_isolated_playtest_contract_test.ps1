@@ -17,7 +17,7 @@ function Invoke-IsolatedRunner {
         [Parameter(Mandatory)][string]$ProfileName,
         [Parameter(Mandatory)][int]$MinimumRuntimeSeconds
     )
-    & $script:WindowsPowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Runner -GodotExe $Child -ProfileName $ProfileName -RendererMode Mobile -MinimumRuntimeSeconds $MinimumRuntimeSeconds
+    & $script:WindowsPowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Runner -GodotExe $Child -ProfileName $ProfileName -RendererMode Mobile -MinimumRuntimeSeconds $MinimumRuntimeSeconds | Out-Null
     return [int]$LASTEXITCODE
 }
 
