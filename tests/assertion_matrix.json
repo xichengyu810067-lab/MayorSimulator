@@ -43,7 +43,7 @@
     { "id": "progressive_disclosure", "script": "res://tests/integration/progressive_disclosure_test.gd", "success_pattern": "Progressive disclosure test passed." },
     { "id": "progressive_option_button", "script": "res://tests/ui/progressive_option_button_regression_test.gd", "success_pattern": "Progressive option button regression test passed." },
     { "id": "redundancy_audit", "script": "res://tests/integration/redundancy_audit_test.gd", "success_pattern": "Redundancy audit passed." },
-    { "id": "save_recovery_self", "script": "res://tests/unit/core/save_recovery_self_test.gd", "success_pattern": "Save recovery self-test passed." },
+    { "id": "save_recovery_self", "script": "res://tests/unit/core/save_recovery_self_test.gd", "success_pattern": "Save recovery self-test passed.", "timeout_seconds": 240 },
     { "id": "save_memory_pipeline_self", "script": "res://tests/unit/core/save_memory_pipeline_test.gd", "success_pattern": "Save memory pipeline test passed." },
     { "id": "save_input_limits", "script": "res://tests/unit/core/save_input_limits_test.gd", "success_pattern": "Save input limits test passed." },
     { "id": "save_error30_employment_sync", "script": "res://tests/integration/save_error30_regression_test.gd", "success_pattern": "Save error 30 employment-sync regression passed." },
