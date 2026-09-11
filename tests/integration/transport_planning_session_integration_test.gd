@@ -131,7 +131,10 @@ func _test_schema_v2_migration_and_corridor_quote_integrity() -> void:
 	_check(bool(planning.begin_network_placement("road").get("ok", false)), "route-package enters network placement")
 	_check(bool(planning.update_network_draft("road", {"tile_ids": [0, 1, 2, 3], "worker_count": 2}).get("ok", false)), "route-package network draft records")
 	_check(bool(planning.begin_route_edit().get("ok", false)), "route-package enters route editing")
-	_check(bool(planning.update_route_draft({"corridor_quote": corridor_quote}).get("ok", false)), "valid reuse-aware quote attaches to route draft")
+	_check(bool(planning.update_route_draft({
+		"corridor_quote": corridor_quote,
+		"corridor_network_revision": "a".repeat(64),
+	}).get("ok", false)), "valid reuse-aware quote attaches to route draft with its network revision")
 	var snapshot: Dictionary = planning.to_dict()
 	_check(bool(TransportPlanningSessionScript.validate_snapshot(snapshot).get("valid", false)), "planning snapshot validates with reuse-aware quote")
 	var decoded_snapshot = JSON.parse_string(JSON.stringify(snapshot))

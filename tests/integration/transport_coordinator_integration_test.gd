@@ -89,10 +89,10 @@ func _validate_project_route_and_current_round_trip() -> void:
 	_check(bool(enabled.get("ok", false)) and str(enabled.get("route", {}).get("status", "")) == "operational", "valid route must resume operation")
 
 	var save_error: Error = coordinator.save_game(CURRENT_SAVE_PATH)
-	_check(save_error == OK, "schema 10 transport save must succeed: %s" % coordinator.session.save_service.last_error_message)
-	_check(int(coordinator.session.state.metadata.get("vertical_slice", {}).get("schema_version", 0)) == 10, "current save must use vertical-slice schema 10")
+	_check(save_error == OK, "schema 11 transport save must succeed: %s" % coordinator.session.save_service.last_error_message)
+	_check(int(coordinator.session.state.metadata.get("vertical_slice", {}).get("schema_version", 0)) == 11, "current save must use vertical-slice schema 11")
 	var restored = CoordinatorScript.new(1, 1)
-	_check(restored.load_game(CURRENT_SAVE_PATH), "schema 10 transport save must load")
+	_check(restored.load_game(CURRENT_SAVE_PATH), "schema 11 transport save must load")
 	_check(restored.transport.segments.size() == 1 and restored.transport.facilities.size() == 1, "transport infrastructure must survive save/load")
 	_check(restored.transport.routes.has(route_id), "route must survive save/load")
 	_check(str(restored.transport.routes.get(route_id, {}).get("status", "")) == "operational", "valid enabled route must remain operational after load")

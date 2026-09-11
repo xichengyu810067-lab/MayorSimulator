@@ -489,6 +489,57 @@ func delete_route(route_id: String) -> Dictionary:
 	return {"ok": true, "route": removed}
 
 
+func rollback_build_projects(project_ids: Array) -> Dictionary:
+	var ordered_ids: Array[String] = []
+	for project_id_value: Variant in project_ids:
+		if not project_id_value is String:
+			return _error("invalid_rollback_project_id")
+		var project_id := str(project_id_value)
+		if project_id.is_empty() or ordered_ids.has(project_id) or not projects.has(project_id):
+			return _error("invalid_rollback_project_id")
+		var project_value: Variant = projects[project_id]
+		if not project_value is Dictionary or str((project_value as Dictionary).get("operation", "")) != "build":
+			return _error("rollback_project_not_build")
+		ordered_ids.append(project_id)
+	for route_value: Variant in routes.values():
+		if not route_value is Dictionary:
+			continue
+		for project_id: String in ordered_ids:
+			if Array((route_value as Dictionary).get("new_project_ids", [])).has(project_id):
+				return _error("rollback_project_has_route")
+	var removed_entities: Array[String] = []
+	for project_id: String in ordered_ids:
+		var project: Dictionary = projects[project_id]
+		var plan: Dictionary = project.get("plan", {})
+		for collection_name: String in ["segments", "facilities", "stations"]:
+			var authority: Dictionary = segments
+			if collection_name == "facilities":
+				authority = facilities
+			elif collection_name == "stations":
+				authority = stations
+			for record_value: Variant in plan.get(collection_name, []):
+				if not record_value is Dictionary:
+					return _error("invalid_rollback_project_plan")
+				var record_id := str((record_value as Dictionary).get("id", ""))
+				if record_id.is_empty():
+					return _error("invalid_rollback_project_plan")
+				if authority.has(record_id):
+					var stored_value: Variant = authority[record_id]
+					if not stored_value is Dictionary or str((stored_value as Dictionary).get("project_id", "")) != project_id:
+						return _error("rollback_entity_owner_mismatch")
+					authority.erase(record_id)
+					removed_entities.append(record_id)
+		projects.erase(project_id)
+	_recompute_crossings()
+	revalidate_routes()
+	return {
+		"ok": true,
+		"project_ids": ordered_ids,
+		"removed_entity_ids": removed_entities,
+		"network": network_snapshot(),
+	}
+
+
 func revalidate_routes() -> Array[Dictionary]:
 	var changed: Array[Dictionary] = []
 	for route_id: String in _sorted_string_keys(routes):
@@ -849,6 +900,13 @@ func to_dict() -> Dictionary:
 	}
 
 
+func authority_revision() -> String:
+	# Bind a corridor quote to the complete transport authority, including
+	# sequences and in-flight projects. Canonical key ordering keeps the same
+	# logical snapshot stable across save/load and Dictionary insertion order.
+	return JSON.stringify(_canonicalize_revision_value(to_dict())).sha256_text()
+
+
 func load_dict(data: Dictionary) -> bool:
 	var migrated := migrate_snapshot(data)
 	if migrated.is_empty():
@@ -1092,8 +1150,6 @@ static func validate_snapshot(snapshot: Dictionary) -> Dictionary:
 			var price_model := str(record.get("price_model", ""))
 			if not TransportModesScript.is_route_package_price_model(price_model):
 				issues.append("invalid_route_price_model:%s" % str(id_variant))
-			elif price_model == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V3:
-				issues.append("unsupported_route_v3_contract:%s" % str(id_variant))
 			elif price_model == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V2 and str(record.get("price_provenance", "")) != TransportModesScript.ROUTE_PACKAGE_PRICE_PROVENANCE:
 				issues.append("invalid_route_price_provenance:%s" % str(id_variant))
 			for field_name: String in ["route_tile_count", "route_construction_cost", "route_monthly_maintenance"]:
@@ -1108,6 +1164,14 @@ static func validate_snapshot(snapshot: Dictionary) -> Dictionary:
 					or int(record.get("route_monthly_maintenance", -1)) != int(guideway_spec.get("monthly_maintenance_per_tile", 0)) * route_tile_count
 				):
 					issues.append("invalid_route_v2_price_parity:%s" % str(id_variant))
+			elif price_model == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V3:
+				_append_route_package_v3_issues(
+					issues,
+					str(id_variant),
+					record,
+					segment_records,
+					project_records
+				)
 	return {"valid": issues.is_empty(), "issues": issues, "schema_version": schema_version}
 
 
@@ -1168,6 +1232,14 @@ func _canonicalize_loaded_state() -> void:
 			route["route_tile_count"] = int(route.get("route_tile_count", 0))
 			route["route_construction_cost"] = int(route.get("route_construction_cost", 0))
 			route["route_monthly_maintenance"] = int(route.get("route_monthly_maintenance", 0))
+		if str(route.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V3:
+			route["corridor_quote"] = _normalize_corridor_quote(route.get("corridor_quote", {}))
+			route["reused_segment_refs"] = _normalize_route_segment_refs(route.get("reused_segment_refs", []))
+			route["new_segment_refs"] = _normalize_route_segment_refs(route.get("new_segment_refs", []))
+			route["new_project_ids"] = _string_array(route.get("new_project_ids", []))
+			route["new_job_ids"] = _string_array(route.get("new_job_ids", []))
+			route["price_breakdown"] = _normalize_integer_dictionary(route.get("price_breakdown", {}))
+			route["maintenance_breakdown"] = _normalize_integer_dictionary(route.get("maintenance_breakdown", {}))
 		routes[route_id] = route
 
 
@@ -1385,6 +1457,23 @@ func _normalize_route(route_plan: Dictionary) -> Dictionary:
 		normalized["route_tile_count"] = int(route_plan.get("route_tile_count", 0))
 		normalized["route_construction_cost"] = int(route_plan.get("route_construction_cost", 0))
 		normalized["route_monthly_maintenance"] = int(route_plan.get("route_monthly_maintenance", 0))
+		if price_model == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V3:
+			normalized["corridor_quote"] = _normalize_corridor_quote(route_plan.get("corridor_quote", {}))
+			normalized["quote_network_revision"] = str(route_plan.get("quote_network_revision", ""))
+			normalized["reused_segment_refs"] = _normalize_route_segment_refs(
+				route_plan.get("reused_segment_refs", [])
+			)
+			normalized["new_segment_refs"] = _normalize_route_segment_refs(
+				route_plan.get("new_segment_refs", [])
+			)
+			normalized["new_project_ids"] = _string_array(route_plan.get("new_project_ids", []))
+			normalized["new_job_ids"] = _string_array(route_plan.get("new_job_ids", []))
+			normalized["price_breakdown"] = _normalize_integer_dictionary(
+				route_plan.get("price_breakdown", {})
+			)
+			normalized["maintenance_breakdown"] = _normalize_integer_dictionary(
+				route_plan.get("maintenance_breakdown", {})
+			)
 	return normalized
 
 
@@ -3433,6 +3522,179 @@ static func _snapshot_segment_tiles_for_kinds(segment_records: Dictionary, kinds
 	return result
 
 
+static func _append_route_package_v3_issues(
+	issues: Array[String],
+	route_id: String,
+	record: Dictionary,
+	segment_records: Dictionary,
+	project_records: Dictionary
+) -> void:
+	if str(record.get("price_provenance", "")) != TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_PROVENANCE:
+		issues.append("invalid_route_v3_price_provenance:%s" % route_id)
+	var revision := str(record.get("quote_network_revision", ""))
+	if revision.length() != 64 or not revision.is_valid_hex_number(false):
+		issues.append("invalid_route_v3_network_revision:%s" % route_id)
+	var quote_value: Variant = record.get("corridor_quote", null)
+	var quote_validation := TransportModesScript.validate_route_package_corridor_price_quote(quote_value)
+	if not bool(quote_validation.get("valid", false)):
+		issues.append("invalid_route_v3_corridor_quote:%s" % route_id)
+		return
+	var quote: Dictionary = quote_value
+	var corridor: Dictionary = quote.get("corridor", {})
+	if str(corridor.get("mode", "")) != str(record.get("mode", "")):
+		issues.append("route_v3_mode_mismatch:%s" % route_id)
+	if (
+		int(record.get("route_tile_count", -1)) != int(corridor.get("total_units", -2))
+		or int(record.get("route_construction_cost", -1)) != int(quote.get("total_cost", -2))
+		or int(record.get("route_monthly_maintenance", -1)) != int(quote.get("monthly_maintenance", -2))
+		or record.get("price_breakdown", null) != quote.get("price_breakdown", null)
+		or record.get("maintenance_breakdown", null) != quote.get("maintenance_breakdown", null)
+	):
+		issues.append("route_v3_price_breakdown_mismatch:%s" % route_id)
+	var route_tiles: Array = corridor.get("route_tile_ids", [])
+	var route_tile_set: Dictionary = {}
+	for route_tile_value: Variant in route_tiles:
+		route_tile_set[int(route_tile_value)] = true
+	var reused_refs: Array = record.get("reused_segment_refs", [])
+	if reused_refs != corridor.get("reused_segment_refs", []):
+		issues.append("route_v3_reused_refs_mismatch:%s" % route_id)
+	else:
+		for ref_value: Variant in reused_refs:
+			if not ref_value is Dictionary:
+				issues.append("invalid_route_v3_reused_ref:%s" % route_id)
+				continue
+			var ref: Dictionary = ref_value
+			var segment_id := str(ref.get("id", ""))
+			if not segment_records.has(segment_id) or not segment_records[segment_id] is Dictionary:
+				issues.append("route_v3_reused_segment_missing:%s:%s" % [route_id, segment_id])
+				continue
+			var segment: Dictionary = segment_records[segment_id]
+			var matched_tiles: Array[int] = []
+			for tile_value: Variant in segment.get("tile_path", []):
+				if route_tile_set.has(int(tile_value)):
+					matched_tiles.append(int(tile_value))
+			if (
+				str(segment.get("status", "")) != "completed"
+				or str(segment.get("kind", "")) != str(ref.get("kind", ""))
+				or matched_tiles != _int_array_static(ref.get("tile_ids", []))
+			):
+				issues.append("route_v3_reused_segment_changed:%s:%s" % [route_id, segment_id])
+	var new_refs_value: Variant = record.get("new_segment_refs", null)
+	if not new_refs_value is Array:
+		issues.append("invalid_route_v3_new_refs:%s" % route_id)
+		return
+	var new_refs: Array = new_refs_value
+	var new_runs: Array = corridor.get("new_runs", [])
+	if new_refs.size() != new_runs.size():
+		issues.append("route_v3_new_ref_count_mismatch:%s" % route_id)
+	var expected_project_ids: Array[String] = []
+	var expected_job_ids: Array[String] = []
+	for index: int in range(new_refs.size()):
+		if not new_refs[index] is Dictionary or index >= new_runs.size() or not new_runs[index] is Dictionary:
+			issues.append("invalid_route_v3_new_ref:%s:%d" % [route_id, index])
+			continue
+		var ref: Dictionary = new_refs[index]
+		var run: Dictionary = new_runs[index]
+		var segment_id := str(ref.get("id", ""))
+		var project_id := str(ref.get("project_id", ""))
+		var job_id := str(ref.get("job_id", ""))
+		if project_id.is_empty() or job_id.is_empty():
+			issues.append("invalid_route_v3_new_ref_identity:%s:%d" % [route_id, index])
+			continue
+		if not expected_project_ids.has(project_id):
+			expected_project_ids.append(project_id)
+		if not expected_job_ids.has(job_id):
+			expected_job_ids.append(job_id)
+		if (
+			str(ref.get("kind", "")) != str(run.get("kind", ""))
+			or ref.get("tile_ids", null) != run.get("tile_path", null)
+			or not segment_records.has(segment_id)
+			or not segment_records[segment_id] is Dictionary
+		):
+			issues.append("route_v3_new_segment_mismatch:%s:%s" % [route_id, segment_id])
+			continue
+		var segment: Dictionary = segment_records[segment_id]
+		if (
+			str(segment.get("status", "")) != "completed"
+			or str(segment.get("project_id", "")) != project_id
+			or str(segment.get("kind", "")) != str(ref.get("kind", ""))
+			or segment.get("tile_path", null) != ref.get("tile_ids", null)
+		):
+			issues.append("route_v3_new_segment_changed:%s:%s" % [route_id, segment_id])
+		if not project_records.has(project_id) or not project_records[project_id] is Dictionary:
+			issues.append("route_v3_new_project_missing:%s:%s" % [route_id, project_id])
+		elif str(Dictionary(project_records[project_id]).get("status", "")) != "completed":
+			issues.append("route_v3_new_project_not_completed:%s:%s" % [route_id, project_id])
+	var project_ids_value: Variant = record.get("new_project_ids", null)
+	if not project_ids_value is Array:
+		issues.append("invalid_route_v3_new_project_refs:%s" % route_id)
+	else:
+		var project_ids: Array = project_ids_value
+		var seen_project_ids: Array[String] = []
+		for project_id_value: Variant in project_ids:
+			if not project_id_value is String:
+				issues.append("invalid_route_v3_new_project_ref:%s" % route_id)
+				continue
+			var project_id := str(project_id_value)
+			if project_id.is_empty() or seen_project_ids.has(project_id):
+				issues.append("invalid_route_v3_new_project_ref:%s" % route_id)
+				continue
+			seen_project_ids.append(project_id)
+			if not project_records.has(project_id) or not project_records[project_id] is Dictionary:
+				issues.append("route_v3_new_project_missing:%s:%s" % [route_id, project_id])
+			elif str(Dictionary(project_records[project_id]).get("status", "")) != "completed":
+				issues.append("route_v3_new_project_not_completed:%s:%s" % [route_id, project_id])
+		for project_id: String in expected_project_ids:
+			if not seen_project_ids.has(project_id):
+				issues.append("route_v3_new_project_refs_mismatch:%s" % route_id)
+	var job_ids_value: Variant = record.get("new_job_ids", null)
+	if not job_ids_value is Array:
+		issues.append("invalid_route_v3_new_job_refs:%s" % route_id)
+	else:
+		var seen_job_ids: Array[String] = []
+		for job_id_value: Variant in job_ids_value:
+			if not job_id_value is String:
+				issues.append("invalid_route_v3_new_job_ref:%s" % route_id)
+				continue
+			var job_id := str(job_id_value)
+			if job_id.is_empty() or seen_job_ids.has(job_id):
+				issues.append("invalid_route_v3_new_job_ref:%s" % route_id)
+				continue
+			seen_job_ids.append(job_id)
+		for job_id: String in expected_job_ids:
+			if not seen_job_ids.has(job_id):
+				issues.append("route_v3_new_job_refs_mismatch:%s" % route_id)
+
+
+static func _normalize_route_segment_refs(value: Variant) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	if not value is Array:
+		return result
+	for ref_value: Variant in value:
+		if not ref_value is Dictionary:
+			continue
+		var ref: Dictionary = ref_value
+		var normalized := {
+			"id": str(ref.get("id", ref.get("segment_id", ""))),
+			"kind": str(ref.get("kind", "")),
+			"tile_ids": _int_array_static(ref.get("tile_ids", [])),
+		}
+		for field_name: String in ["project_id", "job_id"]:
+			if ref.has(field_name):
+				normalized[field_name] = str(ref.get(field_name, ""))
+		result.append(normalized)
+	return result
+
+
+static func _normalize_integer_dictionary(value: Variant) -> Dictionary:
+	var result: Dictionary = {}
+	if not value is Dictionary:
+		return result
+	for key_value: Variant in (value as Dictionary).keys():
+		result[str(key_value)] = int((value as Dictionary)[key_value])
+	return result
+
+
 static func _normalize_corridor_contract(value: Variant) -> Dictionary:
 	if not value is Dictionary:
 		return {}
@@ -3572,6 +3834,24 @@ static func _is_json_safe(value: Variant) -> bool:
 				return false
 		return true
 	return false
+
+
+static func _canonicalize_revision_value(value: Variant) -> Variant:
+	if value is Dictionary:
+		var result: Dictionary = {}
+		var keys: Array[String] = []
+		for key_value: Variant in (value as Dictionary).keys():
+			keys.append(str(key_value))
+		keys.sort()
+		for key: String in keys:
+			result[key] = _canonicalize_revision_value((value as Dictionary)[key])
+		return result
+	if value is Array:
+		var result: Array = []
+		for item: Variant in value:
+			result.append(_canonicalize_revision_value(item))
+		return result
+	return value
 
 
 static func _error(code: String) -> Dictionary:

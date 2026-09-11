@@ -315,6 +315,9 @@ func update_route_draft(draft: Dictionary) -> Dictionary:
 		var corridor: Dictionary = Dictionary(updated.get("corridor_quote", {})).get("corridor", {})
 		if str(corridor.get("mode", "")) != str(session.get("mode", "")):
 			return _error("corridor_quote_mode_mismatch")
+		var revision := str(updated.get("corridor_network_revision", ""))
+		if revision.length() != 64 or not revision.is_valid_hex_number(false):
+			return _error("invalid_corridor_network_revision")
 	session["route_draft"] = updated
 	session["route_draft"]["mode"] = str(session.get("mode", ""))
 	return _success()
@@ -324,12 +327,21 @@ func record_route_package_jobs(
 	station_jobs: Array,
 	station_placements: Array,
 	network_jobs: Array,
-	package_quote: Dictionary
+	package_quote: Dictionary,
+	reused_network_refs: Array = []
 ) -> Dictionary:
 	if not is_route_package() or str(session.get("state", "")) != STATE_ROUTE_EDIT:
 		return _error("transport_session_not_route_package_edit")
-	if station_placements.is_empty() or network_jobs.is_empty():
+	if station_placements.is_empty():
 		return _error("invalid_route_package_jobs")
+	if str(package_quote.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V3:
+		var quote_validation := TransportModesScript.validate_route_package_corridor_price_quote(
+			package_quote.get("corridor_quote", null)
+		)
+		if not bool(quote_validation.get("valid", false)):
+			return _error("invalid_route_package_quote")
+		if str(package_quote.get("quote_network_revision", "")).is_empty():
+			return _error("invalid_route_package_network_revision")
 	var station_refs: Array = []
 	var station_job_index := 0
 	for index in range(station_jobs.size()):
@@ -366,6 +378,21 @@ func record_route_package_jobs(
 	if station_job_index != station_jobs.size():
 		return _error("invalid_route_package_jobs")
 	var network_refs: Array = []
+	for reused_value: Variant in reused_network_refs:
+		if not reused_value is Dictionary:
+			return _error("invalid_reused_network_reference")
+		var reused: Dictionary = reused_value
+		var reused_source := str(reused.get("source", ""))
+		var invalid_reused := str(reused.get("kind", "")).is_empty()
+		if reused_source == "existing":
+			invalid_reused = invalid_reused or str(reused.get("segment_id", "")).is_empty() or not _valid_unique_integer_array(reused.get("tile_ids", null))
+		elif reused_source == "existing_support":
+			invalid_reused = invalid_reused or str(reused.get("entity_id", "")).is_empty()
+		else:
+			invalid_reused = true
+		if invalid_reused:
+			return _error("invalid_reused_network_reference")
+		network_refs.append(reused.duplicate(true))
 	for item_value: Variant in network_jobs:
 		if not item_value is Dictionary:
 			return _error("invalid_route_package_jobs")
@@ -375,11 +402,14 @@ func record_route_package_jobs(
 		var kind := str(item.get("kind", ""))
 		if str(project.get("id", "")).is_empty() or str(job.get("id", "")).is_empty() or not _is_network_kind(kind):
 			return _error("invalid_route_package_jobs")
+		var segment_refs: Array = Array(item.get("segment_refs", [])).duplicate(true)
 		network_refs.append({
 			"project_id": str(project.get("id", "")),
 			"job_id": str(job.get("id", "")),
 			"kind": kind,
 			"status": "active",
+			"source": "new",
+			"segment_refs": segment_refs,
 		})
 	var candidate := session.duplicate(true)
 	candidate["station_refs"] = station_refs
@@ -387,8 +417,12 @@ func record_route_package_jobs(
 	var route_draft: Dictionary = Dictionary(candidate.get("route_draft", {})).duplicate(true)
 	route_draft["package_quote"] = package_quote.duplicate(true)
 	candidate["route_draft"] = route_draft
-	candidate["state"] = STATE_WAITING_CONSTRUCTION
-	candidate["resume_state"] = STATE_ROUTE_EDIT
+	if _snapshot_has_active_jobs(candidate):
+		candidate["state"] = STATE_WAITING_CONSTRUCTION
+		candidate["resume_state"] = STATE_ROUTE_EDIT
+	else:
+		candidate["state"] = STATE_ROUTE_EDIT
+		candidate["resume_state"] = ""
 	var semantic_error := _validate_state_semantics(candidate)
 	if not semantic_error.is_empty():
 		return _error(semantic_error)
@@ -482,6 +516,27 @@ func close(reason: String = "player_closed") -> Dictionary:
 	return _success()
 
 
+func rollback_route_package(reason: String = "player_cancelled_package") -> Dictionary:
+	if not is_route_package() or str(session.get("state", "")) == STATE_MATERIALIZED:
+		return _error("transport_package_not_rollbackable")
+	if not Array(session.get("route_refs", [])).is_empty():
+		return _error("transport_package_route_already_materialized")
+	var station_refs: Array = []
+	for ref_value: Variant in session.get("station_refs", []):
+		if ref_value is Dictionary and str((ref_value as Dictionary).get("source", "")) in ["existing", "existing_support"]:
+			station_refs.append((ref_value as Dictionary).duplicate(true))
+	var network_refs: Array = []
+	for ref_value: Variant in session.get("network_refs", []):
+		if ref_value is Dictionary and str((ref_value as Dictionary).get("source", "")) == "existing":
+			network_refs.append((ref_value as Dictionary).duplicate(true))
+	session["station_refs"] = station_refs
+	session["network_refs"] = network_refs
+	session["state"] = STATE_CLOSED
+	session["resume_state"] = ""
+	session["closed_reason"] = reason
+	return _success()
+
+
 func mark_job_completed(job_id: String, materialized_id: String = "") -> Dictionary:
 	if job_id.is_empty():
 		return _error("job_id_required")
@@ -559,13 +614,41 @@ func load_dict(data: Dictionary) -> bool:
 	if not bool(validation.get("valid", false)):
 		return false
 	next_session_sequence = int(migrated.get("next_session_sequence", 1))
-	session = Dictionary(migrated.get("session", _inactive_session())).duplicate(true)
+	session = _normalize_json_numbers(Dictionary(migrated.get("session", _inactive_session())).duplicate(true))
 	if session.get("route_draft", null) is Dictionary:
 		var route_draft: Dictionary = session.get("route_draft", {})
 		if route_draft.has("corridor_quote") and route_draft.get("corridor_quote", null) is Dictionary:
 			route_draft["corridor_quote"] = _normalize_corridor_quote(route_draft.get("corridor_quote", {}))
-			session["route_draft"] = route_draft
+		if route_draft.has("package_quote") and route_draft.get("package_quote", null) is Dictionary:
+			route_draft["package_quote"] = _normalize_package_quote(route_draft.get("package_quote", {}))
+		session["route_draft"] = route_draft
+	_canonicalize_loaded_references()
 	return true
+
+
+func _canonicalize_loaded_references() -> void:
+	if str(session.get("state", "")) == STATE_INACTIVE:
+		return
+	var station_refs: Array = []
+	for ref_value: Variant in session.get("station_refs", []):
+		if not ref_value is Dictionary:
+			continue
+		var ref: Dictionary = (ref_value as Dictionary).duplicate(true)
+		ref["anchor_tile_id"] = int(ref.get("anchor_tile_id", -1))
+		ref["occupied_tile_ids"] = _normalized_int_array(ref.get("occupied_tile_ids", []))
+		station_refs.append(ref)
+	session["station_refs"] = station_refs
+	var network_refs: Array = []
+	for ref_value: Variant in session.get("network_refs", []):
+		if not ref_value is Dictionary:
+			continue
+		var ref: Dictionary = (ref_value as Dictionary).duplicate(true)
+		if ref.has("tile_ids"):
+			ref["tile_ids"] = _normalized_int_array(ref.get("tile_ids", []))
+		if ref.has("segment_refs"):
+			ref["segment_refs"] = _normalize_package_segment_refs(ref.get("segment_refs", []), false)
+		network_refs.append(ref)
+	session["network_refs"] = network_refs
 
 
 static func create_from_dict(data: Dictionary):
@@ -638,11 +721,29 @@ static func validate_snapshot(data: Dictionary) -> Dictionary:
 		var corridor: Dictionary = Dictionary(route_draft.get("corridor_quote", {})).get("corridor", {})
 		if str(corridor.get("mode", "")) != str(current.get("mode", "")):
 			return {"valid": false, "error": "corridor_quote_mode_mismatch"}
+		var corridor_revision := str(route_draft.get("corridor_network_revision", ""))
+		if corridor_revision.length() != 64 or not corridor_revision.is_valid_hex_number(false):
+			return {"valid": false, "error": "invalid_corridor_network_revision"}
+	if route_draft.has("package_quote"):
+		var package_quote_value: Variant = route_draft.get("package_quote", null)
+		if not package_quote_value is Dictionary:
+			return {"valid": false, "error": "invalid_route_package_quote"}
+		var package_quote: Dictionary = package_quote_value
+		if str(package_quote.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V3:
+			var package_corridor_validation := TransportModesScript.validate_route_package_corridor_price_quote(
+				package_quote.get("corridor_quote", null)
+			)
+			if not bool(package_corridor_validation.get("valid", false)):
+				return {"valid": false, "error": "invalid_route_package_quote"}
+			var package_revision := str(package_quote.get("quote_network_revision", ""))
+			if package_revision.length() != 64 or not package_revision.is_valid_hex_number(false):
+				return {"valid": false, "error": "invalid_route_package_network_revision"}
 	for array_field: String in ["station_refs", "network_refs", "route_refs"]:
 		if not current.get(array_field, null) is Array:
 			return {"valid": false, "error": "invalid_session_field:%s" % array_field}
 	var seen_jobs: Dictionary = {}
 	var seen_station_ids: Dictionary = {}
+	var seen_segment_ids: Dictionary = {}
 	for ref_value: Variant in current.get("station_refs", []):
 		if not ref_value is Dictionary:
 			return {"valid": false, "error": "invalid_station_ref"}
@@ -677,6 +778,20 @@ static func validate_snapshot(data: Dictionary) -> Dictionary:
 			if seen_station_ids.has(station_id):
 				return {"valid": false, "error": "duplicate_station_reference"}
 			seen_station_ids[station_id] = true
+	var expected_corridor_quote: Dictionary = route_draft.get("package_quote", route_draft.get("corridor_quote", {}))
+	if expected_corridor_quote.has("corridor_quote"):
+		expected_corridor_quote = expected_corridor_quote.get("corridor_quote", {})
+	var expected_reused_refs: Array = Dictionary(expected_corridor_quote.get("corridor", {})).get("reused_segment_refs", [])
+	var observed_reused_refs: Array = []
+	for ref_value: Variant in current.get("network_refs", []):
+		if ref_value is Dictionary and str((ref_value as Dictionary).get("source", "")) == "existing":
+			observed_reused_refs.append({
+				"id": str((ref_value as Dictionary).get("segment_id", "")),
+				"kind": str((ref_value as Dictionary).get("kind", "")),
+				"tile_ids": Array((ref_value as Dictionary).get("tile_ids", [])).duplicate(),
+			})
+	if not observed_reused_refs.is_empty() and observed_reused_refs != expected_reused_refs:
+		return {"valid": false, "error": "reused_segment_reference_order_mismatch"}
 	for ref_value: Variant in current.get("network_refs", []):
 		if not ref_value is Dictionary:
 			return {"valid": false, "error": "invalid_network_ref"}
@@ -684,9 +799,33 @@ static func validate_snapshot(data: Dictionary) -> Dictionary:
 		if not _valid_ref_strings(ref, ["project_id", "job_id", "kind", "status"]):
 			return {"valid": false, "error": "invalid_network_ref"}
 		var network_job_id := str(ref.get("job_id", ""))
-		if str(ref.get("project_id", "")).is_empty() or network_job_id.is_empty() or seen_jobs.has(network_job_id):
+		var source := str(ref.get("source", ""))
+		if ref.has("source") and source not in ["existing", "existing_support", "new"]:
 			return {"valid": false, "error": "invalid_network_ref"}
-		seen_jobs[network_job_id] = true
+		if source == "existing":
+			var segment_id := str(ref.get("segment_id", ""))
+			if (
+				not network_job_id.is_empty()
+				or segment_id.is_empty()
+				or seen_segment_ids.has(segment_id)
+				or str(ref.get("status", "")) != "completed"
+				or not _valid_unique_integer_array(ref.get("tile_ids", null))
+			):
+				return {"valid": false, "error": "invalid_existing_network_ref"}
+			seen_segment_ids[segment_id] = true
+		elif source == "existing_support":
+			if (
+				not network_job_id.is_empty()
+				or str(ref.get("entity_id", "")).is_empty()
+				or str(ref.get("status", "")) != "completed"
+			):
+				return {"valid": false, "error": "invalid_existing_support_ref"}
+		elif str(ref.get("project_id", "")).is_empty() or network_job_id.is_empty() or seen_jobs.has(network_job_id):
+			return {"valid": false, "error": "invalid_network_ref"}
+		else:
+			seen_jobs[network_job_id] = true
+			if source == "new" and not ref.get("segment_refs", null) is Array:
+				return {"valid": false, "error": "invalid_new_network_ref"}
 		if not _is_network_kind(str(ref.get("kind", ""))) or str(ref.get("status", "")) not in NETWORK_REF_STATUSES:
 			return {"valid": false, "error": "invalid_network_ref"}
 		if not _network_kind_matches_mode(
@@ -719,14 +858,18 @@ static func validate_references(
 		return {"valid": true, "error": ""}
 	var jobs_value: Variant = construction_snapshot.get("jobs", null)
 	var projects_value: Variant = transport_snapshot.get("projects", null)
+	var segments_value: Variant = transport_snapshot.get("segments", null)
 	var routes_value: Variant = transport_snapshot.get("routes", null)
 	var stations_value: Variant = transport_snapshot.get("stations", null)
-	if not jobs_value is Dictionary or not projects_value is Dictionary or not routes_value is Dictionary or not stations_value is Dictionary:
+	var facilities_value: Variant = transport_snapshot.get("facilities", null)
+	if not jobs_value is Dictionary or not projects_value is Dictionary or not segments_value is Dictionary or not routes_value is Dictionary or not stations_value is Dictionary or not facilities_value is Dictionary:
 		return {"valid": false, "error": "missing_reference_authority"}
 	var jobs: Dictionary = jobs_value
 	var projects: Dictionary = projects_value
+	var segments: Dictionary = segments_value
 	var routes: Dictionary = routes_value
 	var stations: Dictionary = stations_value
+	var facilities: Dictionary = facilities_value
 	var route_draft: Dictionary = Dictionary(current.get("route_draft", {}))
 	var station_placements: Array = Array(route_draft.get("station_placements", []))
 	if not _reused_route_draft_placements_match_authority(current, station_placements, stations, buildings_snapshot):
@@ -782,6 +925,44 @@ static func validate_references(
 		var ref: Dictionary = ref_value
 		var job_id := str(ref.get("job_id", ""))
 		var project_id := str(ref.get("project_id", ""))
+		if str(ref.get("source", "")) == "existing_support":
+			var entity_id := str(ref.get("entity_id", ""))
+			if not facilities.has(entity_id) or not facilities[entity_id] is Dictionary:
+				return {"valid": false, "error": "reused_support_reference_missing"}
+			var reused_support: Dictionary = facilities[entity_id]
+			if (
+				str(reused_support.get("id", "")) != entity_id
+				or str(reused_support.get("status", "")) != "completed"
+				or str(reused_support.get("kind", "")) != str(ref.get("kind", ""))
+				or str(reused_support.get("project_id", "")) != project_id
+			):
+				return {"valid": false, "error": "reused_support_reference_changed"}
+			continue
+		if str(ref.get("source", "")) == "existing":
+			var segment_id := str(ref.get("segment_id", ""))
+			if not segments.has(segment_id) or not segments[segment_id] is Dictionary:
+				return {"valid": false, "error": "reused_segment_reference_missing"}
+			var reused_segment: Dictionary = segments[segment_id]
+			var quote: Dictionary = route_draft.get("package_quote", route_draft.get("corridor_quote", {}))
+			if quote.has("corridor_quote"):
+				quote = quote.get("corridor_quote", {})
+			var corridor: Dictionary = quote.get("corridor", {})
+			var corridor_tile_set: Dictionary = {}
+			for corridor_tile_value: Variant in corridor.get("route_tile_ids", []):
+				corridor_tile_set[int(corridor_tile_value)] = true
+			var matched_tiles: Array[int] = []
+			for tile_value: Variant in reused_segment.get("tile_path", []):
+				if corridor_tile_set.has(int(tile_value)):
+					matched_tiles.append(int(tile_value))
+			if (
+				str(reused_segment.get("id", "")) != segment_id
+				or str(reused_segment.get("status", "")) != "completed"
+				or str(reused_segment.get("kind", "")) != str(ref.get("kind", ""))
+				or str(reused_segment.get("project_id", "")) != project_id
+				or not _integer_arrays_equal(matched_tiles, ref.get("tile_ids", []))
+			):
+				return {"valid": false, "error": "reused_segment_reference_changed"}
+			continue
 		if not jobs.has(job_id) or not jobs[job_id] is Dictionary or not projects.has(project_id) or not projects[project_id] is Dictionary:
 			return {"valid": false, "error": "network_reference_missing"}
 		var job: Dictionary = jobs[job_id]
@@ -798,6 +979,35 @@ static func validate_references(
 			or not _reference_status_matches_project(str(ref.get("status", "")), str(project.get("status", "")))
 		):
 			return {"valid": false, "error": "network_reference_mismatch"}
+		if str(ref.get("source", "")) == "new":
+			var project_segments: Dictionary = {}
+			for segment_value: Variant in Dictionary(project.get("plan", {})).get("segments", []):
+				if segment_value is Dictionary:
+					project_segments[str((segment_value as Dictionary).get("id", ""))] = segment_value
+			for segment_ref_value: Variant in ref.get("segment_refs", []):
+				if not segment_ref_value is Dictionary:
+					return {"valid": false, "error": "invalid_new_segment_reference"}
+				var segment_ref: Dictionary = segment_ref_value
+				var segment_id := str(segment_ref.get("id", ""))
+				if not project_segments.has(segment_id):
+					return {"valid": false, "error": "new_segment_project_mismatch"}
+				var planned_segment: Dictionary = project_segments[segment_id]
+				if (
+					str(planned_segment.get("kind", "")) != str(segment_ref.get("kind", ""))
+					or planned_segment.get("tile_path", null) != segment_ref.get("tile_ids", null)
+				):
+					return {"valid": false, "error": "new_segment_project_mismatch"}
+				if str(ref.get("status", "")) == "completed":
+					if not segments.has(segment_id) or not segments[segment_id] is Dictionary:
+						return {"valid": false, "error": "new_segment_reference_missing"}
+					var completed_segment: Dictionary = segments[segment_id]
+					if (
+						str(completed_segment.get("status", "")) != "completed"
+						or str(completed_segment.get("project_id", "")) != project_id
+						or str(completed_segment.get("kind", "")) != str(segment_ref.get("kind", ""))
+						or completed_segment.get("tile_path", null) != segment_ref.get("tile_ids", null)
+					):
+						return {"valid": false, "error": "new_segment_reference_changed"}
 	var completed_station_ids := _completed_station_ids(current)
 	for route_value: Variant in current.get("route_refs", []):
 		var route_id := str(route_value)
@@ -1126,7 +1336,10 @@ static func _validate_route_package_phase(current: Dictionary, phase: String, ma
 		if station_refs.size() != placements.size() or network_refs.is_empty():
 			return "invalid_route_package_jobs"
 	elif not station_refs.is_empty() or not network_refs.is_empty():
-		return "route_package_jobs_before_confirmation"
+		if not route_draft.has("package_quote"):
+			return "route_package_jobs_before_confirmation"
+		if _snapshot_has_active_jobs(current):
+			return "route_package_active_jobs_not_waiting"
 	return ""
 
 
@@ -1311,6 +1524,93 @@ static func _normalize_corridor_quote(value: Variant) -> Dictionary:
 	if source.has("ok"):
 		result["ok"] = bool(source.get("ok", false))
 	return result
+
+
+static func _normalize_package_quote(value: Variant) -> Dictionary:
+	if not value is Dictionary:
+		return {}
+	var source: Dictionary = value
+	var result: Dictionary = {}
+	for field_name: String in [
+		"workflow", "price_model", "price_provenance", "quote_network_revision", "mode", "network_kind",
+	]:
+		result[field_name] = str(source.get(field_name, ""))
+	for field_name: String in [
+		"route_tile_count", "station_building_cost", "route_construction_cost", "support_facility_cost",
+		"level_crossing_cost", "total_cost", "route_monthly_maintenance", "support_monthly_maintenance",
+		"level_crossing_monthly_maintenance", "total_monthly_maintenance",
+	]:
+		result[field_name] = int(source.get(field_name, 0))
+	result["corridor_quote"] = _normalize_corridor_quote(source.get("corridor_quote", {}))
+	result["price_breakdown"] = _normalize_integer_dictionary(source.get("price_breakdown", {}))
+	result["maintenance_breakdown"] = _normalize_integer_dictionary(source.get("maintenance_breakdown", {}))
+	result["crossing_tile_ids"] = _normalized_int_array(source.get("crossing_tile_ids", []))
+	result["new_project_ids"] = _normalized_string_array(source.get("new_project_ids", []))
+	result["new_job_ids"] = _normalized_string_array(source.get("new_job_ids", []))
+	result["reused_segment_refs"] = _normalize_package_segment_refs(source.get("reused_segment_refs", []), false)
+	result["new_segment_refs"] = _normalize_package_segment_refs(source.get("new_segment_refs", []), true)
+	var blueprint_usage_before: Array = []
+	for usage_value: Variant in source.get("blueprint_usage_before", []):
+		if usage_value is Dictionary:
+			blueprint_usage_before.append({
+				"library_id": str((usage_value as Dictionary).get("library_id", "")),
+				"usage_count": int((usage_value as Dictionary).get("usage_count", 0)),
+				"had_last_used_day": bool((usage_value as Dictionary).get("had_last_used_day", false)),
+				"last_used_day": int((usage_value as Dictionary).get("last_used_day", 0)),
+			})
+	result["blueprint_usage_before"] = blueprint_usage_before
+	return result
+
+
+static func _normalize_package_segment_refs(value: Variant, include_job: bool) -> Array:
+	var result: Array = []
+	if not value is Array:
+		return result
+	for ref_value: Variant in value:
+		if not ref_value is Dictionary:
+			continue
+		var ref: Dictionary = {
+			"id": str((ref_value as Dictionary).get("id", "")),
+			"kind": str((ref_value as Dictionary).get("kind", "")),
+			"tile_ids": _normalized_int_array((ref_value as Dictionary).get("tile_ids", [])),
+		}
+		if include_job:
+			ref["project_id"] = str((ref_value as Dictionary).get("project_id", ""))
+			ref["job_id"] = str((ref_value as Dictionary).get("job_id", ""))
+		result.append(ref)
+	return result
+
+
+static func _normalize_integer_dictionary(value: Variant) -> Dictionary:
+	var result: Dictionary = {}
+	if value is Dictionary:
+		for key_value: Variant in (value as Dictionary).keys():
+			result[str(key_value)] = int((value as Dictionary)[key_value])
+	return result
+
+
+static func _normalized_string_array(value: Variant) -> Array[String]:
+	var result: Array[String] = []
+	if value is Array:
+		for item: Variant in value:
+			result.append(str(item))
+	return result
+
+
+static func _normalize_json_numbers(value: Variant) -> Variant:
+	if value is float and is_equal_approx(value, floor(value)):
+		return int(value)
+	if value is Dictionary:
+		var result: Dictionary = {}
+		for key: Variant in (value as Dictionary).keys():
+			result[key] = _normalize_json_numbers((value as Dictionary)[key])
+		return result
+	if value is Array:
+		var result: Array = []
+		for item: Variant in value:
+			result.append(_normalize_json_numbers(item))
+		return result
+	return value
 
 
 static func _normalized_int_array(value: Variant) -> Array[int]:

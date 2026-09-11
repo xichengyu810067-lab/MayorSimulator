@@ -64,10 +64,10 @@ func _test_atomic_package_and_automatic_route() -> void:
 	_check(bool(standalone_route_quote.get("ok", false)), "same-topology standalone route quotes successfully")
 	_check(int(quote.get("route_construction_cost", -1)) == int(standalone_route_quote.get("total_cost", -2)), "package route construction equals same-topology standalone quote_project")
 	_check(int(quote.get("route_monthly_maintenance", -1)) == int(standalone_route_quote.get("monthly_maintenance", -2)), "package route maintenance equals same-topology standalone quote_project")
-	_check(int(quote.get("route_construction_cost", -1)) == 2_600, "five-cell v2 road construction uses the authoritative road rate")
-	_check(int(quote.get("route_monthly_maintenance", -1)) == 90, "five-cell v2 road maintenance uses the authoritative road rate")
-	_check(str(quote.get("price_model", "")) == "route_package_v2", "new package quote uses v2 pricing")
-	_check(str(quote.get("price_provenance", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_PROVENANCE, "new package quote names quote_project provenance")
+	_check(int(quote.get("route_construction_cost", -1)) == 2_600, "five-cell v3 road construction uses the authoritative new-run rate")
+	_check(int(quote.get("route_monthly_maintenance", -1)) == 90, "five-cell v3 road maintenance uses the authoritative new-run rate")
+	_check(str(quote.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_MODEL, "new package quote uses v3 reuse-aware pricing")
+	_check(str(quote.get("price_provenance", "")) == TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_PROVENANCE, "new package quote names completed-corridor provenance")
 	_check(int(quote.get("total_cost", -1)) == int(quote.get("station_building_cost", 0)) + 2_600 + int(quote.get("support_facility_cost", 0)) + int(quote.get("level_crossing_cost", 0)), "total is station buildings plus parity route and explicit support/crossing fees")
 	_check(int(quote.get("support_facility_cost", 0)) == 3_600, "missing connected bus depot is included explicitly")
 	var negative_entries_before := _negative_ledger_count(coordinator)
@@ -80,17 +80,17 @@ func _test_atomic_package_and_automatic_route() -> void:
 	_check(str(coordinator.transport_planning_session_snapshot().get("state", "")) == "waiting_construction", "package waits in the same session")
 	var persisted_quote: Dictionary = coordinator.transport_planning_session_snapshot().get("route_draft", {}).get("package_quote", {})
 	_check(not persisted_quote.has("station_placements") and not persisted_quote.has("support_plans"), "session persists price provenance without duplicating executable blueprints or project plans")
-	_check(str(persisted_quote.get("price_model", "")) == "route_package_v2" and str(persisted_quote.get("price_provenance", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_PROVENANCE, "session persists v2 model and provenance")
+	_check(str(persisted_quote.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_MODEL and str(persisted_quote.get("price_provenance", "")) == TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_PROVENANCE, "session persists v3 model and provenance")
 	var waiting_transport_snapshot: Dictionary = coordinator.transport.to_dict()
-	_check(bool(coordinator.transport.validate_snapshot(waiting_transport_snapshot).get("valid", false)), "waiting v2 project snapshot validates")
+	_check(bool(coordinator.transport.validate_snapshot(waiting_transport_snapshot).get("valid", false)), "waiting v3 project snapshot validates")
 	var corrupted_waiting_snapshot := waiting_transport_snapshot.duplicate(true)
-	var corrupted_project_id := _first_v2_project_id(corrupted_waiting_snapshot)
-	_check(not corrupted_project_id.is_empty(), "waiting snapshot contains the v2 route project")
+	var corrupted_project_id := _first_v3_project_id(corrupted_waiting_snapshot)
+	_check(not corrupted_project_id.is_empty(), "waiting snapshot contains the v3 route project")
 	if not corrupted_project_id.is_empty():
 		corrupted_waiting_snapshot["projects"][corrupted_project_id]["plan"]["segments"][0]["route_monthly_maintenance"] += 1
 		corrupted_waiting_snapshot["projects"][corrupted_project_id]["quote"]["plan"] = corrupted_waiting_snapshot["projects"][corrupted_project_id]["plan"].duplicate(true)
 		var corrupted_waiting_validation: Dictionary = coordinator.transport.validate_snapshot(corrupted_waiting_snapshot)
-		_check(not bool(corrupted_waiting_validation.get("valid", true)) and _issues_have(corrupted_waiting_validation, "invalid_build_segment_v2_price_parity"), "tampered waiting v2 project pricing fails closed")
+		_check(not bool(corrupted_waiting_validation.get("valid", true)) and _issues_have(corrupted_waiting_validation, "invalid_build_segment_v3_price_parity"), "tampered waiting v3 project pricing fails closed")
 	_check(coordinator.transport.routes.is_empty(), "route is not activated before construction completes")
 	var max_days := _maximum_active_days(coordinator)
 	coordinator.advance_days(max_days, {}, false)
@@ -99,14 +99,14 @@ func _test_atomic_package_and_automatic_route() -> void:
 	_check(coordinator.transport.routes.size() == 1, "one route is created automatically without reopening the UI")
 	var route: Dictionary = coordinator.transport.routes.values()[0]
 	_check(str(route.get("status", "")) == "operational", "automatic route passes topology and activates")
-	_check(str(route.get("price_model", "")) == "route_package_v2", "route retains its v2 price model")
-	_check(str(route.get("price_provenance", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_PROVENANCE, "route retains its quote_project provenance")
+	_check(str(route.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_MODEL, "route retains its v3 price model")
+	_check(str(route.get("price_provenance", "")) == TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_PROVENANCE, "route retains its completed-corridor provenance")
 	_check(int(route.get("route_monthly_maintenance", -1)) == 90, "route retains the quoted monthly result")
 	var corrupted_route_snapshot: Dictionary = coordinator.transport.to_dict().duplicate(true)
 	var route_id := str(coordinator.transport.routes.keys()[0])
 	corrupted_route_snapshot["routes"][route_id]["route_construction_cost"] += 1
 	var corrupted_route_validation: Dictionary = coordinator.transport.validate_snapshot(corrupted_route_snapshot)
-	_check(not bool(corrupted_route_validation.get("valid", true)) and _issues_have(corrupted_route_validation, "invalid_route_v2_price_parity"), "tampered materialized v2 route pricing fails closed")
+	_check(not bool(corrupted_route_validation.get("valid", true)) and _issues_have(corrupted_route_validation, "route_v3_price_breakdown_mismatch"), "tampered materialized v3 route pricing fails closed")
 	_check(coordinator.transport_incremental_monthly_maintenance() == 90 + 120 + 2 * 42, "incremental maintenance replaces segment rate, excludes station duplicate, and retains depot/fleet detail")
 	_check(coordinator.save_game(SAVE_PATH) == OK, "materialized package saves")
 	var restored = CoordinatorScript.new(1, 1)
@@ -400,11 +400,11 @@ func _maximum_active_days(coordinator) -> int:
 	return maxi(1, result)
 
 
-func _first_v2_project_id(snapshot: Dictionary) -> String:
+func _first_v3_project_id(snapshot: Dictionary) -> String:
 	for project_id_variant: Variant in Dictionary(snapshot.get("projects", {})).keys():
 		var project: Dictionary = snapshot["projects"][project_id_variant]
 		for segment_value: Variant in Dictionary(project.get("plan", {})).get("segments", []):
-			if segment_value is Dictionary and str((segment_value as Dictionary).get("price_model", "")) == "route_package_v2":
+			if segment_value is Dictionary and str((segment_value as Dictionary).get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_MODEL:
 				return str(project_id_variant)
 	return ""
 
