@@ -176,6 +176,8 @@ func _run() -> void:
 	var governance_step: Dictionary = await _complete_governance_step(main)
 	var judicial_case_id := str(governance_step.get("judicial_case_id", ""))
 	var oversight_case_id := str(governance_step.get("oversight_case_id", ""))
+	var old_judicial_case_id := str(governance_step.get("old_judicial_case_id", ""))
+	var old_oversight_case_id := str(governance_step.get("old_oversight_case_id", ""))
 	_check(bool(governance_step.get("ok", false)), "real bill, hearing, rejection, and force-enact UI completes governance: %s" % governance_step)
 	_check(main.onboarding_progress.current_target() == "judicial", "unique force-enact authority advances to judicial defense")
 	var ambiguous_event_book: Array = main.vertical_slice.session.state.event_book.duplicate(true)
@@ -202,6 +204,7 @@ func _run() -> void:
 	_check(main.onboarding_progress.current_target() == "oversight", "successful linked judicial defense advances once")
 	_check(str(judicial_receipt.get("authority_id", "")) == "judicial_case" and str(judicial_receipt.get("entity_id", "")) == judicial_case_id, "judicial receipt binds the canonical force-linked case")
 	_check(str(main.vertical_slice.governance.judiciary_cases.get(judicial_case_id, {}).get("defense_template_id", "")) == "public_interest", "judicial authority stores the submitted defense")
+	_check(str(main.vertical_slice.governance.judiciary_cases.get(old_judicial_case_id, {}).get("defense_template_id", "")).is_empty(), "judicial onboarding defense does not mutate the pre-existing case")
 	_check(int(main.get("_autosave_count")) == judicial_autosaves + 1, "judicial defense and receipt share one autosave")
 	_check(not main.onboarding_action_router.record_oversight_defense_success(oversight_case_id, "full_disclosure", {"ok": false}, main.vertical_slice.governance, main.vertical_slice.session.state.event_book, main.vertical_slice.game_day()), "failed oversight result cannot advance the linked inquiry")
 
@@ -221,6 +224,7 @@ func _run() -> void:
 	_check(main.onboarding_progress.is_completed() and main.onboarding_progress.current_target().is_empty(), "ninth authoritative action completes onboarding")
 	_check(str(oversight_receipt.get("authority_id", "")) == "oversight_case" and str(oversight_receipt.get("entity_id", "")) == oversight_case_id, "oversight receipt binds the canonical force-linked inquiry")
 	_check(str(main.vertical_slice.governance.oversight_cases.get(oversight_case_id, {}).get("defense_template_id", "")) == "full_disclosure", "oversight authority stores the submitted defense")
+	_check(str(main.vertical_slice.governance.oversight_cases.get(old_oversight_case_id, {}).get("defense_template_id", "")).is_empty(), "oversight onboarding defense does not mutate the pre-existing case")
 	_check(int(main.get("_autosave_count")) == oversight_autosaves + 1, "oversight defense, final receipt, and completion share one autosave")
 	_check(main.tutorial_completed, "ninth step sets the legacy tutorial-completed compatibility flag")
 	main.call("_refresh_onboarding_guide")
@@ -317,6 +321,26 @@ func _complete_governance_step(main) -> Dictionary:
 		_press_named(main, "GovernanceButton")
 		await _settle(3)
 
+	var justice_system = main.vertical_slice.governance.justice_system
+	var old_judicial: Dictionary = justice_system.open_judicial_case(
+		"environment_act",
+		main.vertical_slice.game_day(),
+		45,
+		"既有司法審查案件"
+	)
+	var old_oversight: Dictionary = justice_system.open_oversight_case(
+		"official_mayor",
+		["既有監察調查"],
+		65,
+		main.vertical_slice.game_day()
+	)
+	var old_judicial_case_id := str(old_judicial.get("case", {}).get("id", ""))
+	var old_oversight_case_id := str(old_oversight.get("case", {}).get("id", ""))
+	main.judicial_panel.refresh(justice_system)
+	main.oversight_panel.refresh(justice_system)
+	_check(not old_judicial_case_id.is_empty() and not old_oversight_case_id.is_empty(), "pre-existing investigating judicial and oversight fixtures open")
+	_check(main.judicial_panel.select_case_by_id(old_judicial_case_id) and main.oversight_panel.select_case_by_id(old_oversight_case_id), "pre-existing cases are selected before force enact")
+	_check(str(main.judicial_panel.selected_case_id()) == old_judicial_case_id and str(main.oversight_panel.selected_case_id()) == old_oversight_case_id, "force enact begins with old judicial and oversight selections")
 	var judicial_before: Array = main.vertical_slice.governance.judiciary_cases.keys()
 	var oversight_before: Array = main.vertical_slice.governance.oversight_cases.keys()
 	var checks_before: int = main.vertical_slice.governance.checks_and_balances_history.size()
@@ -330,12 +354,19 @@ func _complete_governance_step(main) -> Dictionary:
 	var oversight_case_id := _single_new_id(main.vertical_slice.governance.oversight_cases, oversight_before)
 	var governance_receipt := _receipt_at(main, 6)
 	_check(not judicial_case_id.is_empty() and not oversight_case_id.is_empty(), "force enact creates one linked judicial and one linked oversight case")
+	_check(main.vertical_slice.governance.judiciary_cases.size() == judicial_before.size() + 1 and main.vertical_slice.governance.oversight_cases.size() == oversight_before.size() + 1, "force enact creates no extra judicial or oversight cases")
 	_check(str(governance_receipt.get("authority_id", "")) == "bill_force_enactment" and str(governance_receipt.get("entity_id", "")) == judicial_case_id, "governance receipt binds the canonical judicial ID that reconstructs the force fact")
 	_check(main.vertical_slice.governance.checks_and_balances_history.size() == checks_before + 1, "force enact adds one checks-and-balances record")
 	_check(main.vertical_slice.session.state.event_book.size() == event_book_before + 1, "force enact adds one core authority fact")
 	_check(_force_fact_count(main.vertical_slice.session.state.event_book, judicial_case_id, oversight_case_id) == 1, "four-field governance receipt reconstructs exactly one force event and oversight link")
 	_check(int(main.get("_autosave_count")) == force_autosaves + 1, "force event, linked cases, and governance receipt share one autosave")
-	return {"ok": not judicial_case_id.is_empty() and not oversight_case_id.is_empty(), "judicial_case_id": judicial_case_id, "oversight_case_id": oversight_case_id}
+	return {
+		"ok": not judicial_case_id.is_empty() and not oversight_case_id.is_empty(),
+		"judicial_case_id": judicial_case_id,
+		"oversight_case_id": oversight_case_id,
+		"old_judicial_case_id": old_judicial_case_id,
+		"old_oversight_case_id": old_oversight_case_id,
+	}
 
 
 func _latest_decision(main, bill_id: String) -> Dictionary:

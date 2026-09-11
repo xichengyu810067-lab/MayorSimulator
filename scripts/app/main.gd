@@ -1879,7 +1879,9 @@ func _resolve_justice_onboarding_target(mode: String) -> Control:
 	if expected_case_id.is_empty() or panel == null:
 		return null
 	if str(panel.call("selected_case_id")) != expected_case_id:
-		return _visible_control_named("CaseSelector")
+		var selection_result: Variant = panel.call("select_case_by_id", expected_case_id)
+		if selection_result == null or not bool(selection_result):
+			return null
 	return _visible_control_named(
 		"PublicInterestDefenseButton" if mode == "judicial" else "FullDisclosureDefenseButton"
 	)
