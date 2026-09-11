@@ -72,18 +72,65 @@ exit /b $ExitCode
     [IO.File]::WriteAllText($Path, $body, [Text.UTF8Encoding]::new($false))
 }
 
+function Remove-InvocationFixtureDirectory {
+    param(
+        [Parameter(Mandatory)][string]$FixtureDirectory,
+        [Parameter(Mandatory)][string]$InvocationName,
+        [Parameter(Mandatory)][string]$TempDirectory
+    )
+
+    Assert-True -Condition ([IO.Directory]::Exists($FixtureDirectory)) -Message "cleanup target did not exist: $FixtureDirectory"
+
+    $resolvedTarget = (Resolve-Path -LiteralPath $FixtureDirectory -ErrorAction Stop).Path
+    $resolvedSystemTemp = (Resolve-Path -LiteralPath $TempDirectory -ErrorAction Stop).Path
+    $targetName = [IO.Path]::GetFileName($resolvedTarget.TrimEnd('\'))
+    Assert-True -Condition ($targetName -ceq $InvocationName) -Message "cleanup target name was not created by this invocation: $resolvedTarget"
+    Assert-True -Condition ($targetName -match '^mayor-isolated-playtest-contract(?:-project)?-[0-9a-f]{32}$') -Message "cleanup target name was not an allowed contract fixture name: $resolvedTarget"
+
+    $canonicalParent = [IO.Path]::GetFullPath(([IO.Directory]::GetParent($resolvedTarget)).FullName).TrimEnd('\')
+    $canonicalSystemTemp = [IO.Path]::GetFullPath($resolvedSystemTemp).TrimEnd('\')
+    Assert-True -Condition ($canonicalParent -ieq $canonicalSystemTemp) -Message "cleanup target parent was not the system temp directory: $resolvedTarget"
+    Assert-True -Condition ($canonicalParent -ine [IO.Path]::GetPathRoot($canonicalParent).TrimEnd('\')) -Message "cleanup target parent resolved to a filesystem root: $resolvedTarget"
+
+    $cursor = $resolvedTarget
+    while ($true) {
+        $item = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
+        Assert-True -Condition (([IO.FileAttributes]$item.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) -Message "cleanup target contains a reparse point: $cursor"
+        if ($cursor.TrimEnd('\') -ieq $resolvedSystemTemp.TrimEnd('\')) { break }
+        $parentInfo = [IO.Directory]::GetParent($cursor)
+        $parent = if ($null -eq $parentInfo) { $null } else { $parentInfo.FullName }
+        Assert-True -Condition (-not [string]::IsNullOrWhiteSpace($parent) -and $parent -ine $cursor) -Message "cleanup target did not resolve beneath system temp: $resolvedTarget"
+        $cursor = $parent
+    }
+
+    Remove-Item -LiteralPath $resolvedTarget -Recurse -Force -ErrorAction Stop
+}
+
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..') -ErrorAction Stop).Path
 $WindowsPowerShellExe = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
 if (-not (Test-Path -LiteralPath $WindowsPowerShellExe -PathType Leaf)) { throw "Windows PowerShell 5.1 is unavailable: $WindowsPowerShellExe" }
 $runner = Join-Path $projectRoot 'tools\run_isolated_playtest.ps1'
 if (-not (Test-Path -LiteralPath $runner -PathType Leaf)) { throw "Runner not found: $runner" }
-$testRoot = Join-Path ([IO.Path]::GetTempPath()) ('mayor-isolated-playtest-contract-' + [Guid]::NewGuid().ToString('N'))
+$systemTempPath = [IO.Path]::GetTempPath()
+$testRootName = 'mayor-isolated-playtest-contract-' + [Guid]::NewGuid().ToString('N')
+$fixtureProjectRootName = 'mayor-isolated-playtest-contract-project-' + [Guid]::NewGuid().ToString('N')
+$testRoot = Join-Path $systemTempPath $testRootName
+$fixtureProjectRoot = Join-Path $systemTempPath $fixtureProjectRootName
+$testRootCreated = $false
+$fixtureProjectRootCreated = $false
+$changedFixturePath = $null
+$originalTrackedFixtureBytes = $null
+
+try {
 New-Item -ItemType Directory -Path $testRoot -ErrorAction Stop | Out-Null
-$fixtureProjectRoot = Join-Path ([IO.Path]::GetTempPath()) ('mayor-isolated-playtest-contract-project-' + [Guid]::NewGuid().ToString('N'))
+$testRootCreated = $true
 New-Item -ItemType Directory -Path $fixtureProjectRoot -ErrorAction Stop | Out-Null
+$fixtureProjectRootCreated = $true
 [IO.File]::WriteAllText((Join-Path $fixtureProjectRoot 'project.godot'), "[application]`nconfig/name=`"Isolated Runner Contract`"`n", [Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText((Join-Path $fixtureProjectRoot 'tracked-fixture.txt'), "original`n", [Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText((Join-Path $fixtureProjectRoot '.gitignore'), ".tmp/`n", [Text.UTF8Encoding]::new($false))
+$changedFixturePath = Join-Path $fixtureProjectRoot 'tracked-fixture.txt'
+$originalTrackedFixtureBytes = [IO.File]::ReadAllBytes($changedFixturePath)
 & git -C $fixtureProjectRoot init -q
 & git -C $fixtureProjectRoot -c user.name='Runner Contract' -c user.email='runner-contract@example.invalid' add .gitignore project.godot tracked-fixture.txt
 & git -C $fixtureProjectRoot -c user.name='Runner Contract' -c user.email='runner-contract@example.invalid' commit -q -m 'contract fixture'
@@ -157,7 +204,6 @@ Assert-True -Condition ($invalidRendererExit -ne 0) -Message 'renderer argument 
 $traversalResult = Invoke-IsolatedRunner -Runner $runner -Child $successChild -ProfileName '..' -MinimumRuntimeSeconds 1 -RendererMode Mobile -TestProjectRoot $fixtureProjectRoot
 Assert-True -Condition ([int]$traversalResult.exit_code -ne 0) -Message 'traversal profile unexpectedly passed validation'
 
-$changedFixturePath = Join-Path $fixtureProjectRoot 'tracked-fixture.txt'
 $sourceChangeProfile = 'synthetic-source-change-' + $profileSuffix
 $sourceChangeChild = Join-Path $testRoot 'source-change-child.cmd'
 New-SyntheticChild -Path $sourceChangeChild -SleepSeconds 3 -ExitCode 0 -ConcurrentMutationPath $changedFixturePath
@@ -169,8 +215,22 @@ Assert-True -Condition ($sourceChangeSummary.status -eq 'source_changed') -Messa
 Assert-True -Condition ([int]$sourceChangeSummary.process.process_id -gt 0 -and [int]$sourceChangeSummary.process.child_exit_code -eq 0) -Message 'source-changing child evidence was not retained'
 Assert-True -Condition (-not [string]::IsNullOrWhiteSpace([string]$sourceChangeSummary.isolation.godot_log_sha256)) -Message 'source-changing child log hash was not retained'
 Assert-True -Condition ($sourceChangeSummary.source.before_run.status -eq '' -and $sourceChangeSummary.source.after_run.status -match 'tracked-fixture.txt') -Message 'source-change before/after status was not retained'
-[IO.File]::WriteAllText($changedFixturePath, "original`n", [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllBytes($changedFixturePath, $originalTrackedFixtureBytes)
 $fixtureStatusAfterRestore = (& git -C $fixtureProjectRoot status --porcelain=v1) -join "`n"
 Assert-True -Condition ([string]::IsNullOrWhiteSpace($fixtureStatusAfterRestore)) -Message 'source-change fixture was not restored cleanly'
 
-Write-Output 'ISOLATED_PLAYTEST_RUNNER_CONTRACT_PASSED: checks=25'
+Write-Output 'ISOLATED_PLAYTEST_RUNNER_CONTRACT_PASSED: checks=27'
+}
+finally {
+    if ($null -ne $originalTrackedFixtureBytes -and -not [string]::IsNullOrWhiteSpace($changedFixturePath)) {
+        [IO.File]::WriteAllBytes($changedFixturePath, $originalTrackedFixtureBytes)
+    }
+    if ($fixtureProjectRootCreated) {
+        Remove-InvocationFixtureDirectory -FixtureDirectory $fixtureProjectRoot -InvocationName $fixtureProjectRootName -TempDirectory $systemTempPath
+    }
+    if ($testRootCreated) {
+        Remove-InvocationFixtureDirectory -FixtureDirectory $testRoot -InvocationName $testRootName -TempDirectory $systemTempPath
+    }
+    Assert-True -Condition (-not [IO.Directory]::Exists($fixtureProjectRoot)) -Message "fixture project directory remained after cleanup: $fixtureProjectRoot"
+    Assert-True -Condition (-not [IO.Directory]::Exists($testRoot)) -Message "fixture tool directory remained after cleanup: $testRoot"
+}
