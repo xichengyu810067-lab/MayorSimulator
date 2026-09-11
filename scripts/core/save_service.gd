@@ -32,6 +32,7 @@ var _owned_temporary_paths: Dictionary = {}
 var _temporary_writer_for_testing: Callable = Callable()
 var _atomic_stage_hook_for_testing: Callable = Callable()
 var _verified_use_hook_for_testing: Callable = Callable()
+var _quarantine_observer_for_testing: Callable = Callable()
 
 
 func encode(envelope) -> String:
@@ -159,6 +160,12 @@ func set_verified_use_hook_for_testing(hook: Callable) -> void:
 	# Unit tests inject a race only after a candidate has been fully validated.
 	# Product code has no environment or command-line route to this callback.
 	_verified_use_hook_for_testing = hook
+
+
+func set_quarantine_observer_for_testing(observer: Callable) -> void:
+	# Unit tests can verify the exact private destination without enumerating or
+	# opening unrelated quarantine entries. Product code never installs it.
+	_quarantine_observer_for_testing = observer
 
 
 func _write_temporary_file(temporary_path: String, encoded: String, primary_path: String = "", backup_path: String = "") -> Error:
@@ -369,6 +376,9 @@ func _fingerprint_path(path: String) -> Dictionary:
 	if file == null:
 		return {"ok": false, "exists": true, "error": FileAccess.get_open_error()}
 	var length := file.get_length()
+	if length > SaveEnvelopeScript.MAX_SAVE_FILE_BYTES:
+		file.close()
+		return {"ok": false, "exists": true, "length": length, "error": ERR_FILE_CORRUPT}
 	var context := HashingContext.new()
 	if context.start(HashingContext.HASH_SHA256) != OK:
 		file.close()
@@ -554,10 +564,17 @@ func _quarantine_existing_path(path: String, base_path: String) -> Dictionary:
 		return {"ok": true, "path": ""}
 	var parked := _park_existing_path(path, base_path, "untrusted")
 	if bool(parked.get("ok", false)):
+		var parked_path := str(parked.get("path", ""))
 		# The content is deliberately no longer considered writer-owned. Keeping
 		# it in the unpredictable directory preserves unknown data for diagnosis.
-		_abandon_owned_temporary(str(parked.get("path", "")))
+		_abandon_owned_temporary(parked_path)
+		_notify_quarantine_for_testing(path, parked_path)
 	return parked
+
+
+func _notify_quarantine_for_testing(source_path: String, quarantine_path: String) -> void:
+	if _quarantine_observer_for_testing.is_valid() and not quarantine_path.is_empty():
+		_quarantine_observer_for_testing.call(source_path, quarantine_path)
 
 
 func _restore_parked_path(parked_path: String, target_path: String, base_path: String) -> bool:
@@ -610,6 +627,7 @@ func _restore_trusted_path_after_drift(path: String, trusted_snapshot: Dictionar
 		return false
 	if not quarantine_path.is_empty():
 		_abandon_owned_temporary(quarantine_path)
+		_notify_quarantine_for_testing(path, quarantine_path)
 	return true
 
 

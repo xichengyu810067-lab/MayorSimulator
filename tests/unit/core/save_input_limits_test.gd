@@ -11,6 +11,8 @@ var _checks := 0
 var _race_action := ""
 var _race_replacement := ""
 var _race_replaced_path := ""
+var _race_replacement_is_oversized := false
+var _observed_quarantines: Array[Dictionary] = []
 
 
 func _initialize() -> void:
@@ -22,6 +24,8 @@ func _initialize() -> void:
 	_test_verified_temporary_replacement_is_refused()
 	_test_verified_primary_replacement_restores_authoritative_snapshot()
 	_test_validated_backup_replacement_is_refused()
+	_test_oversized_primary_replacement_restores_authoritative_snapshot()
+	_test_oversized_backup_replacement_restores_authoritative_snapshot()
 	_test_file_size_boundary()
 	_test_json_scanner_boundaries()
 	_test_depth_boundaries()
@@ -138,13 +142,15 @@ func _test_verified_primary_replacement_restores_authoritative_snapshot() -> voi
 	_race_replacement = service.encode(_make_envelope("primary-evil!"))
 	_race_replaced_path = ""
 	service.set_verified_use_hook_for_testing(Callable(self, "_replace_verified_candidate"))
+	service.set_quarantine_observer_for_testing(Callable(self, "_record_quarantine"))
 	var save_error: Error = service.save_atomic(TEST_PATH, _make_envelope("replacement"))
 	service.set_verified_use_hook_for_testing(Callable())
+	service.set_quarantine_observer_for_testing(Callable())
 	_check(save_error == ERR_FILE_CORRUPT, "replacing the verified public primary before rotation is refused")
 	_check(service.last_error_message.contains("changed after verification"), "primary race reports the verification/use drift")
 	_check(_read_bytes(absolute_path) == primary_before, "primary race restores the verified original primary byte-for-byte")
 	_check(_read_bytes(backup_path) == backup_before, "primary race preserves the existing backup byte-for-byte")
-	_check(_find_private_payload_with_text_for_base(absolute_path, "untrusted", _race_replacement), "primary replacement is quarantined rather than adopted or deleted")
+	_check(_observed_quarantine_has_text(absolute_path, _race_replacement), "primary replacement is quarantined rather than adopted or deleted")
 	_check(_read_bytes(absolute_path) != _race_replacement.to_utf8_buffer(), "unverified replacement candidate is never installed as primary")
 	_cleanup()
 
@@ -164,14 +170,75 @@ func _test_validated_backup_replacement_is_refused() -> void:
 	_race_replacement = service.encode(_make_envelope("backup-evil!"))
 	_race_replaced_path = ""
 	service.set_verified_use_hook_for_testing(Callable(self, "_replace_verified_candidate"))
+	service.set_quarantine_observer_for_testing(Callable(self, "_record_quarantine"))
 	var recovery_error: Error = service.mark_backup_restored(TEST_PATH)
 	service.set_verified_use_hook_for_testing(Callable())
+	service.set_quarantine_observer_for_testing(Callable())
 	_check(recovery_error == ERR_FILE_CORRUPT, "replacing the validated backup before recovery is refused")
 	_check(service.last_error_message.contains("changed after validation"), "backup race reports the validation/use drift")
 	_check(_read_bytes(absolute_path) == primary_before, "backup race preserves the valid primary byte-for-byte")
 	_check(_read_bytes(backup_path) == backup_before, "backup race restores the validated backup byte-for-byte")
-	_check(_find_private_payload_with_text("untrusted", _race_replacement), "replaced backup is quarantined rather than deleted")
+	_check(_observed_quarantine_has_text(backup_path, _race_replacement), "replaced backup is quarantined rather than deleted")
 	_check(_read_text(foreign_path) == "foreign-owner-data", "backup race never deletes an unrelated file")
+	_cleanup()
+
+
+func _test_oversized_primary_replacement_restores_authoritative_snapshot() -> void:
+	var service = _write_valid_pair("backup-valid", "primary-valid")
+	var absolute_path := ProjectSettings.globalize_path(TEST_PATH)
+	var backup_path := absolute_path + ".bak"
+	var primary_before := _read_bytes(absolute_path)
+	var backup_before := _read_bytes(backup_path)
+	_race_action = SaveServiceScript.TEST_USE_PRIMARY_ROTATION
+	_race_replacement_is_oversized = true
+	_race_replaced_path = ""
+	service.set_verified_use_hook_for_testing(Callable(self, "_replace_verified_candidate"))
+	service.set_quarantine_observer_for_testing(Callable(self, "_record_quarantine"))
+	var save_error: Error = service.save_atomic(TEST_PATH, _make_envelope("replacement"))
+	service.set_verified_use_hook_for_testing(Callable())
+	service.set_quarantine_observer_for_testing(Callable())
+	_check(save_error == ERR_FILE_CORRUPT, "oversized primary replacement after verification is refused")
+	_check(service.last_error_message.contains("changed after verification"), "oversized primary race reports verification/use drift")
+	_check(_read_bytes(absolute_path) == primary_before, "oversized primary race restores only the verified original bytes")
+	_check(_read_bytes(backup_path) == backup_before, "oversized primary race preserves the existing backup byte-for-byte")
+	_check(
+		_observed_quarantine_has_size(
+			absolute_path,
+			SaveEnvelopeScript.MAX_SAVE_FILE_BYTES + 1
+		),
+		"oversized primary replacement is quarantined without reading its payload"
+	)
+	_cleanup()
+
+
+func _test_oversized_backup_replacement_restores_authoritative_snapshot() -> void:
+	var service = _write_valid_pair("backup-valid", "primary-valid")
+	var absolute_path := ProjectSettings.globalize_path(TEST_PATH)
+	var backup_path := absolute_path + ".bak"
+	var primary_before := _read_bytes(absolute_path)
+	var backup_before := _read_bytes(backup_path)
+	service.begin_load_attempt()
+	var backup = service.load_backup_envelope(TEST_PATH)
+	_check(backup != null, "oversized backup race starts from a validated backup snapshot")
+	_race_action = SaveServiceScript.TEST_USE_BACKUP_RECOVERY
+	_race_replacement_is_oversized = true
+	_race_replaced_path = ""
+	service.set_verified_use_hook_for_testing(Callable(self, "_replace_verified_candidate"))
+	service.set_quarantine_observer_for_testing(Callable(self, "_record_quarantine"))
+	var recovery_error: Error = service.mark_backup_restored(TEST_PATH)
+	service.set_verified_use_hook_for_testing(Callable())
+	service.set_quarantine_observer_for_testing(Callable())
+	_check(recovery_error == ERR_FILE_CORRUPT, "oversized validated-backup replacement is refused")
+	_check(service.last_error_message.contains("changed after validation"), "oversized backup race reports validation/use drift")
+	_check(_read_bytes(absolute_path) == primary_before, "oversized backup race preserves the valid primary byte-for-byte")
+	_check(_read_bytes(backup_path) == backup_before, "oversized backup race restores only the validated backup bytes")
+	_check(
+		_observed_quarantine_has_size(
+			backup_path,
+			SaveEnvelopeScript.MAX_SAVE_FILE_BYTES + 1
+		),
+		"oversized backup replacement is quarantined without reading its payload"
+	)
 	_cleanup()
 
 
@@ -295,32 +362,55 @@ func _replace_verified_candidate(action: String, paths: Dictionary) -> void:
 		if action == SaveServiceScript.TEST_USE_PRIMARY_ROTATION
 		else str(paths.get("backup_path", ""))
 	)
-	_write_text(_race_replaced_path, _race_replacement)
+	if _race_replacement_is_oversized:
+		_write_oversized_sparse_file(_race_replaced_path)
+	else:
+		_write_text(_race_replaced_path, _race_replacement)
 
 
-func _find_private_payload_with_text(purpose: String, expected_text: String) -> bool:
-	var absolute_path := ProjectSettings.globalize_path(TEST_PATH)
-	return _find_private_payload_with_text_for_base(absolute_path + ".bak", purpose, expected_text)
+func _record_quarantine(source_path: String, quarantine_path: String) -> void:
+	_observed_quarantines.append({
+		"source_path": source_path,
+		"quarantine_path": quarantine_path,
+	})
 
 
-func _find_private_payload_with_text_for_base(base_path: String, purpose: String, expected_text: String) -> bool:
-	var absolute_path := ProjectSettings.globalize_path(TEST_PATH)
-	var base_directory := absolute_path.get_base_dir()
-	var prefix := ".%s.%s." % [base_path.get_file(), purpose]
-	var directory := DirAccess.open(base_directory)
-	if directory == null:
-		return false
-	directory.list_dir_begin()
-	var entry := directory.get_next()
-	while not entry.is_empty():
-		if directory.current_is_dir() and entry.begins_with(prefix):
-			var candidate := base_directory.path_join(entry).path_join("payload.tmp")
-			if _read_text(candidate) == expected_text:
-				directory.list_dir_end()
-				return true
-		entry = directory.get_next()
-	directory.list_dir_end()
+func _observed_quarantine_has_text(source_path: String, expected_text: String) -> bool:
+	for record: Dictionary in _observed_quarantines:
+		if str(record.get("source_path", "")) != source_path:
+			continue
+		var quarantine_path := str(record.get("quarantine_path", ""))
+		if (
+			_is_expected_private_quarantine(source_path, quarantine_path)
+			and FileAccess.file_exists(quarantine_path)
+			and FileAccess.get_size(quarantine_path) <= SaveEnvelopeScript.MAX_SAVE_FILE_BYTES
+			and _read_text(quarantine_path) == expected_text
+		):
+			return true
 	return false
+
+
+func _observed_quarantine_has_size(source_path: String, expected_size: int) -> bool:
+	for record: Dictionary in _observed_quarantines:
+		if str(record.get("source_path", "")) != source_path:
+			continue
+		var quarantine_path := str(record.get("quarantine_path", ""))
+		if (
+			_is_expected_private_quarantine(source_path, quarantine_path)
+			and FileAccess.file_exists(quarantine_path)
+			and FileAccess.get_size(quarantine_path) == expected_size
+		):
+			return true
+	return false
+
+
+func _is_expected_private_quarantine(source_path: String, quarantine_path: String) -> bool:
+	var private_directory := quarantine_path.get_base_dir()
+	return (
+		quarantine_path.get_file() == "payload.tmp"
+		and private_directory.get_base_dir() == source_path.get_base_dir()
+		and private_directory.get_file().begins_with(".%s.untrusted." % source_path.get_file())
+	)
 
 
 func _read_bytes(path: String) -> PackedByteArray:
@@ -396,22 +486,32 @@ func _cleanup() -> void:
 		var candidate := absolute_path + suffix
 		if FileAccess.file_exists(candidate):
 			DirAccess.remove_absolute(candidate)
-	var directory := DirAccess.open(base_directory)
-	if directory != null:
-		directory.list_dir_begin()
-		var entry := directory.get_next()
-		while not entry.is_empty():
-			if directory.current_is_dir() and entry.begins_with(".%s." % absolute_path.get_file()):
-				var private_directory := base_directory.path_join(entry)
-				var payload := private_directory.path_join("payload.tmp")
-				if FileAccess.file_exists(payload):
-					DirAccess.remove_absolute(payload)
-				DirAccess.remove_absolute(private_directory)
-			entry = directory.get_next()
-		directory.list_dir_end()
+	var owned_private_payloads: Array[String] = []
+	for record: Dictionary in _observed_quarantines:
+		owned_private_payloads.append(str(record.get("quarantine_path", "")))
+	if (
+		not _race_replaced_path.is_empty()
+		and _race_replaced_path.get_file() == "payload.tmp"
+		and _race_replaced_path.get_base_dir().get_base_dir() == base_directory
+		and _race_replaced_path.get_base_dir().get_file().begins_with(".%s." % absolute_path.get_file())
+	):
+		owned_private_payloads.append(_race_replaced_path)
+	for payload: String in owned_private_payloads:
+		var private_directory := payload.get_base_dir()
+		if (
+			payload.get_file() != "payload.tmp"
+			or private_directory.get_base_dir() != base_directory
+			or not private_directory.get_file().begins_with(".%s." % absolute_path.get_file())
+		):
+			continue
+		if FileAccess.file_exists(payload):
+			DirAccess.remove_absolute(payload)
+		DirAccess.remove_absolute(private_directory)
 	_race_action = ""
 	_race_replacement = ""
 	_race_replaced_path = ""
+	_race_replacement_is_oversized = false
+	_observed_quarantines.clear()
 
 
 func _check(condition: bool, message: String) -> void:
