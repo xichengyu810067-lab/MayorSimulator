@@ -280,6 +280,28 @@ func _run() -> void:
 	var foreign_air_route_button := panel.find_child("PlanRoute_train", true, false) as Button
 	_check(foreign_air_route_button != null and foreign_air_route_button.is_inside_tree() and not foreign_air_route_button.is_visible_in_tree(), "air session still renders a foreign train route card during route edit")
 	await _check_mode_scoped_catalogs(panel)
+	panel.set_view_model({
+		"planning_unlocked": true,
+		"planning_session": {
+			"id": "transport_plan_reuse_1",
+			"workflow": "route_package_v1",
+			"state": "station_placement",
+			"mode": "bus",
+			"station_blueprint_name": "公車站",
+			"station_refs": [],
+			"network_refs": [],
+			"route_refs": [],
+			"route_draft": {
+				"station_placements": [
+					{"anchor_tile_id": 10, "reuse_existing_station": true, "existing_station_id": "station_1"},
+					{"anchor_tile_id": 12, "reuse_existing_station": true, "existing_station_id": "station_2"},
+				],
+			},
+		},
+		"routes": [],
+	})
+	await process_frame
+	_check(session_detail != null and _contains_all(session_detail.text, ["公車站", "站點 2", "完工 2", "沿用完成 2"]), "pre-confirmation reuse summary presents completed stations as unfinished: %s" % (session_detail.text if session_detail != null else "missing summary"))
 
 	panel.set_view_model({
 		"planning_unlocked": true,

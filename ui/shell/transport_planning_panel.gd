@@ -528,12 +528,16 @@ func _render_planning_session() -> void:
 		return
 	var station_name := str(_planning_session.get("station_blueprint_name", "交通站點"))
 	var is_package := str(_planning_session.get("workflow", "")) == TransportPlanningSessionScript.WORKFLOW_ROUTE_PACKAGE_V1
+	var station_placements: Array = Dictionary(_planning_session.get("route_draft", {})).get("station_placements", [])
 	var station_count := (
-		_array_size(Dictionary(_planning_session.get("route_draft", {})).get("station_placements", []))
+		station_placements.size()
 		if is_package
 		else _non_cancelled_reference_count(_planning_session.get("station_refs", []))
 	)
 	var completed_station_count := _completed_reference_count(_planning_session.get("station_refs", []))
+	var reused_station_count := _reused_station_placement_count(station_placements) if is_package else 0
+	if is_package and _array_size(_planning_session.get("station_refs", [])) == 0:
+		completed_station_count = reused_station_count
 	var network_count := _non_cancelled_reference_count(_planning_session.get("network_refs", []))
 	if is_package and network_count == 0 and not Array(Dictionary(_planning_session.get("network_draft", {})).get("tile_ids", [])).is_empty():
 		network_count = 1
@@ -547,8 +551,11 @@ func _render_planning_session() -> void:
 			int(_package_quote.get("route_monthly_maintenance", 0)),
 		]
 	else:
-		_session_detail_label.text = L10n.text("%s｜站點 %d（完工 %d）｜路網工程 %d｜路線 %d") % [
-			L10n.text(station_name), station_count, completed_station_count, network_count, route_count,
+		var completion_text := L10n.text("完工 %d") % completed_station_count
+		if reused_station_count > 0:
+			completion_text += L10n.text("；沿用完成 %d") % reused_station_count
+		_session_detail_label.text = L10n.text("%s｜站點 %d（%s）｜路網工程 %d｜路線 %d") % [
+			L10n.text(station_name), station_count, completion_text, network_count, route_count,
 		]
 	_session_continue_button.visible = state != "materialized"
 	_session_continue_button.disabled = state == "waiting_construction" or (
@@ -716,6 +723,20 @@ func _completed_reference_count(value: Variant) -> int:
 	var result := 0
 	for ref_value: Variant in value:
 		if ref_value is Dictionary and str((ref_value as Dictionary).get("status", "")) == "completed":
+			result += 1
+	return result
+
+
+func _reused_station_placement_count(value: Variant) -> int:
+	if not value is Array:
+		return 0
+	var result := 0
+	for placement_value: Variant in value:
+		if (
+			placement_value is Dictionary
+			and bool((placement_value as Dictionary).get("reuse_existing_station", false))
+			and not str((placement_value as Dictionary).get("existing_station_id", "")).is_empty()
+		):
 			result += 1
 	return result
 

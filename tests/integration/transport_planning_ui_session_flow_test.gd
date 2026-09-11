@@ -202,6 +202,29 @@ func _run() -> void:
 	_check(main.vertical_slice.transport.routes.is_empty(), "route activated before package construction completed")
 	var waiting_session_card := main.transport_planning_panel.find_child("TransportPlanningSessionCard", true, false) as Control
 	_check(waiting_session_card != null and waiting_session_card.is_visible_in_tree(), "waiting package lacks its visible session card")
+	main.municipal_overlay.close_overlay()
+	main._set_map_interaction_enabled(true)
+	await process_frame
+	var active_depot_tile := _under_construction_facility_tile(main, "bus_depot")
+	var active_depot_job: Dictionary = main.vertical_slice.active_construction_for_tile(active_depot_tile)
+	var active_depot_button := main.grid_buttons[active_depot_tile] as Button
+	main._update_tile_visual(active_depot_tile, main.city_grid[active_depot_tile])
+	var selection_funds_before := int(main.vertical_slice.treasury_balance())
+	var selection_jobs_before: Dictionary = main.vertical_slice.construction.to_dict()
+	var selection_transport_before: Dictionary = main.vertical_slice.transport.to_dict()
+	var selection_session_before: Dictionary = main.vertical_slice.transport_planning_session_snapshot()
+	var selection_autosaves_before := int(main._autosave_count)
+	_check(not active_depot_job.is_empty(), "waiting BUS depot fixture has no authoritative active construction job")
+	_check(active_depot_button != null and _contains_all(active_depot_button.tooltip_text, ["公車車庫", "施工中"]), "waiting BUS depot hover does not expose its authoritative construction state: %s" % (active_depot_button.tooltip_text if active_depot_button != null else "missing button"))
+	main._on_grid_pressed(active_depot_tile)
+	var selected_depot_button := main.grid_buttons[active_depot_tile] as Button
+	_check(main.selected_cell_index == active_depot_tile and _contains_all(main.hint_label.text, ["公車車庫", "施工中"]), "waiting BUS depot selection disagrees with the hover construction state: %s" % main.hint_label.text)
+	_check(selected_depot_button != null and main.hint_label.text == selected_depot_button.tooltip_text, "waiting BUS depot selection and hover do not share one authoritative presentation: selection=%s hover=%s" % [main.hint_label.text, selected_depot_button.tooltip_text if selected_depot_button != null else "missing button"])
+	_check(main.vertical_slice.treasury_balance() == selection_funds_before, "inspecting a waiting BUS depot changes treasury")
+	_check(main.vertical_slice.construction.to_dict() == selection_jobs_before, "inspecting a waiting BUS depot changes construction authority")
+	_check(main.vertical_slice.transport.to_dict() == selection_transport_before, "inspecting a waiting BUS depot changes transport authority")
+	_check(main.vertical_slice.transport_planning_session_snapshot() == selection_session_before, "inspecting a waiting BUS depot changes the planning session")
+	_check(int(main._autosave_count) == selection_autosaves_before, "inspecting a waiting BUS depot creates an autosave")
 	await _capture_checkpoint("waiting-construction", "03-waiting-construction.png", capture_dir)
 	_advance_all_active_jobs(main)
 	session = main.vertical_slice.transport_planning_session_snapshot()
@@ -209,6 +232,15 @@ func _run() -> void:
 	_check(Array(session.get("route_refs", [])).size() == 1, "materialized session does not retain one authoritative route identity")
 	_check(main.vertical_slice.transport.routes.size() == 1, "construction completion created duplicate or missing route identities")
 	_check(main.vertical_slice.transport.segments.size() == 1 and main.vertical_slice.transport.facilities.size() == 1, "completed package materialized duplicate or missing topology")
+	var completed_depot_tile := _facility_tile(main, "bus_depot")
+	var completed_depot_button := main.grid_buttons[completed_depot_tile] as Button
+	main._update_tile_visual(completed_depot_tile, main.city_grid[completed_depot_tile])
+	_check(main.vertical_slice.active_construction_for_tile(completed_depot_tile).is_empty(), "completed BUS depot still has an active construction job")
+	_check(completed_depot_button != null and completed_depot_button.tooltip_text.contains("公車車庫") and not completed_depot_button.tooltip_text.contains("施工中"), "completed BUS depot hover presents the wrong construction state: %s" % (completed_depot_button.tooltip_text if completed_depot_button != null else "missing button"))
+	main._on_grid_pressed(completed_depot_tile)
+	var selected_completed_depot_button := main.grid_buttons[completed_depot_tile] as Button
+	_check(_contains_all(main.hint_label.text, ["公車車庫", "已完工"]) and not main.hint_label.text.contains("施工中"), "completed BUS depot selection presents the wrong construction state: %s" % main.hint_label.text)
+	_check(selected_completed_depot_button != null and selected_completed_depot_button.tooltip_text.contains("公車車庫") and not selected_completed_depot_button.tooltip_text.contains("施工中"), "completed BUS depot selection and hover disagree: selection=%s hover=%s" % [main.hint_label.text, selected_completed_depot_button.tooltip_text if selected_completed_depot_button != null else "missing button"])
 	var route: Dictionary = main.vertical_slice.transport.routes.values()[0]
 	_check(str(route.get("status", "")) == "operational" and str(route.get("price_model", "")) == "route_package_v2", "automatically materialized route is not operational with v2 pricing")
 	_check(str(route.get("price_provenance", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_PROVENANCE, "materialized route lost its quote_project provenance")
@@ -254,6 +286,7 @@ func _run() -> void:
 	var reused_funds_before := int(main.vertical_slice.treasury_balance())
 	var reused_jobs_before: Dictionary = main.vertical_slice.construction.to_dict()
 	var reused_transport_before: Dictionary = main.vertical_slice.transport.to_dict()
+	var reused_autosaves_before := int(main._autosave_count)
 	var reuse_started: Dictionary = main.vertical_slice.begin_transport_planning_session("公車站", "route_package_v1")
 	_check(bool(reuse_started.get("ok", false)), "a new package can begin after the first completed route")
 	main._enter_building_placement("公車站")
@@ -266,7 +299,11 @@ func _run() -> void:
 		_check(bool(Dictionary(reuse_placements[0]).get("reuse_existing_station", false)) and bool(Dictionary(reuse_placements[1]).get("reuse_existing_station", false)), "completed station map selections are not marked as authoritative reuse")
 		_check(str(Dictionary(reuse_placements[0]).get("existing_station_id", "")) == completed_station_ids[0] and str(Dictionary(reuse_placements[1]).get("existing_station_id", "")) == completed_station_ids[1], "completed station map selections lost their authority IDs")
 	_check(main.hint_label.text.contains("不重複施工") and main.hint_label.text.contains("不重複計費"), "reuse click lacks explicit zero-job/zero-duplicate-cost player feedback")
+	var reuse_detail := main.transport_planning_panel.find_child("TransportPlanningSessionDetail", true, false) as Label
+	_check(reuse_detail != null and _contains_all(reuse_detail.text, ["站點 2", "完工 2", "沿用完成 2"]), "reused completed stations are presented as unfinished: %s" % (reuse_detail.text if reuse_detail != null else "missing summary"))
 	_check(main.vertical_slice.treasury_balance() == reused_funds_before and main.vertical_slice.construction.to_dict() == reused_jobs_before and main.vertical_slice.transport.to_dict() == reused_transport_before, "selecting completed stations through Main mutates treasury, construction, or transport authority")
+	_check(int(main._autosave_count) == reused_autosaves_before, "selecting completed stations creates an extra autosave")
+	_check(main.vertical_slice.transport.routes.size() == 1, "selecting completed stations creates an extra route")
 	main.vertical_slice.close_transport_planning_session("test_cleanup")
 	main._cancel_building_placement(false)
 	main._on_transport_infrastructure_requested("road", "demolish")
@@ -345,6 +382,19 @@ func _facility_tile(main, kind: String) -> int:
 	for facility_value: Variant in main.vertical_slice.transport.facilities.values():
 		if facility_value is Dictionary and str((facility_value as Dictionary).get("kind", "")) == kind:
 			return int((facility_value as Dictionary).get("tile_id", -1))
+	return -1
+
+
+func _under_construction_facility_tile(main, kind: String) -> int:
+	for project_value: Variant in main.vertical_slice.transport.projects.values():
+		if not project_value is Dictionary:
+			continue
+		var project: Dictionary = project_value
+		if str(project.get("status", "")) != "under_construction":
+			continue
+		for facility_value: Variant in Dictionary(project.get("plan", {})).get("facilities", []):
+			if facility_value is Dictionary and str((facility_value as Dictionary).get("kind", "")) == kind:
+				return int((facility_value as Dictionary).get("tile_id", -1))
 	return -1
 
 
@@ -469,6 +519,13 @@ func _find_existing_building_tile(main, fixture: Dictionary) -> int:
 
 func _tile(main, x: int, y: int) -> int:
 	return int(main.vertical_slice.terrain_map.tile_id_for_coordinate(Vector2i(x, y)))
+
+
+func _contains_all(text: String, expected_parts: Array[String]) -> bool:
+	for part: String in expected_parts:
+		if not text.contains(part):
+			return false
+	return true
 
 
 func _check(condition: bool, message: String) -> void:

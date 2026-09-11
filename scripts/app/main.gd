@@ -5674,6 +5674,7 @@ func _on_grid_pressed(index: int) -> void:
 	if (
 		placement_mode_active
 		and not building_record.is_empty()
+		and active_job.is_empty()
 		and _is_transport_station_session_placement()
 		and _transport_session_is_route_package()
 	):
@@ -5699,9 +5700,6 @@ func _on_grid_pressed(index: int) -> void:
 	if placement_mode_active and (not building_record.is_empty() or not active_job.is_empty()):
 		_set_hint("此地格已有建築或工程，請選擇其他空地。", true)
 		return
-	if not building_record.is_empty():
-		_select_built_cell(index)
-		return
 	if not active_job.is_empty():
 		var footprint_view: Dictionary = vertical_slice.footprint_cell_view(index) if vertical_slice != null else {}
 		selected_cell_index = (
@@ -5710,11 +5708,12 @@ func _on_grid_pressed(index: int) -> void:
 			else index
 		)
 		_hide_npc_dialogue()
-		_set_hint("%s施工中，預計尚需 %d 個遊戲日。" % [
-			str(active_job.get("metadata", {}).get("building_name", "工程")),
-			int(active_job.get("projected_remaining_days", 0))
-		], false)
+		_close_building_context()
+		_set_hint(_construction_job_player_text(active_job), false)
 		_update_ui()
+		return
+	if not building_record.is_empty():
+		_select_built_cell(index)
 		return
 	if vertical_slice == null:
 		return
@@ -5725,6 +5724,7 @@ func _on_grid_pressed(index: int) -> void:
 		_hide_npc_dialogue()
 		_set_hint(_transport_tile_player_text(transport_tile_state), false)
 		_update_ui()
+		_update_tile_visual(index, city_grid[index])
 		return
 	if not placement_mode_active:
 		selected_cell_index = -1
@@ -8078,7 +8078,9 @@ func _update_tile_visual(index: int, building_name: String) -> void:
 			"placement_preview": preview,
 			"transport_planning_overlay": _transport_planning_overlay_for_tile(index),
 		})
-		if visual_building_name.is_empty() and active_construction.is_empty():
+		if not active_construction.is_empty():
+			cell.tooltip_text = _construction_job_player_text(active_construction)
+		elif visual_building_name.is_empty():
 			var transport_state := _transport_tile_visual_state(index)
 			if _transport_tile_has_player_content(transport_state):
 				cell.tooltip_text = _transport_tile_player_text(transport_state)
@@ -8095,6 +8097,20 @@ func _transport_tile_visual_state(tile_index: int) -> Dictionary:
 
 func _transport_tile_has_player_content(state: Dictionary) -> bool:
 	return not Array(state.get("facilities", [])).is_empty() or not Array(state.get("segments", [])).is_empty() or not str(state.get("crossing", "")).is_empty()
+
+
+func _construction_job_player_text(job: Dictionary) -> String:
+	var metadata: Dictionary = job.get("metadata", {})
+	var transport_kind := str(metadata.get("transport_kind", ""))
+	var work_name := (
+		_transport_kind_label(transport_kind)
+		if not transport_kind.is_empty()
+		else str(metadata.get("building_name", "工程"))
+	)
+	return L10n.text("%s｜施工中｜約 %d 天") % [
+		L10n.text(work_name),
+		int(job.get("projected_remaining_days", 0)),
+	]
 
 
 func _transport_tile_player_text(state: Dictionary) -> String:
