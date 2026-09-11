@@ -76,6 +76,7 @@
     { "id": "building_visual_catalog_contract", "script": "res://tests/ui/building_visual_catalog_contract_test.gd", "success_pattern": "Building visual catalog contract test passed." },
     { "id": "transport_visual_animation", "script": "res://tests/ui/transport_visual_animation_test.gd", "success_pattern": "Transport visual animation test passed." },
     { "id": "transport_network_layer", "script": "res://tests/ui/transport_network_layer_test.gd", "success_pattern": "Transport network layer test passed." },
+    { "id": "transport_continuous_geometry", "script": "res://tests/ui/transport_continuous_geometry_test.gd", "success_pattern": "Transport continuous geometry test passed." },
     { "id": "transport_planning_panel", "script": "res://tests/ui/transport_planning_panel_test.gd", "success_pattern": "Transport planning panel test passed." },
     { "id": "ambient_animation_contract", "script": "res://tests/ui/ambient_animation_contract_test.gd", "success_pattern": "Ambient animation contract test passed." },
     { "id": "square_grid_layout", "script": "res://tests/ui/square_grid_layout_test.gd", "success_pattern": "Square grid layout test passed." },

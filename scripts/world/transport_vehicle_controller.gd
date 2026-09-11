@@ -1,6 +1,8 @@
 class_name TransportVehicleController
 extends Control
 
+const TransportRouteGeometryScript = preload("res://scripts/world/transport_route_geometry.gd")
+
 ## Cross-tile vehicle runtime.  This is the sole owner of moving transport
 ## vehicles; CityTileButton intentionally has no authority to spawn them.
 
@@ -72,6 +74,8 @@ var _actors: Dictionary = {}
 var _actor_specs: Dictionary = {}
 var _actor_route_times: Dictionary = {}
 var _actor_positions_initialized: Dictionary = {}
+var _actor_samples: Dictionary = {}
+var _route_geometries: Dictionary = {}
 var _simulation_time := 0.0
 var _crossing_states: Dictionary = {}
 var _interaction_enabled := true
@@ -87,6 +91,10 @@ func _ready() -> void:
 func set_runtime_snapshot(snapshot: Dictionary, tile_centers: Dictionary) -> void:
 	_runtime_snapshot = snapshot.duplicate(true)
 	_tile_centers = tile_centers.duplicate(true)
+	_route_geometries = TransportRouteGeometryScript.build_operational_route_geometries(
+		_runtime_snapshot,
+		_tile_centers
+	)
 	_rebuild_actor_specs()
 	_sync_actors()
 	_update_actors(0.0)
@@ -121,6 +129,7 @@ func debug_route_snapshot() -> Dictionary:
 	for key: String in keys:
 		var actor := _actors[key] as VehicleActor
 		var spec: Dictionary = _actor_specs.get(key, {})
+		var sample: Dictionary = _actor_samples.get(key, {})
 		vehicles.append({
 			"vehicle_key": key,
 			"vehicle_kind": actor.vehicle_kind,
@@ -131,6 +140,11 @@ func debug_route_snapshot() -> Dictionary:
 			"operational_source": true,
 			"on_authoritative_path": bool(spec.get("sample_valid", false)),
 			"route_time": float(_actor_route_times.get(key, _simulation_time)),
+			"curve_distance": float(sample.get("distance", 0.0)),
+			"curve_length": float(sample.get("curve_length", 0.0)),
+			"lane_direction": int(sample.get("lane_direction", 0)),
+			"lane_offset": float(sample.get("lane_offset", 0.0)),
+			"geometry_fingerprint": str(sample.get("geometry_fingerprint", "")),
 		})
 	return {
 		"simulation_time": _simulation_time,
@@ -139,6 +153,7 @@ func debug_route_snapshot() -> Dictionary:
 		"crossing_states": _crossing_states.duplicate(true),
 		"autonomous_tile_vehicle_count": 0,
 		"network_vehicle_layer_owner": "transport_network_controller",
+		"geometry_count": _route_geometries.size(),
 	}
 
 
@@ -169,7 +184,7 @@ func _rebuild_actor_specs() -> void:
 			continue
 		var route_id := str(line.get("id", line.get("route_id", "")))
 		var path: Array = line.get("path_tile_ids", [])
-		if route_id.is_empty() or path.size() < 2:
+		if route_id.is_empty() or path.size() < 2 or not _route_geometries.has(route_id):
 			continue
 		var fleet_size := clampi(int(line.get("fleet_size", 1)), 1, 40)
 		for fleet_index in fleet_size:
@@ -178,6 +193,7 @@ func _rebuild_actor_specs() -> void:
 			spec["route_id"] = route_id
 			spec["actor_index"] = fleet_index
 			spec["actor_count"] = fleet_size
+			spec["geometry_key"] = route_id
 			_actor_specs[key] = spec
 
 	var private_paths: Array = _runtime_snapshot.get("private_road_paths", [])
@@ -191,14 +207,28 @@ func _rebuild_actor_specs() -> void:
 			continue
 		for vehicle_index in 2:
 			var key := "private:%02d:%02d" % [path_index, vehicle_index]
+			var geometry_key := "private_road_%02d" % path_index
+			if not _route_geometries.has(geometry_key):
+				var private_geometry := TransportRouteGeometryScript.build_bidirectional_route(
+					tiles,
+					_tile_centers,
+					TransportRouteGeometryScript.DEFAULT_LANE_OFFSET
+				)
+				if bool(private_geometry.get("valid", false)):
+					private_geometry["route_id"] = geometry_key
+					private_geometry["mode"] = "road"
+					_route_geometries[geometry_key] = private_geometry
+			if not _route_geometries.has(geometry_key):
+				continue
 			_actor_specs[key] = {
-				"route_id": "private_road_%02d" % path_index,
+				"route_id": geometry_key,
 				"mode": "road",
 				"vehicle_kind": "car" if vehicle_index == 0 else "motorcycle",
 				"path_tile_ids": tiles.duplicate(),
 				"loop_seconds": maxf(6.0, float(tiles.size()) * 1.6),
 				"actor_index": vehicle_index,
 				"actor_count": 2,
+				"geometry_key": geometry_key,
 				"status": "operational",
 			}
 
@@ -212,7 +242,9 @@ func _sync_actors() -> void:
 		_actors.erase(key)
 		_actor_route_times.erase(key)
 		_actor_positions_initialized.erase(key)
+		_actor_samples.erase(key)
 		if is_instance_valid(old_actor):
+			remove_child(old_actor)
 			old_actor.queue_free()
 	for key_variant: Variant in _actor_specs.keys():
 		var key := str(key_variant)
@@ -227,12 +259,15 @@ func _sync_actors() -> void:
 		_actors[key] = actor
 		_actor_route_times[key] = _simulation_time
 		_actor_positions_initialized[key] = false
+		_actor_samples[key] = {}
 	for key_variant: Variant in _actors.keys():
 		var key := str(key_variant)
 		if not _actor_route_times.has(key):
 			_actor_route_times[key] = _simulation_time
 		if not _actor_positions_initialized.has(key):
 			_actor_positions_initialized[key] = false
+		if not _actor_samples.has(key):
+			_actor_samples[key] = {}
 
 
 func _update_actors(elapsed: float) -> void:
@@ -250,6 +285,7 @@ func _update_actors(elapsed: float) -> void:
 		if not bool(sample.get("valid", false)):
 			actor.hide()
 			_actor_positions_initialized[key] = false
+			_actor_samples[key] = {}
 			continue
 		sample["route_time"] = candidate_route_time
 		proposed[key] = sample
@@ -292,49 +328,30 @@ func _update_actors(elapsed: float) -> void:
 		actor.z_index = int(round(next_position.y)) + 2
 		actor.visible = _interaction_enabled or true
 		_actor_positions_initialized[key] = true
+		sample["position"] = next_position
+		sample["angle"] = next_angle
+		_actor_samples[key] = sample
 
 
 func _sample_spec(spec: Dictionary, sample_time: float) -> Dictionary:
-	var points := PackedVector2Array()
-	for tile_variant: Variant in spec.get("path_tile_ids", []):
-		var center := _center_for(int(tile_variant))
-		if center != Vector2.INF:
-			points.append(center)
-	if points.size() < 2:
+	var geometry_key := str(spec.get("geometry_key", spec.get("route_id", "")))
+	if not _route_geometries.has(geometry_key):
 		return {"valid": false}
-	var travel := PackedVector2Array(points)
-	for index in range(points.size() - 2, 0, -1):
-		travel.append(points[index])
-	travel.append(points[0])
-	var total_length := 0.0
-	var segment_lengths := PackedFloat32Array()
-	for index in travel.size() - 1:
-		var segment_length := travel[index].distance_to(travel[index + 1])
-		segment_lengths.append(segment_length)
-		total_length += segment_length
+	var geometry: Dictionary = _route_geometries[geometry_key]
+	var total_length := float(geometry.get("length", 0.0))
 	if total_length <= 0.01:
 		return {"valid": false}
 	var loop_seconds := maxf(1.0, float(spec.get("loop_seconds", maxf(5.0, total_length / 42.0))))
 	var actor_index := int(spec.get("actor_index", 0))
 	var actor_count := maxi(1, int(spec.get("actor_count", 1)))
 	var phase := fposmod(sample_time / loop_seconds + float(actor_index) / float(actor_count), 1.0)
-	var target_distance := phase * total_length
-	var consumed := 0.0
-	for index in segment_lengths.size():
-		var length := float(segment_lengths[index])
-		if target_distance > consumed + length and index < segment_lengths.size() - 1:
-			consumed += length
-			continue
-		var local := clampf((target_distance - consumed) / maxf(length, 0.001), 0.0, 1.0)
-		var from := travel[index]
-		var to := travel[index + 1]
-		return {
-			"valid": true,
-			"position": from.lerp(to, local),
-			"angle": (to - from).angle(),
-			"segment_index": index,
-		}
-	return {"valid": true, "position": travel[-1], "angle": 0.0, "segment_index": travel.size() - 2}
+	var sample := TransportRouteGeometryScript.sample_geometry(geometry, phase * total_length)
+	if not bool(sample.get("valid", false)):
+		return sample
+	sample["curve_length"] = total_length
+	sample["lane_offset"] = float(geometry.get("lane_offset", 0.0))
+	sample["geometry_fingerprint"] = str(geometry.get("fingerprint", ""))
+	return sample
 
 
 func _sample_before_closed_crossing(spec: Dictionary, candidate_route_time: float) -> Dictionary:

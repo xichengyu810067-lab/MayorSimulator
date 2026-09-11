@@ -625,19 +625,45 @@ func unregister_station(station_id: String) -> bool:
 func tile_visual_state(tile_id: int, terrain_map: Variant) -> Dictionary:
 	var visible_segments := _visible_segment_kinds_by_tile()
 	var visible_facilities := _visible_facility_kinds_by_tile()
+	return _tile_visual_state_from_sources(
+		tile_id,
+		terrain_map,
+		visible_segments,
+		visible_facilities,
+		_project_status_for_tile(tile_id)
+	)
+
+
+func completed_tile_visual_state(tile_id: int, terrain_map: Variant) -> Dictionary:
+	return _tile_visual_state_from_sources(
+		tile_id,
+		terrain_map,
+		_completed_segment_kinds_by_tile(),
+		_completed_facility_kinds_by_tile(),
+		""
+	)
+
+
+func _tile_visual_state_from_sources(
+	tile_id: int,
+	terrain_map: Variant,
+	segment_source: Dictionary,
+	facility_source: Dictionary,
+	project_status: String
+) -> Dictionary:
 	var segment_values: Array[String] = []
-	for value_variant: Variant in Array(visible_segments.get(tile_id, [])):
+	for value_variant: Variant in Array(segment_source.get(tile_id, [])):
 		segment_values.append(str(value_variant))
 	segment_values.sort()
 	var facility_values: Array[String] = []
-	for value_variant: Variant in Array(visible_facilities.get(tile_id, [])):
+	for value_variant: Variant in Array(facility_source.get(tile_id, [])):
 		facility_values.append(str(value_variant))
 	facility_values.sort()
 	var connections: Dictionary = {}
 	var neighbours: Dictionary = {}
 	for kind: String in segment_values:
 		var directions: Array[String] = []
-		var kind_tiles := _visible_tiles_for_kind(kind, visible_segments)
+		var kind_tiles := _visible_tiles_for_kind(kind, segment_source)
 		for direction: String in TransportModesScript.CONNECTION_DIRECTIONS:
 			var neighbor := _neighbor_in_direction(tile_id, direction, terrain_map)
 			if neighbor >= 0 and kind_tiles.has(neighbor):
@@ -645,7 +671,7 @@ func tile_visual_state(tile_id: int, terrain_map: Variant) -> Dictionary:
 				neighbours[direction] = neighbor
 		connections[kind] = directions
 	var crossing_kind := ""
-	if _tile_has_visible_crossing(tile_id, visible_segments):
+	if _tile_has_visible_crossing(tile_id, segment_source):
 		crossing_kind = TransportModesScript.CROSSING_KIND
 	return {
 		"segments": segment_values,
@@ -653,7 +679,7 @@ func tile_visual_state(tile_id: int, terrain_map: Variant) -> Dictionary:
 		"crossing": crossing_kind,
 		"connections": connections,
 		"neighbours": neighbours,
-		"project_status": _project_status_for_tile(tile_id),
+		"project_status": project_status,
 	}
 
 
@@ -661,6 +687,8 @@ func visual_runtime_snapshot(city_grid: Array, terrain_map: Variant) -> Dictiona
 	var tile_id_set: Dictionary = {}
 	var visible_segments := _visible_segment_kinds_by_tile()
 	var visible_facilities := _visible_facility_kinds_by_tile()
+	var completed_segments := _completed_segment_kinds_by_tile()
+	var completed_facilities := _completed_facility_kinds_by_tile()
 	for tile_variant: Variant in visible_segments.keys():
 		tile_id_set[int(tile_variant)] = true
 	for tile_variant: Variant in visible_facilities.keys():
@@ -675,10 +703,20 @@ func visual_runtime_snapshot(city_grid: Array, terrain_map: Variant) -> Dictiona
 			tile_ids.append(tile_id)
 	tile_ids.sort()
 	var tile_states: Dictionary = {}
+	var completed_tile_states: Dictionary = {}
 	for tile_id: int in tile_ids:
 		tile_states[str(tile_id)] = tile_visual_state(tile_id, terrain_map)
+		if completed_segments.has(tile_id) or completed_facilities.has(tile_id):
+			completed_tile_states[str(tile_id)] = _tile_visual_state_from_sources(
+				tile_id,
+				terrain_map,
+				completed_segments,
+				completed_facilities,
+				""
+			)
 	return {
 		"tile_states": tile_states,
+		"completed_tile_states": completed_tile_states,
 		"operational_lines": active_lines(),
 		"private_road_paths": private_road_paths(city_grid, terrain_map),
 		"station_access_edges": station_access_edges(terrain_map),
@@ -1919,6 +1957,25 @@ func _completed_segment_kinds_by_tile() -> Dictionary:
 			if not kinds.has(kind):
 				kinds.append(kind)
 			result[tile_id] = kinds
+	return result
+
+
+func _completed_facility_kinds_by_tile() -> Dictionary:
+	var result: Dictionary = {}
+	for record_variant: Variant in facilities.values():
+		if not record_variant is Dictionary:
+			continue
+		var facility: Dictionary = record_variant
+		if str(facility.get("status", "completed")) != "completed":
+			continue
+		var tile_id := int(facility.get("tile_id", -1))
+		if tile_id < 0:
+			continue
+		var kinds: Array = result.get(tile_id, [])
+		var kind := str(facility.get("kind", ""))
+		if not kind.is_empty() and not kinds.has(kind):
+			kinds.append(kind)
+		result[tile_id] = kinds
 	return result
 
 

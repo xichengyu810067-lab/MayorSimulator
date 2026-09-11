@@ -133,7 +133,7 @@ func _run() -> void:
 	var before_pos: Vector2 = before.get("vehicles", [])[0].get("position", Vector2.INF)
 	var after_pos: Vector2 = after.get("vehicles", [])[0].get("position", Vector2.INF)
 	_check(before_pos != after_pos, "the same train must advance along its authoritative cross-tile path")
-	_check(is_equal_approx(after_pos.y, 120.0) and after_pos.x >= 80.0 and after_pos.x <= 280.0, "train position left the authoritative rail polyline")
+	_check(absf(after_pos.y - 120.0) <= 6.0 and after_pos.x >= 74.0 and after_pos.x <= 286.0, "train position left the authoritative offset rail curve")
 	_check(bool(after.get("vehicles", [])[0].get("on_authoritative_path", false)), "vehicle debug contract must identify the authoritative route source")
 	vehicles.debug_set_simulation_time(2.5)
 	var crossing_debug: Dictionary = vehicles.debug_route_snapshot().get("crossing_states", {})
