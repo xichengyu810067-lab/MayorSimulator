@@ -59,7 +59,7 @@
 		},
 		"metadata": {
 			"vertical_slice": {
-				"schema_version": 10,
+				"schema_version": 11,
 				"construction": {
 					"schema_version": 1,
 					"seed": 8024611,
@@ -671,7 +671,7 @@
 					]
 				},
 				"transport": {
-					"schema_version": 1,
+					"schema_version": 2,
 					"next_project_sequence": 1,
 					"next_segment_sequence": 1,
 					"next_facility_sequence": 1,
@@ -685,7 +685,7 @@
 					"routes": {}
 				},
 				"transport_planning_session": {
-					"schema_version": 1,
+					"schema_version": 2,
 					"next_session_sequence": 1,
 					"session": {
 						"state": "inactive"

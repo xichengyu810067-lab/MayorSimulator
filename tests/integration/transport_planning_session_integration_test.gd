@@ -1,6 +1,7 @@
 extends SceneTree
 
 const CoordinatorScript = preload("res://scripts/app/vertical_slice_coordinator.gd")
+const TransportModesScript = preload("res://data/catalogs/transport_modes.gd")
 const CityTerrainMapScript = preload("res://scripts/world/city_terrain_map.gd")
 const SaveSchemaAuthorityScript = preload("res://scripts/core/save_schema_authority.gd")
 const TransportPlanningSessionScript = preload("res://scripts/systems/city/transport_planning_session.gd")
@@ -18,13 +19,14 @@ func _initialize() -> void:
 func _run() -> void:
 	_cleanup()
 	_test_state_semantics_fail_closed()
+	_test_schema_v2_migration_and_corridor_quote_integrity()
 	_test_mode_compatible_supporting_infrastructure()
 	_test_continuous_session_and_round_trip()
-	_test_schema_nine_migrates_inactive_and_schema_ten_fails_closed()
+	_test_schema_nine_migrates_inactive_and_schema_eleven_fails_closed()
 	_test_close_does_not_cancel_authoritative_construction()
 	_cleanup()
 	if not _failed:
-		print("Transport planning session integration test passed. Checks=%d Schema=10" % _checks)
+		print("Transport planning session integration test passed. Checks=%d Schema=11" % _checks)
 	quit(1 if _failed else 0)
 
 
@@ -73,7 +75,6 @@ func _test_state_semantics_fail_closed() -> void:
 		not bool(TransportPlanningSessionScript.validate_snapshot(paused).get("valid", false)),
 		"paused state cannot resume to network placement without enough stations"
 	)
-
 	var closed := _planning_snapshot_fixture()
 	closed["session"]["state"] = "closed"
 	_check(
@@ -89,6 +90,80 @@ func _test_state_semantics_fail_closed() -> void:
 		bool(TransportPlanningSessionScript.validate_snapshot(legal_waiting).get("valid", false)),
 		"legal mid-construction station wait remains serializable"
 	)
+
+
+func _test_schema_v2_migration_and_corridor_quote_integrity() -> void:
+	var legacy := _planning_snapshot_fixture()
+	legacy["schema_version"] = 1
+	var migrated = TransportPlanningSessionScript.create_from_dict(legacy)
+	_check(migrated != null and int(migrated.to_dict().get("schema_version", -1)) == 2, "planning schema 1 migrates to schema 2")
+	var future := _planning_snapshot_fixture()
+	future["schema_version"] = 3
+	_check(TransportPlanningSessionScript.create_from_dict(future) == null, "future planning schema fails closed")
+
+	var corridor_contract := {
+		"schema_version": TransportModesScript.ROUTE_PACKAGE_CORRIDOR_SCHEMA_VERSION,
+		"mode": "bus",
+		"segment_kind": "road",
+		"classification": "mixed",
+		"route_tile_ids": [0, 1, 2, 3],
+		"reused_segment_refs": [{"id": "segment_a", "kind": "road", "tile_ids": [0, 1]}],
+		"new_runs": [{"kind": "road", "tile_path": [2, 3]}],
+		"total_units": 4,
+		"reused_units": 2,
+		"new_units": 2,
+	}
+	var corridor_quote := TransportModesScript.route_package_corridor_price_quote(corridor_contract)
+	_check(bool(corridor_quote.get("ok", false)), "planning fixture obtains a valid reuse-aware corridor quote")
+	var planning = TransportPlanningSessionScript.new()
+	_check(bool(planning.begin("公車站", "fixture_bus_station", TransportPlanningSessionScript.WORKFLOW_ROUTE_PACKAGE_V1).get("ok", false)), "route-package planning begins")
+	for tile_id: int in [10, 20]:
+		var placement := {
+			"anchor_tile_id": tile_id,
+			"occupied_tile_ids": [tile_id],
+			"footprint_id": "single_tile",
+			"library_id": "fixture_bus_station",
+			"blueprint": {"name": "公車站"},
+			"total_cost": 100,
+			"duration_days": 1,
+		}
+		_check(bool(planning.record_station_draft(placement, 1).get("ok", false)), "route-package station draft records")
+	_check(bool(planning.begin_network_placement("road").get("ok", false)), "route-package enters network placement")
+	_check(bool(planning.update_network_draft("road", {"tile_ids": [0, 1, 2, 3], "worker_count": 2}).get("ok", false)), "route-package network draft records")
+	_check(bool(planning.begin_route_edit().get("ok", false)), "route-package enters route editing")
+	_check(bool(planning.update_route_draft({"corridor_quote": corridor_quote}).get("ok", false)), "valid reuse-aware quote attaches to route draft")
+	var snapshot: Dictionary = planning.to_dict()
+	_check(bool(TransportPlanningSessionScript.validate_snapshot(snapshot).get("valid", false)), "planning snapshot validates with reuse-aware quote")
+	var decoded_snapshot = JSON.parse_string(JSON.stringify(snapshot))
+	var decoded_quote: Dictionary = decoded_snapshot.get("session", {}).get("route_draft", {}).get("corridor_quote", {})
+	var decoded_quote_validation := TransportModesScript.validate_route_package_corridor_price_quote(decoded_quote)
+	_check(bool(decoded_quote_validation.get("valid", false)), "JSON-decoded quote remains valid: %s" % str(decoded_quote_validation))
+	var decoded_validation: Dictionary = TransportPlanningSessionScript.validate_snapshot(decoded_snapshot)
+	_check(bool(decoded_validation.get("valid", false)), "JSON-decoded planning snapshot remains valid: %s" % str(decoded_validation))
+	var round_trip = TransportPlanningSessionScript.create_from_dict(decoded_snapshot)
+	var restored_quote: Dictionary = {}
+	if round_trip != null:
+		restored_quote = round_trip.to_dict().get("session", {}).get("route_draft", {}).get("corridor_quote", {})
+	_check(round_trip != null, "planning snapshot survives JSON round trip")
+	_check(str(restored_quote.get("checksum", "")) == str(corridor_quote.get("checksum", "")), "planning quote checksum survives JSON round trip")
+	_check(int(restored_quote.get("total_cost", -1)) == int(corridor_quote.get("total_cost", -2)), "planning quote cost survives JSON round trip")
+	_check(Dictionary(restored_quote.get("corridor", {})).get("route_tile_ids", []) == [0, 1, 2, 3], "planning quote corridor survives JSON round trip")
+	_check(bool(TransportModesScript.validate_route_package_corridor_price_quote(restored_quote).get("valid", false)), "restored planning quote remains valid")
+
+	var before_rejection: Dictionary = planning.to_dict()
+	var tampered_quote: Dictionary = corridor_quote.duplicate(true)
+	tampered_quote["total_cost"] = int(tampered_quote.get("total_cost", 0)) + 1
+	_check(not bool(planning.update_route_draft({"corridor_quote": tampered_quote}).get("ok", true)), "tampered quote is rejected")
+	_check(planning.to_dict() == before_rejection, "tampered quote rejection does not mutate planning state")
+	var train_contract: Dictionary = corridor_contract.duplicate(true)
+	train_contract["mode"] = "train"
+	train_contract["segment_kind"] = "rail_track"
+	train_contract["reused_segment_refs"][0]["kind"] = "rail_track"
+	train_contract["new_runs"][0]["kind"] = "rail_track"
+	var wrong_mode_quote: Dictionary = TransportModesScript.route_package_corridor_price_quote(train_contract)
+	_check(bool(wrong_mode_quote.get("ok", false)), "different-mode quote fixture is independently valid")
+	_check(not bool(planning.update_route_draft({"corridor_quote": wrong_mode_quote}).get("ok", true)), "quote for a different mode is rejected")
+	_check(planning.to_dict() == before_rejection, "mode mismatch rejection does not mutate planning state")
 
 
 func _test_mode_compatible_supporting_infrastructure() -> void:
@@ -314,7 +389,7 @@ func _test_continuous_session_and_round_trip() -> void:
 	)
 
 
-func _test_schema_nine_migrates_inactive_and_schema_ten_fails_closed() -> void:
+func _test_schema_nine_migrates_inactive_and_schema_eleven_fails_closed() -> void:
 	var source = CoordinatorScript.new(20_260_903, 500_000)
 	source.call("_stash_subsystems")
 	var legacy_envelope = source.session.make_envelope()
@@ -325,7 +400,7 @@ func _test_schema_nine_migrates_inactive_and_schema_ten_fails_closed() -> void:
 	var migrated = CoordinatorScript.new(2, 2)
 	_check(migrated.session.restore_envelope(legacy_envelope), "schema 9 migrates through the explicit session boundary")
 	var migrated_vertical: Dictionary = migrated.session.state.metadata.get("vertical_slice", {})
-	_check(int(migrated_vertical.get("schema_version", -1)) == 10, "schema 9 migrates to schema 10")
+	_check(int(migrated_vertical.get("schema_version", -1)) == 11, "schema 9 migrates to schema 11")
 	_check(str(migrated_vertical.get("transport_planning_session", {}).get("session", {}).get("state", "")) == "inactive", "schema 9 migration creates no active session")
 
 	var corrupt = CoordinatorScript.new(20_260_904, 500_000)
@@ -333,12 +408,12 @@ func _test_schema_nine_migrates_inactive_and_schema_ten_fails_closed() -> void:
 	var corrupt_vertical: Dictionary = corrupt.session.state.metadata.get("vertical_slice", {}).duplicate(true)
 	corrupt_vertical.erase("transport_planning_session")
 	corrupt.session.state.metadata["vertical_slice"] = corrupt_vertical
-	_check(corrupt.session.save_now("user://w4_corrupt_missing_session.json") == ERR_INVALID_DATA, "schema 10 missing session fails closed")
+	_check(corrupt.session.save_now("user://w4_corrupt_missing_session.json") == ERR_INVALID_DATA, "schema 11 missing session fails closed")
 	corrupt.call("_stash_subsystems")
 	corrupt_vertical = corrupt.session.state.metadata.get("vertical_slice", {}).duplicate(true)
 	corrupt_vertical["transport_planning_session"]["session"] = {"state": "invented"}
 	corrupt.session.state.metadata["vertical_slice"] = corrupt_vertical
-	_check(corrupt.session.save_now("user://w4_corrupt_bad_session.json") == ERR_INVALID_DATA, "schema 10 malformed session fails closed")
+	_check(corrupt.session.save_now("user://w4_corrupt_bad_session.json") == ERR_INVALID_DATA, "schema 11 malformed session fails closed")
 	var corrupt_reference = CoordinatorScript.new(20_260_906, 500_000)
 	corrupt_reference.terrain_map = CityTerrainMapScript.new()
 	_check(bool(corrupt_reference.begin_transport_planning_session("公車站").get("ok", false)), "corrupt reference fixture begins session")
@@ -347,8 +422,8 @@ func _test_schema_nine_migrates_inactive_and_schema_ten_fails_closed() -> void:
 	var reference_vertical: Dictionary = corrupt_reference.session.state.metadata.get("vertical_slice", {}).duplicate(true)
 	reference_vertical["transport_planning_session"]["session"]["station_refs"][0]["job_id"] = "missing_job"
 	corrupt_reference.session.state.metadata["vertical_slice"] = reference_vertical
-	_check(corrupt_reference.session.save_now("user://w4_corrupt_missing_job_ref.json") == ERR_INVALID_DATA, "schema 10 dangling session job reference fails closed")
-	_check(SaveSchemaAuthorityScript.validate_vertical_terrain_pair(10, 3), "schema 10 remains paired with terrain layout 3")
+	_check(corrupt_reference.session.save_now("user://w4_corrupt_missing_job_ref.json") == ERR_INVALID_DATA, "schema 11 dangling session job reference fails closed")
+	_check(SaveSchemaAuthorityScript.validate_vertical_terrain_pair(11, 3), "schema 11 remains paired with terrain layout 3")
 
 
 func _test_close_does_not_cancel_authoritative_construction() -> void:
@@ -367,7 +442,7 @@ func _test_close_does_not_cancel_authoritative_construction() -> void:
 
 func _planning_snapshot_fixture() -> Dictionary:
 	return {
-		"schema_version": 1,
+		"schema_version": 2,
 		"next_session_sequence": 2,
 		"session": {
 			"id": "transport_planning_000001",

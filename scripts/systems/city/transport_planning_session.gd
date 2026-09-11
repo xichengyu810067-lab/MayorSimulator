@@ -8,8 +8,11 @@ extends RefCounted
 const TransportModesScript = preload("res://data/catalogs/transport_modes.gd")
 const BuildingFootprintsScript = preload("res://data/catalogs/building_footprints.gd")
 const CityTerrainMapScript = preload("res://scripts/world/city_terrain_map.gd")
+const SaveSchemaAuthorityScript = preload("res://scripts/core/save_schema_authority.gd")
 
-const SCHEMA_VERSION := 1
+const SCHEMA_VERSION := SaveSchemaAuthorityScript.TRANSPORT_PLANNING_SESSION_CURRENT_SCHEMA_VERSION
+const MIN_SUPPORTED_SCHEMA_VERSION := SaveSchemaAuthorityScript.TRANSPORT_PLANNING_SESSION_MIN_SUPPORTED_SCHEMA_VERSION
+const MAX_SUPPORTED_SCHEMA_VERSION := SaveSchemaAuthorityScript.TRANSPORT_PLANNING_SESSION_MAX_SUPPORTED_SCHEMA_VERSION
 const WORKFLOW_ROUTE_PACKAGE_V1 := "route_package_v1"
 const STATE_INACTIVE := "inactive"
 const STATE_STATION_PLACEMENT := "station_placement"
@@ -303,6 +306,15 @@ func update_route_draft(draft: Dictionary) -> Dictionary:
 		return _error("transport_session_not_editing_route")
 	var updated := Dictionary(session.get("route_draft", {})).duplicate(true) if is_route_package() else {}
 	updated.merge(draft, true)
+	if updated.has("corridor_quote"):
+		var corridor_quote_validation := TransportModesScript.validate_route_package_corridor_price_quote(
+			updated.get("corridor_quote", null)
+		)
+		if not bool(corridor_quote_validation.get("valid", false)):
+			return _error("invalid_corridor_quote")
+		var corridor: Dictionary = Dictionary(updated.get("corridor_quote", {})).get("corridor", {})
+		if str(corridor.get("mode", "")) != str(session.get("mode", "")):
+			return _error("corridor_quote_mode_mismatch")
 	session["route_draft"] = updated
 	session["route_draft"]["mode"] = str(session.get("mode", ""))
 	return _success()
@@ -540,17 +552,37 @@ func to_dict() -> Dictionary:
 
 
 func load_dict(data: Dictionary) -> bool:
-	var validation := validate_snapshot(data)
+	var migrated := migrate_snapshot(data)
+	if migrated.is_empty():
+		return false
+	var validation := validate_snapshot(migrated)
 	if not bool(validation.get("valid", false)):
 		return false
-	next_session_sequence = int(data.get("next_session_sequence", 1))
-	session = Dictionary(data.get("session", _inactive_session())).duplicate(true)
+	next_session_sequence = int(migrated.get("next_session_sequence", 1))
+	session = Dictionary(migrated.get("session", _inactive_session())).duplicate(true)
+	if session.get("route_draft", null) is Dictionary:
+		var route_draft: Dictionary = session.get("route_draft", {})
+		if route_draft.has("corridor_quote") and route_draft.get("corridor_quote", null) is Dictionary:
+			route_draft["corridor_quote"] = _normalize_corridor_quote(route_draft.get("corridor_quote", {}))
+			session["route_draft"] = route_draft
 	return true
 
 
 static func create_from_dict(data: Dictionary):
 	var instance = (load("res://scripts/systems/city/transport_planning_session.gd") as Script).new()
 	return instance if instance.load_dict(data) else null
+
+
+static func migrate_snapshot(data: Dictionary) -> Dictionary:
+	var schema_value: Variant = data.get("schema_version", null)
+	if not _is_integer_value(schema_value):
+		return {}
+	var source_version := int(schema_value)
+	if source_version < MIN_SUPPORTED_SCHEMA_VERSION or source_version > MAX_SUPPORTED_SCHEMA_VERSION:
+		return {}
+	var migrated := data.duplicate(true)
+	migrated["schema_version"] = SCHEMA_VERSION
+	return migrated if bool(validate_snapshot(migrated).get("valid", false)) else {}
 
 
 static func inactive_snapshot() -> Dictionary:
@@ -596,6 +628,16 @@ static func validate_snapshot(data: Dictionary) -> Dictionary:
 	for dictionary_field: String in ["network_draft", "route_draft"]:
 		if not current.get(dictionary_field, null) is Dictionary:
 			return {"valid": false, "error": "invalid_session_field:%s" % dictionary_field}
+	var route_draft: Dictionary = current.get("route_draft", {})
+	if route_draft.has("corridor_quote"):
+		var corridor_quote_validation := TransportModesScript.validate_route_package_corridor_price_quote(
+			route_draft.get("corridor_quote", null)
+		)
+		if not bool(corridor_quote_validation.get("valid", false)):
+			return {"valid": false, "error": "invalid_corridor_quote"}
+		var corridor: Dictionary = Dictionary(route_draft.get("corridor_quote", {})).get("corridor", {})
+		if str(corridor.get("mode", "")) != str(current.get("mode", "")):
+			return {"valid": false, "error": "corridor_quote_mode_mismatch"}
 	for array_field: String in ["station_refs", "network_refs", "route_refs"]:
 		if not current.get(array_field, null) is Array:
 			return {"valid": false, "error": "invalid_session_field:%s" % array_field}
@@ -1210,3 +1252,70 @@ static func _reference_status_matches_project(reference_status: String, project_
 		or (reference_status == "completed" and project_status == "completed")
 		or (reference_status == "cancelled" and project_status in ["planned", "under_construction"])
 	)
+
+
+static func _normalize_corridor_quote(value: Variant) -> Dictionary:
+	if not value is Dictionary:
+		return {}
+	var source: Dictionary = value
+	var corridor: Dictionary = source.get("corridor", {})
+	var refs: Array[Dictionary] = []
+	for ref_value: Variant in corridor.get("reused_segment_refs", []):
+		if ref_value is Dictionary:
+			var ref: Dictionary = ref_value
+			refs.append({
+				"id": str(ref.get("id", "")),
+				"kind": str(ref.get("kind", "")),
+				"tile_ids": _normalized_int_array(ref.get("tile_ids", [])),
+			})
+	var runs: Array[Dictionary] = []
+	for run_value: Variant in corridor.get("new_runs", []):
+		if run_value is Dictionary:
+			var run: Dictionary = run_value
+			runs.append({
+				"kind": str(run.get("kind", "")),
+				"tile_path": _normalized_int_array(run.get("tile_path", [])),
+			})
+	var normalized_corridor := {
+		"schema_version": int(corridor.get("schema_version", -1)),
+		"mode": str(corridor.get("mode", "")),
+		"segment_kind": str(corridor.get("segment_kind", "")),
+		"classification": str(corridor.get("classification", "")),
+		"route_tile_ids": _normalized_int_array(corridor.get("route_tile_ids", [])),
+		"reused_segment_refs": refs,
+		"new_runs": runs,
+		"total_units": int(corridor.get("total_units", -1)),
+		"reused_units": int(corridor.get("reused_units", -1)),
+		"new_units": int(corridor.get("new_units", -1)),
+	}
+	var price_breakdown: Dictionary = source.get("price_breakdown", {})
+	var maintenance_breakdown: Dictionary = source.get("maintenance_breakdown", {})
+	var result := {
+		"quote_schema_version": int(source.get("quote_schema_version", -1)),
+		"price_model": str(source.get("price_model", "")),
+		"price_provenance": str(source.get("price_provenance", "")),
+		"corridor": normalized_corridor,
+		"price_breakdown": {
+			"reused_corridor": int(price_breakdown.get("reused_corridor", -1)),
+			"new_corridor": int(price_breakdown.get("new_corridor", -1)),
+		},
+		"maintenance_breakdown": {
+			"reused_corridor": int(maintenance_breakdown.get("reused_corridor", -1)),
+			"new_corridor": int(maintenance_breakdown.get("new_corridor", -1)),
+		},
+		"total_cost": int(source.get("total_cost", -1)),
+		"monthly_maintenance": int(source.get("monthly_maintenance", -1)),
+		"checksum_version": int(source.get("checksum_version", -1)),
+		"checksum": str(source.get("checksum", "")),
+	}
+	if source.has("ok"):
+		result["ok"] = bool(source.get("ok", false))
+	return result
+
+
+static func _normalized_int_array(value: Variant) -> Array[int]:
+	var result: Array[int] = []
+	if value is Array:
+		for item: Variant in value:
+			result.append(int(item))
+	return result

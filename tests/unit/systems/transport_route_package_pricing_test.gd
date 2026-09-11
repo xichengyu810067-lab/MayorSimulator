@@ -32,7 +32,46 @@ func _initialize() -> void:
 	_check(TransportModesScript.route_package_monthly_maintenance(-1) == 0, "negative maintenance length clamps to zero")
 	_check(TransportModesScript.is_route_package_price_model("route_package_v1"), "v1 remains a supported historical model")
 	_check(TransportModesScript.is_route_package_price_model("route_package_v2"), "v2 is supported for new packages")
-	_check(not TransportModesScript.is_route_package_price_model("route_package_v3"), "unknown models fail closed")
+	_check(TransportModesScript.is_route_package_price_model("route_package_v3"), "v3 is supported for reuse-aware corridor quotes")
+	_check(not TransportModesScript.is_route_package_price_model("route_package_v4"), "unknown models fail closed")
+	var mixed_contract := {
+		"schema_version": TransportModesScript.ROUTE_PACKAGE_CORRIDOR_SCHEMA_VERSION,
+		"mode": "bus",
+		"segment_kind": "road",
+		"classification": "mixed",
+		"route_tile_ids": [0, 1, 2, 3],
+		"reused_segment_refs": [{"id": "segment_a", "kind": "road", "tile_ids": [0, 1]}],
+		"new_runs": [{"kind": "road", "tile_path": [2, 3]}],
+		"total_units": 4,
+		"reused_units": 2,
+		"new_units": 2,
+	}
+	var mixed_quote := TransportModesScript.route_package_corridor_price_quote(mixed_contract)
+	_check(bool(mixed_quote.get("ok", false)), "valid reuse-aware corridor quote succeeds")
+	_check(str(mixed_quote.get("price_model", "")) == "route_package_v3", "reuse-aware corridor quote uses price model v3")
+	_check(int(mixed_quote.get("total_cost", -1)) == 1_040, "v3 charges only two new road units")
+	_check(int(mixed_quote.get("monthly_maintenance", -1)) == 36, "v3 maintenance charges only two new road units")
+	_check(int(mixed_quote.get("price_breakdown", {}).get("reused_corridor", -1)) == 0, "v3 reused corridor construction is never charged")
+	_check(int(mixed_quote.get("maintenance_breakdown", {}).get("reused_corridor", -1)) == 0, "v3 reused corridor maintenance is never charged")
+	_check(bool(TransportModesScript.validate_route_package_corridor_price_quote(mixed_quote).get("valid", false)), "v3 quote checksum and version validate")
+	for field_name: String in ["total_cost", "checksum_version", "quote_schema_version"]:
+		var tampered := mixed_quote.duplicate(true)
+		tampered[field_name] = int(tampered.get(field_name, 0)) + 1
+		_check(not bool(TransportModesScript.validate_route_package_corridor_price_quote(tampered).get("valid", true)), "tampered v3 %s fails closed" % field_name)
+	var tampered_breakdown := mixed_quote.duplicate(true)
+	tampered_breakdown["price_breakdown"]["reused_corridor"] = 1
+	_check(not bool(TransportModesScript.validate_route_package_corridor_price_quote(tampered_breakdown).get("valid", true)), "reused corridor charge fails closed")
+	var tampered_checksum := mixed_quote.duplicate(true)
+	tampered_checksum["checksum"] = "0".repeat(64)
+	_check(not bool(TransportModesScript.validate_route_package_corridor_price_quote(tampered_checksum).get("valid", true)), "forged v3 checksum fails closed")
+	var all_reuse_contract := mixed_contract.duplicate(true)
+	all_reuse_contract["classification"] = "all_reuse"
+	all_reuse_contract["reused_segment_refs"] = [{"id": "segment_a", "kind": "road", "tile_ids": [0, 1, 2, 3]}]
+	all_reuse_contract["new_runs"] = []
+	all_reuse_contract["reused_units"] = 4
+	all_reuse_contract["new_units"] = 0
+	var all_reuse_quote := TransportModesScript.route_package_corridor_price_quote(all_reuse_contract)
+	_check(bool(all_reuse_quote.get("ok", false)) and int(all_reuse_quote.get("total_cost", -1)) == 0, "all-reuse v3 corridor is a deterministic zero-cost quote")
 	var unknown_quote: Dictionary = TransportModesScript.route_package_price_quote(3, "hover_lane")
 	_check(not bool(unknown_quote.get("ok", true)), "unknown network kind fails closed")
 	_check(str(unknown_quote.get("error", "")) == "invalid_network_kind", "unknown network kind reports a stable error")

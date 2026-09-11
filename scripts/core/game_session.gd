@@ -222,11 +222,25 @@ func _migrate_state_snapshot_to_current_pair(state_snapshot: Dictionary) -> Dict
 	migrated_state["metadata"] = metadata
 	var footprints_migrated := bool(footprint_migration.get("migrated", false))
 	# Schemas four through six remain direct-read compatible because they do not
-	# contain enough current subsystem state to synthesize schema ten safely.
+	# contain enough current subsystem state to synthesize schema eleven safely.
 	# Their building records are normalized now and the coordinator writes schema
-	# ten on the next save without guessing any historical footprint size.
+	# eleven on the next save without guessing any historical footprint size.
+	if schema_version >= 6 and schema_version < SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION:
+		var transport_value: Variant = vertical.get("transport", null)
+		if not transport_value is Dictionary:
+			return {"ok": false, "migrated": false, "state": {}}
+		var migrated_transport := TransportNetworkSystemScript.migrate_snapshot(transport_value as Dictionary)
+		if migrated_transport.is_empty():
+			return {"ok": false, "migrated": false, "state": {}}
+		vertical["transport"] = migrated_transport
+		metadata["vertical_slice"] = vertical
+		migrated_state["metadata"] = metadata
 	if schema_version < SaveSchemaAuthorityScript.LEGACY_MIGRATION_VERTICAL_SCHEMA_VERSION:
-		return {"ok": true, "migrated": footprints_migrated, "state": migrated_state}
+		return {
+			"ok": true,
+			"migrated": footprints_migrated or schema_version >= 6,
+			"state": migrated_state,
+		}
 	var terrain_value: Variant = vertical.get("terrain", null)
 	if not terrain_value is Dictionary:
 		return {"ok": false, "migrated": false, "state": {}}
@@ -237,6 +251,18 @@ func _migrate_state_snapshot_to_current_pair(state_snapshot: Dictionary) -> Dict
 	var layout_version := int(layout_value)
 	if SaveSchemaAuthorityScript.validate_vertical_terrain_pair(schema_version, layout_version):
 		return {"ok": true, "migrated": footprints_migrated, "state": migrated_state}
+	if SaveSchemaAuthorityScript.is_transport_reuse_migration_pair(schema_version, layout_version):
+		var planning_value: Variant = vertical.get("transport_planning_session", null)
+		if not planning_value is Dictionary:
+			return {"ok": false, "migrated": false, "state": {}}
+		var migrated_planning := TransportPlanningSessionScript.migrate_snapshot(planning_value as Dictionary)
+		if migrated_planning.is_empty():
+			return {"ok": false, "migrated": false, "state": {}}
+		vertical["schema_version"] = SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION
+		vertical["transport_planning_session"] = migrated_planning
+		metadata["vertical_slice"] = vertical
+		migrated_state["metadata"] = metadata
+		return {"ok": true, "migrated": true, "state": migrated_state}
 	if SaveSchemaAuthorityScript.is_transport_session_migration_pair(schema_version, layout_version):
 		vertical["schema_version"] = SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION
 		vertical["transport_planning_session"] = TransportPlanningSessionScript.inactive_snapshot()
