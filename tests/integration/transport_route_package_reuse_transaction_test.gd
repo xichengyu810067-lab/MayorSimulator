@@ -75,6 +75,7 @@ func _test_mixed_commits_only_new_runs_and_round_trips() -> void:
 	_check(bool(quote.get("ok", false)), "mixed quote succeeds: %s" % [quote])
 	var contract: Dictionary = quote.get("corridor_contract", {})
 	_check(str(contract.get("classification", "")) == "mixed", "mixed corridor is classified exactly")
+	_check(str(quote.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_MODEL, "mixed corridor retains v3 reuse pricing")
 	_check(Array(contract.get("reused_segment_refs", [])).size() == 1 and Array(contract.get("new_runs", [])).size() == 2, "mixed corridor contains one reused ref and two ordered new runs")
 	_check(int(quote.get("route_construction_cost", -1)) == 2_080 and int(quote.get("route_monthly_maintenance", -1)) == 72, "mixed quote accounts only for four new road cells")
 	var started: Dictionary = coordinator.start_transport_session_package(grid)

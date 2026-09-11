@@ -183,6 +183,16 @@ func _run() -> void:
 	_check(main.municipal_overlay.is_open() and main.municipal_overlay.current_page() == "transport_planning", "route draft did not return to the same planning page")
 	_check(main.map_action_mode == "inspect" and main.transport_plan_tiles.is_empty(), "road confirmation did not clear the completed map draft")
 	_check(int(main.vertical_slice.treasury_balance()) == funds_before and main.vertical_slice.construction.jobs.size() == jobs_before_session, "route draft changed authoritative construction state before package confirmation")
+	var all_new_package_quote: Dictionary = main.vertical_slice.transport_session_package_quote(main.city_grid)
+	_check(
+		bool(all_new_package_quote.get("ok", false)),
+		"five-tile all-new bus package does not produce a confirmation quote: %s" % [all_new_package_quote]
+	)
+	_check(
+		str(all_new_package_quote.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_MODEL
+		and str(all_new_package_quote.get("price_provenance", "")) == TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_PROVENANCE,
+		"five-tile all-new bus package does not retain the R5C v3 corridor price contract"
+	)
 	continue_button = main.transport_planning_panel.find_child("TransportPlanningSessionContinue", true, false) as Button
 	_check(continue_button != null and continue_button.text.contains("確認總包") and not continue_button.disabled, "route-edit phase lacks an enabled one-step package confirmation")
 	var package_detail := main.transport_planning_panel.find_child("TransportPlanningSessionDetail", true, false) as Label
@@ -242,8 +252,8 @@ func _run() -> void:
 	_check(_contains_all(main.hint_label.text, ["公車車庫", "已完工"]) and not main.hint_label.text.contains("施工中"), "completed BUS depot selection presents the wrong construction state: %s" % main.hint_label.text)
 	_check(selected_completed_depot_button != null and selected_completed_depot_button.tooltip_text.contains("公車車庫") and not selected_completed_depot_button.tooltip_text.contains("施工中"), "completed BUS depot selection and hover disagree: selection=%s hover=%s" % [main.hint_label.text, selected_completed_depot_button.tooltip_text if selected_completed_depot_button != null else "missing button"])
 	var route: Dictionary = main.vertical_slice.transport.routes.values()[0]
-	_check(str(route.get("status", "")) == "operational" and str(route.get("price_model", "")) == "route_package_v2", "automatically materialized route is not operational with v2 pricing")
-	_check(str(route.get("price_provenance", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_PROVENANCE, "materialized route lost its quote_project provenance")
+	_check(str(route.get("status", "")) == "operational" and str(route.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_MODEL, "automatically materialized route is not operational with R5C v3 pricing")
+	_check(str(route.get("price_provenance", "")) == TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_PROVENANCE, "materialized route lost its completed-corridor provenance")
 	var completed_station_refs: Array = session.get("station_refs", [])
 	var completed_station_ids: Array[String] = []
 	for ref_value: Variant in completed_station_refs:

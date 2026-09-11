@@ -1,6 +1,8 @@
 class_name TransportModes
 extends RefCounted
 
+const CityTerrainLayoutScript = preload("res://data/catalogs/city_terrain_layout.gd")
+
 ## Canonical, JSON-safe transport rules.  This catalog deliberately describes
 ## infrastructure and operations rather than terrain art: roads, tracks, and
 ## runways live in the transport overlay and never replace natural terrain.
@@ -470,11 +472,13 @@ static func _validated_tile_array(value: Variant, allow_empty: bool) -> Dictiona
 
 static func _tiles_are_cardinally_contiguous(tile_ids: Array) -> bool:
 	for index: int in range(1, tile_ids.size()):
-		var previous := int(tile_ids[index - 1])
-		var current := int(tile_ids[index])
-		var row_delta := absi(previous / 10 - current / 10)
-		var column_delta := absi(previous % 10 - current % 10)
-		if row_delta + column_delta != 1:
+		var previous := CityTerrainLayoutScript.coordinate_for_tile_id(int(tile_ids[index - 1]))
+		var current := CityTerrainLayoutScript.coordinate_for_tile_id(int(tile_ids[index]))
+		if (
+			previous == CityTerrainLayoutScript.INVALID_COORDINATE
+			or current == CityTerrainLayoutScript.INVALID_COORDINATE
+			or absi(previous.x - current.x) + absi(previous.y - current.y) != 1
+		):
 			return false
 	return true
 
