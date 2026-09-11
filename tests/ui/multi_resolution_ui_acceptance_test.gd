@@ -22,7 +22,9 @@ const MUNICIPAL_PAGES: PackedStringArray = [
 ]
 const GEOMETRY_EPSILON := 1.5
 const MIN_INTERACTIVE_EXTENT := 44.0
+const MIN_LONG_LABEL_LENGTH := 20
 const SCROLL_POSITION_EPSILON := 1.0
+const INFORMATIONAL_PAGE_IDS := ["city_data", "report"]
 
 var _failed := false
 var _check_count := 0
@@ -158,18 +160,28 @@ func _validate_resolution(main: Control, expected_resolution: Vector2i) -> void:
 	main.exit_confirmation.close()
 	await _settle(1)
 
-	main.municipal_overlay.open_hub()
+	var municipal_button := main.find_child("MunicipalButton", true, false) as Button
+	_check(municipal_button != null, "%s HUD MunicipalButton exists before municipal layout validation" % expected_resolution)
+	if municipal_button == null:
+		return
+	municipal_button.pressed.emit()
 	await _settle(2)
-	await _validate_municipal_surface(main.municipal_overlay, "hub", expected_resolution)
+	var municipal_overlay := main.get("municipal_overlay") as Control
+	_check(municipal_overlay != null and municipal_overlay.is_visible_in_tree(), "%s first municipal action creates the overlay" % expected_resolution)
+	if municipal_overlay == null:
+		return
+	municipal_overlay.call("open_hub")
+	await _settle(1)
+	await _validate_municipal_surface(municipal_overlay, "hub", expected_resolution)
 	for page_id in MUNICIPAL_PAGES:
-		main.municipal_overlay.open_page(page_id)
+		municipal_overlay.call("open_page", page_id)
 		await _settle(2)
 		_check(
-			main.municipal_overlay.current_page() == page_id,
+			municipal_overlay.call("current_page") == page_id,
 			"%s municipal page '%s' opens" % [expected_resolution, page_id]
 		)
-		await _validate_municipal_surface(main.municipal_overlay, page_id, expected_resolution)
-	main.municipal_overlay.close_overlay()
+		await _validate_municipal_surface(municipal_overlay, page_id, expected_resolution)
+	municipal_overlay.call("close_overlay")
 	await _settle(1)
 
 
@@ -229,7 +241,7 @@ func _validate_municipal_surface(overlay: Control, page_id: String, resolution: 
 			var active_page_label := "%s active page (PageHost=%s)" % [label, page_host_rect]
 			_validate_required_surface(child, page_boundary, active_page_label)
 			_validate_visible_control_tree(child, page_boundary, active_page_label)
-			await _validate_page_operability(child, page_host_rect, active_page_label)
+			await _validate_page_operability(child, page_host_rect, active_page_label, page_id)
 	_check(visible_page_count == 1, "%s exposes exactly one active page" % label)
 
 	_validate_visible_control_tree(overlay, viewport_rect, label)
@@ -273,7 +285,7 @@ func _validate_visible_control_tree(surface: Control, viewport_rect: Rect2, labe
 			)
 
 
-func _validate_page_operability(page: Control, page_host_rect: Rect2, label: String) -> void:
+func _validate_page_operability(page: Control, page_host_rect: Rect2, label: String, page_id: String) -> void:
 	var scroll_containers := _visible_scroll_containers(page)
 	var initial_scroll_positions: Array[Dictionary] = []
 	for scroll: ScrollContainer in scroll_containers:
@@ -286,9 +298,20 @@ func _validate_page_operability(page: Control, page_host_rect: Rect2, label: Str
 		_validate_scroll_range(scroll, label)
 		await _exercise_scroll_range(scroll, label)
 
-	for button: BaseButton in _visible_interactive_buttons(page):
+	var buttons := _visible_interactive_buttons(page)
+	for button: BaseButton in buttons:
 		_interactive_count += 1
 		await _bring_button_into_view(button, page, page_host_rect, label)
+
+	if page_id in INFORMATIONAL_PAGE_IDS:
+		_check(buttons.is_empty(), "%s information page has no invented action button" % label)
+		var long_label := _pick_long_label(page)
+		_check(
+			long_label != null,
+			"%s includes a visible long content sentinel for scrollable-page checks" % label
+		)
+		if long_label != null:
+			await _bring_label_into_view(long_label as Label, page, page_host_rect, label)
 
 	# Page inspection must not mutate the player's scroll position. Restore both
 	# axes after all range and per-control traversal, then verify the restoration.
@@ -438,6 +461,71 @@ func _validate_interactive_target(control: Control, label: String) -> void:
 		rect.size.x + GEOMETRY_EPSILON >= MIN_INTERACTIVE_EXTENT and rect.size.y + GEOMETRY_EPSILON >= MIN_INTERACTIVE_EXTENT,
 		"%s receives at least %.0fx%.0f logical pixels after layout: %s" % [label, MIN_INTERACTIVE_EXTENT, MIN_INTERACTIVE_EXTENT, rect]
 	)
+
+
+func _pick_long_label(page: Control) -> Label:
+	if page == null:
+		return null
+	var selected: Label
+	var selected_length := -1
+	for node_variant in page.find_children("*", "Label", true, false):
+		var label := node_variant as Label
+		if label == null or not label.is_visible_in_tree():
+			continue
+		var current_length := str(label.text).length()
+		if current_length > selected_length:
+			selected = label
+			selected_length = current_length
+	if selected != null and selected_length >= MIN_LONG_LABEL_LENGTH:
+		return selected
+	return null
+
+
+func _bring_label_into_view(label: Label, page: Control, page_host_rect: Rect2, context: String) -> void:
+	var node_path := str(label.get_path())
+	var raw_rect := label.get_global_rect()
+	var needs_vertical_reveal := (
+		raw_rect.position.y < page_host_rect.position.y - GEOMETRY_EPSILON
+		or raw_rect.end.y > page_host_rect.end.y + GEOMETRY_EPSILON
+	)
+	var vertical_reveal_observed := false
+	_check(
+		_rect_is_finite(raw_rect),
+		"%s label '%s' has finite geometry: %s" % [context, node_path, raw_rect]
+	)
+	_check(
+		raw_rect.size.x > 0.0 and raw_rect.size.y > 0.0,
+		"%s label '%s' has positive geometry: %s" % [context, node_path, raw_rect]
+	)
+	_check(
+		not label.clip_text,
+		"%s label '%s' keeps copy fully readable (no clip): %s" % [context, node_path, label.text]
+	)
+	for scroll: ScrollContainer in _scroll_ancestors(label, page):
+		_check(
+			scroll.horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED,
+			"%s long label '%s' forbids horizontal scrolling" % [context, node_path]
+		)
+		_check(
+			scroll.vertical_scroll_mode != ScrollContainer.SCROLL_MODE_DISABLED,
+			"%s long label '%s' permits vertical reveal" % [context, node_path]
+		)
+		var vertical_before := scroll.scroll_vertical
+		scroll.ensure_control_visible(label)
+		await _settle(2)
+		_scroll_move_count += 1
+		vertical_reveal_observed = vertical_reveal_observed or absf(float(scroll.scroll_vertical - vertical_before)) > GEOMETRY_EPSILON
+	var revealed_rect := label.get_global_rect()
+	var host_intersection := revealed_rect.intersection(page_host_rect)
+	_check(
+		_rect_is_finite(revealed_rect)
+		and host_intersection.size.x >= revealed_rect.size.x - GEOMETRY_EPSILON
+		and host_intersection.size.y >= revealed_rect.size.y - GEOMETRY_EPSILON
+		and host_intersection.has_area(),
+		"%s long label '%s' is scrolled fully into the page host: host=%s rect=%s" % [context, node_path, page_host_rect, revealed_rect]
+	)
+	if needs_vertical_reveal:
+		_check(vertical_reveal_observed, "%s long label '%s' is revealed by vertical scrolling" % [context, node_path])
 
 
 func _visible_scroll_containers(page: Control) -> Array[ScrollContainer]:

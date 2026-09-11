@@ -239,15 +239,17 @@ func _monthly_data_kpi_card(card_key: String, icon_key: String, title_text: Stri
 	stack.add_child(header)
 	var value := _label("—", 23, _theme_text())
 	value.name = "MonthlyDataKpiValue_%s" % card_key
-	value.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	value.clip_text = true
+	value.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	value.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+	value.clip_text = false
 	labels["monthly_data_kpi_%s_value" % card_key] = value
 	value.visible = false
 	stack.add_child(value)
 	var detail := _label("", 13, _theme_muted())
 	detail.name = "MonthlyDataKpiDetail_%s" % card_key
-	detail.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	detail.clip_text = true
+	detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	detail.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+	detail.clip_text = false
 	labels["monthly_data_kpi_%s_detail" % card_key] = detail
 	stack.add_child(detail)
 	var chart = BenchmarkDeltaChartScript.new()
@@ -328,8 +330,9 @@ func _finance_visual_row(label_key: String, title_text: String) -> VBoxContainer
 	var value := _label("", 18, _theme_accent_text())
 	value.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	value.custom_minimum_size = Vector2(108, 0)
-	value.clip_text = true
-	value.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	value.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	value.clip_text = false
+	value.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
 	labels[label_key] = value
 	row.add_child(value)
 	box.add_child(row)

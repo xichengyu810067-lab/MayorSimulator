@@ -128,8 +128,9 @@ func _build_scene() -> void:
 	_stage_badge.custom_minimum_size = Vector2(180, 44)
 	_stage_badge.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_stage_badge.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_stage_badge.clip_text = true
-	_stage_badge.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_stage_badge.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_stage_badge.clip_text = false
+	_stage_badge.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
 	_stage_badge.set_meta("l10n_skip", true)
 	_shell.top_content.add_child(_stage_badge)
 

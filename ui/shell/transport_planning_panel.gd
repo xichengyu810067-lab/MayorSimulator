@@ -16,7 +16,7 @@ const SECTION_FONT_SIZE := 22
 const TITLE_FONT_SIZE := 28
 const CONTROL_FONT_SIZE := 18
 const CONTROL_HEIGHT := 52.0
-const CONTENT_MINIMUM_WIDTH := 900.0
+const PAGER_MINIMUM_CHOICE_WIDTH := 240.0
 
 const INFRASTRUCTURE_CHOICES: Array[Dictionary] = [
 	{"id": "road", "label": "道路", "hint": "汽車、摩托車與公車共用的連續路網。", "add": "build", "remove": "demolish", "add_label": "興建", "remove_label": "拆除"},
@@ -163,7 +163,6 @@ func debug_snapshot() -> Dictionary:
 func _build_content() -> void:
 	_content = VBoxContainer.new()
 	_content.name = "TransportPlanningContent"
-	_content.custom_minimum_size = Vector2(CONTENT_MINIMUM_WIDTH, 0)
 	_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_content.add_theme_constant_override("separation", 14)
 	add_child(_content)
@@ -214,6 +213,7 @@ func _build_content() -> void:
 	_infrastructure_section_card = infrastructure_section.get_parent() as Control
 	_infrastructure_pager = ProgressiveChoicePagerScript.new(3, 3)
 	_infrastructure_pager.name = "TransportInfrastructurePager"
+	_infrastructure_pager.call("set_minimum_choice_width", PAGER_MINIMUM_CHOICE_WIDTH)
 	_register_pager(_infrastructure_pager)
 	infrastructure_section.add_child(_infrastructure_pager)
 	for choice: Dictionary in INFRASTRUCTURE_CHOICES:
@@ -247,6 +247,7 @@ func _build_content() -> void:
 	operations_section.add_child(_live_summary)
 	_route_mode_pager = ProgressiveChoicePagerScript.new(3, 3)
 	_route_mode_pager.name = "TransportRouteModePager"
+	_route_mode_pager.call("set_minimum_choice_width", PAGER_MINIMUM_CHOICE_WIDTH)
 	_register_pager(_route_mode_pager)
 	operations_section.add_child(_route_mode_pager)
 	for mode: Dictionary in ROUTE_MODES:

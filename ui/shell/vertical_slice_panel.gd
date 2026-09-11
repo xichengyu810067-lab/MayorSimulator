@@ -64,6 +64,7 @@ func _init() -> void:
 	name = "設計藍圖"
 	size_flags_vertical = Control.SIZE_EXPAND_FILL
 	horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	_build_content()
 
 func set_selected_building(display_name: String) -> void:

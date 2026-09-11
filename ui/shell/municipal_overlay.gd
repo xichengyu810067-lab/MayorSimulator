@@ -317,8 +317,11 @@ func _build_shell() -> void:
 	_header_title.text = "市政服務中心"
 	_header_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_header_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_header_title.clip_text = true
-	_header_title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	# Page titles are required navigation context.  At the release target they
+	# have sufficient width between the two 44px actions, so never hide a
+	# localized title behind clipping or an ellipsis.
+	_header_title.clip_text = false
+	_header_title.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
 	_header_title.add_theme_font_size_override("font_size", HEADER_FONT_SIZE)
 	header.add_child(_header_title)
 
