@@ -30,6 +30,7 @@ func _run() -> void:
 		_check(main.monthly_report_history.size() == expected_period, "settlement records period %d exactly once" % expected_period)
 		var latest: Dictionary = main.monthly_report_history[main.monthly_report_history.size() - 1]
 		_check(int(latest.get("period_index", 0)) == expected_period, "settlement period index remains monotonic at %d" % expected_period)
+		main.call("_open_city_data")
 		var chart = main.monthly_data_service_charts.get("security")
 		_check(chart != null, "period %d keeps the security donut available" % expected_period)
 		if chart == null:
