@@ -163,8 +163,10 @@ func _run_verifier() -> void:
 	_check(VALID_PHASES.has(_target_phase), "verification phase is supported: %s" % _target_phase)
 	var seed_result := _read_json(_control_path("seed-result.json"))
 	var crash_intent := _read_json(_control_path("crash-intent.json"))
+	var interrupt_marker := _read_json(_control_path("interrupt-marker.json"))
 	_check(not seed_result.is_empty(), "verifier reads seed expectations")
 	_check(not crash_intent.is_empty(), "verifier reads the pre-interruption intent")
+	_check(not interrupt_marker.is_empty(), "verifier reads the exact interrupted temporary path")
 	_check(str(crash_intent.get("phase", "")) == _target_phase, "crash intent phase matches verifier phase")
 	if not _failures.is_empty():
 		_write_verification_result({}, {}, {}, {}, "", ERR_INVALID_DATA)
@@ -174,7 +176,8 @@ func _run_verifier() -> void:
 	var state_a: Dictionary = seed_result.get("state_a", {})
 	var state_b: Dictionary = seed_result.get("state_b", {})
 	var state_c: Dictionary = crash_intent.get("state_c", {})
-	var before_load := _snapshot_artifacts()
+	var interrupted_temporary_path := str(interrupt_marker.get("temporary_path", ""))
+	var before_load := _snapshot_artifacts(interrupted_temporary_path)
 	_validate_interrupted_topology(before_load, state_a, state_b, state_c)
 
 	var restored = GameSessionScript.new(TEST_SEED + 2, 1)
@@ -284,12 +287,12 @@ func _session_snapshot(session) -> Dictionary:
 	}
 
 
-func _snapshot_artifacts() -> Dictionary:
+func _snapshot_artifacts(temporary_path: String = "") -> Dictionary:
 	var absolute_path := ProjectSettings.globalize_path(SAVE_PATH)
 	return {
 		"primary": _inspect_candidate(absolute_path),
 		"backup": _inspect_candidate(absolute_path + ".bak"),
-		"temporary": _inspect_candidate(absolute_path + ".tmp"),
+		"temporary": _inspect_candidate(temporary_path if not temporary_path.is_empty() else absolute_path + ".tmp"),
 		"recovery_temporary": _inspect_candidate(absolute_path + ".recovery.tmp"),
 	}
 

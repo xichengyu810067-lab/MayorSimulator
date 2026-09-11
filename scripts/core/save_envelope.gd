@@ -110,6 +110,17 @@ static func _migrate_validated_dict(data: Dictionary) -> Dictionary:
 
 
 static func validate_untrusted_dict(data: Dictionary) -> Dictionary:
+	return _validate_untrusted_dict_with_limits(data, {})
+
+
+static func validate_untrusted_dict_with_lower_limits_for_testing(data: Dictionary, lower_limits: Dictionary) -> Dictionary:
+	# Tests may exercise exact boundaries with small fixtures, but this entrypoint
+	# can only tighten production ceilings. It cannot make runtime input more
+	# permissive even if product code calls it accidentally.
+	return _validate_untrusted_dict_with_limits(data, lower_limits)
+
+
+static func _validate_untrusted_dict_with_limits(data: Dictionary, lower_limits: Dictionary) -> Dictionary:
 	for field_name: String in ["schema_version", "game_time", "event_sequence", "command_sequence"]:
 		if not data.has(field_name):
 			continue
@@ -121,27 +132,31 @@ static func validate_untrusted_dict(data: Dictionary) -> Dictionary:
 	for field_name: String in ["rng_seed", "rng_state"]:
 		if data.has(field_name) and not _is_integer_value(data[field_name]):
 			return {"ok": false, "error": "Save envelope field '%s' must be an integer." % field_name}
-	return _validate_bounded_tree(data)
+	return _validate_bounded_tree(data, lower_limits)
 
 
-static func _validate_bounded_tree(root: Variant) -> Dictionary:
+static func _validate_bounded_tree(root: Variant, lower_limits: Dictionary = {}) -> Dictionary:
+	var max_depth := _lower_limit(lower_limits, "max_json_nesting_depth", MAX_JSON_NESTING_DEPTH)
+	var max_total_items := _lower_limit(lower_limits, "max_total_container_items", MAX_TOTAL_CONTAINER_ITEMS)
+	var max_container_items := _lower_limit(lower_limits, "max_items_per_container", MAX_ITEMS_PER_CONTAINER)
+	var max_string_bytes := _lower_limit(lower_limits, "max_string_bytes", MAX_STRING_BYTES)
 	var stack: Array[Dictionary] = [{"value": root, "depth": 1, "entered": false}]
 	var total_items := 0
 	while not stack.is_empty():
 		var frame: Dictionary = stack[stack.size() - 1]
 		var depth := int(frame["depth"])
-		if depth > MAX_JSON_NESTING_DEPTH:
-			return {"ok": false, "error": "Save payload nesting exceeds %d levels." % MAX_JSON_NESTING_DEPTH}
+		if depth > max_depth:
+			return {"ok": false, "error": "Save payload nesting exceeds %d levels." % max_depth}
 		if not bool(frame["entered"]):
 			var value: Variant = frame["value"]
 			if value is Dictionary:
 				var dictionary: Dictionary = value
-				var size_error := _validate_container_size(dictionary.size())
+				var size_error := _validate_container_size(dictionary.size(), max_container_items)
 				if not size_error.is_empty():
 					return {"ok": false, "error": size_error}
 				total_items += dictionary.size()
-				if total_items > MAX_TOTAL_CONTAINER_ITEMS:
-					return {"ok": false, "error": "Save payload contains more than %d container items." % MAX_TOTAL_CONTAINER_ITEMS}
+				if total_items > max_total_items:
+					return {"ok": false, "error": "Save payload contains more than %d container items." % max_total_items}
 				frame["entered"] = true
 				frame["kind"] = "dictionary"
 				frame["keys"] = dictionary.keys()
@@ -149,17 +164,17 @@ static func _validate_bounded_tree(root: Variant) -> Dictionary:
 				continue
 			if value is Array:
 				var array: Array = value
-				var size_error := _validate_container_size(array.size())
+				var size_error := _validate_container_size(array.size(), max_container_items)
 				if not size_error.is_empty():
 					return {"ok": false, "error": size_error}
 				total_items += array.size()
-				if total_items > MAX_TOTAL_CONTAINER_ITEMS:
-					return {"ok": false, "error": "Save payload contains more than %d container items." % MAX_TOTAL_CONTAINER_ITEMS}
+				if total_items > max_total_items:
+					return {"ok": false, "error": "Save payload contains more than %d container items." % max_total_items}
 				frame["entered"] = true
 				frame["kind"] = "array"
 				frame["index"] = 0
 				continue
-			var scalar_error := _validate_scalar(value)
+			var scalar_error := _validate_scalar(value, max_string_bytes)
 			if not scalar_error.is_empty():
 				return {"ok": false, "error": scalar_error}
 			stack.pop_back()
@@ -174,17 +189,17 @@ static func _validate_bounded_tree(root: Variant) -> Dictionary:
 			var key: Variant = keys[index]
 			frame["index"] = index + 1
 			var key_name := str(key)
-			var key_error := _validate_string(key_name)
+			var key_error := _validate_string(key_name, max_string_bytes)
 			if not key_error.is_empty():
 				return {"ok": false, "error": "Save dictionary key %s" % key_error}
 			var child: Variant = dictionary[key]
-			var collection_error := _validate_named_collection_size(key_name, child)
+			var collection_error := _validate_named_collection_size(key_name, child, lower_limits)
 			if not collection_error.is_empty():
 				return {"ok": false, "error": collection_error}
 			if child is Dictionary or child is Array:
 				stack.append({"value": child, "depth": depth + 1, "entered": false})
 			else:
-				var scalar_error := _validate_scalar(child)
+				var scalar_error := _validate_scalar(child, max_string_bytes)
 				if not scalar_error.is_empty():
 					return {"ok": false, "error": scalar_error}
 		else:
@@ -198,37 +213,37 @@ static func _validate_bounded_tree(root: Variant) -> Dictionary:
 			if child is Dictionary or child is Array:
 				stack.append({"value": child, "depth": depth + 1, "entered": false})
 			else:
-				var scalar_error := _validate_scalar(child)
+				var scalar_error := _validate_scalar(child, max_string_bytes)
 				if not scalar_error.is_empty():
 					return {"ok": false, "error": scalar_error}
 	return {"ok": true, "error": ""}
 
 
-static func _validate_container_size(size: int) -> String:
-	if size > MAX_ITEMS_PER_CONTAINER:
-		return "Save payload container has %d items; limit is %d." % [size, MAX_ITEMS_PER_CONTAINER]
+static func _validate_container_size(size: int, limit: int) -> String:
+	if size > limit:
+		return "Save payload container has %d items; limit is %d." % [size, limit]
 	return ""
 
 
-static func _validate_named_collection_size(key: String, collection: Variant) -> String:
+static func _validate_named_collection_size(key: String, collection: Variant, lower_limits: Dictionary = {}) -> String:
 	if not collection is Array and not collection is Dictionary:
 		return ""
 	var limit := -1
 	match key:
 		"records":
-			limit = MAX_POPULATION_RECORDS
+			limit = _lower_limit(lower_limits, "max_population_records", MAX_POPULATION_RECORDS)
 		"requests":
-			limit = MAX_REQUESTS
+			limit = _lower_limit(lower_limits, "max_requests", MAX_REQUESTS)
 		"income_transactions", "transactions", "entries":
-			limit = MAX_TRANSACTIONS
+			limit = _lower_limit(lower_limits, "max_transactions", MAX_TRANSACTIONS)
 		"events", "event_book":
-			limit = MAX_EVENTS
+			limit = _lower_limit(lower_limits, "max_events", MAX_EVENTS)
 		"monthly_report_history":
-			limit = MAX_MONTHLY_REPORT_HISTORY
+			limit = _lower_limit(lower_limits, "max_monthly_report_history", MAX_MONTHLY_REPORT_HISTORY)
 		"major_event_history":
-			limit = MAX_MAJOR_EVENT_HISTORY
+			limit = _lower_limit(lower_limits, "max_major_event_history", MAX_MAJOR_EVENT_HISTORY)
 		"checks_and_balances_history":
-			limit = MAX_CHECKS_AND_BALANCES_HISTORY
+			limit = _lower_limit(lower_limits, "max_checks_and_balances_history", MAX_CHECKS_AND_BALANCES_HISTORY)
 	if limit >= 0:
 		var collection_size: int = collection.size()
 		if collection_size > limit:
@@ -236,25 +251,31 @@ static func _validate_named_collection_size(key: String, collection: Variant) ->
 	return ""
 
 
-static func _validate_scalar(value: Variant) -> String:
+static func _validate_scalar(value: Variant, max_string_bytes: int = MAX_STRING_BYTES) -> String:
 	if value == null or value is bool or value is int:
 		return ""
 	if value is float:
 		return "" if is_finite(float(value)) else "Save payload contains a non-finite number."
 	if value is String:
-		return _validate_string(value as String)
+		return _validate_string(value as String, max_string_bytes)
 	return "Save payload contains a non-JSON value of type %s." % type_string(typeof(value))
 
 
-static func _validate_string(value: String) -> String:
+static func _validate_string(value: String, limit: int = MAX_STRING_BYTES) -> String:
 	var character_count := value.length()
-	if character_count > MAX_STRING_BYTES:
-		return "string exceeds %d UTF-8 bytes." % MAX_STRING_BYTES
+	if character_count > limit:
+		return "string exceeds %d UTF-8 bytes." % limit
 	# A Unicode scalar uses at most four UTF-8 bytes. Normal product strings avoid
 	# an allocation here; only unusually large strings need an exact byte count.
-	if character_count > int(MAX_STRING_BYTES / 4) and value.to_utf8_buffer().size() > MAX_STRING_BYTES:
-		return "string exceeds %d UTF-8 bytes." % MAX_STRING_BYTES
+	if character_count > int(limit / 4) and value.to_utf8_buffer().size() > limit:
+		return "string exceeds %d UTF-8 bytes." % limit
 	return ""
+
+
+static func _lower_limit(lower_limits: Dictionary, key: String, production_limit: int) -> int:
+	if not lower_limits.has(key):
+		return production_limit
+	return mini(production_limit, maxi(0, int(lower_limits[key])))
 
 
 static func _is_integer_value(value: Variant) -> bool:
