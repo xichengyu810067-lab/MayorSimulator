@@ -19,19 +19,11 @@ param(
     [ValidateRange(2, 36000)]
     [int]$SmokeFrames = 180,
 
-    [string]$OutputRoot = (Join-Path ([IO.Path]::GetTempPath()) ("mayor-main-exit-lifecycle-{0}" -f [Guid]::NewGuid().ToString('N'))),
-
-    [switch]$AllowDirtyHarness
+    [string]$OutputRoot = (Join-Path ([IO.Path]::GetTempPath()) ("mayor-main-exit-lifecycle-{0}" -f [Guid]::NewGuid().ToString('N')))
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-
-$HarnessPath = 'tests/qa/run_main_exit_lifecycle_probe.ps1'
-$AllowedDirtyHarnessPaths = @(
-    $HarnessPath,
-    'tests/qa/native_exit_objectdb_probe.gd.uid'
-)
 
 function Invoke-Git {
     param([Parameter(Mandatory = $true)][string[]]$Arguments)
@@ -166,12 +158,7 @@ if ($headBefore -ne $ExpectedHead -or $treeBefore -ne $ExpectedTree) {
     throw "Unexpected source baseline. HEAD=$headBefore tree=$treeBefore"
 }
 if ($statusBefore.Count -gt 0) {
-    $dirtyPaths = @($statusBefore | ForEach-Object { $_.Substring(3).Replace('\', '/') })
-    $unexpectedDirtyPaths = @($dirtyPaths | Where-Object { $_ -notin $AllowedDirtyHarnessPaths })
-    $onlyHarness = $dirtyPaths.Count -ge 1 -and $unexpectedDirtyPaths.Count -eq 0 -and $HarnessPath -in $dirtyPaths
-    if (-not ($AllowDirtyHarness -and $onlyHarness)) {
-        throw "Source worktree is not clean: $($statusBefore -join '; ')"
-    }
+    throw "Source worktree is not clean: $($statusBefore -join '; ')"
 }
 
 New-Item -ItemType Directory -Path $OutputRoot -ErrorAction Stop | Out-Null
@@ -211,6 +198,7 @@ for ($runNumber = 1; $runNumber -le $RunCount; $runNumber++) {
     $combinedLines = @(Get-Lines -Text $combined)
     $rendererLines = @($combinedLines | Where-Object { $_ -match '(?i)(renderer|rendering device|video adapter|vulkan|direct3d|opengl)' })
     $retentionLines = @($combinedLines | Where-Object { $_ -match '(?i)(ObjectDB|resource.*still in use|still in use.*resource|leaked instance|leak|RID allocations)' })
+    $observation = if ($retentionLines.Count -gt 0) { 'REPRODUCED' } else { 'NOT_REPRODUCED' }
     $armed = $captured.stdout.Contains("QA_RELEASE_SMOKE_ARMED frames=$SmokeFrames")
     $completed = $captured.stdout.Contains('QA_RELEASE_SMOKE_COMPLETED')
     $normalExit = $captured.exit_code -eq 0 -and $armed -and $completed
@@ -228,6 +216,7 @@ for ($runNumber = 1; $runNumber -le $RunCount; $runNumber++) {
         marker_armed = $armed
         marker_completed = $completed
         normal_scene_tree_exit = $normalExit
+        observation = $observation
         renderer_lines = $rendererLines
         retention_lines = $retentionLines
         stdout_path = $stdoutPath
@@ -249,11 +238,17 @@ $statusAfter = @($statusAfter | Where-Object { -not [string]::IsNullOrWhiteSpace
 $sourceUnchanged = $headBefore -eq $headAfter -and $treeBefore -eq $treeAfter -and
     (($statusBefore -join "`n") -eq ($statusAfter -join "`n"))
 $allNormal = @($results | Where-Object { -not $_.normal_scene_tree_exit }).Count -eq 0
+$observation = if (@($results | Where-Object { $_.retention_lines.Count -gt 0 }).Count -gt 0) {
+    'REPRODUCED'
+} else {
+    'NOT_REPRODUCED'
+}
 
 $summary = [ordered]@{
     schema = 'mayor-main-exit-lifecycle-probe-v1'
     generated_utc = [DateTime]::UtcNow.ToString('o')
     result = if ($allNormal -and $sourceUnchanged) { 'PASS' } else { 'FAIL' }
+    observation = $observation
     godot_exe = $GodotExe
     godot_version = $versionText
     project_root = $ProjectRoot
@@ -279,9 +274,10 @@ $summary = [ordered]@{
 $summaryPath = Join-Path $OutputRoot 'summary.json'
 [IO.File]::WriteAllText($summaryPath, ($summary | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
 Write-Output "P3B_MAIN_EXIT_LIFECYCLE_RESULT=$($summary.result)"
+Write-Output "P3B_MAIN_EXIT_LIFECYCLE_OBSERVATION=$($summary.observation)"
 Write-Output "P3B_MAIN_EXIT_LIFECYCLE_SUMMARY=$summaryPath"
 foreach ($result in $results) {
-    Write-Output ("P3B_RUN={0} PID={1} EXIT={2} NORMAL={3} RETENTION_LINES={4}" -f $result.run, $result.pid, $result.exit_code, $result.normal_scene_tree_exit, $result.retention_lines.Count)
+    Write-Output ("P3B_RUN={0} PID={1} EXIT={2} NORMAL={3} OBSERVATION={4} RETENTION_LINES={5}" -f $result.run, $result.pid, $result.exit_code, $result.normal_scene_tree_exit, $result.observation, $result.retention_lines.Count)
 }
 if ($summary.result -ne 'PASS') {
     exit 1
