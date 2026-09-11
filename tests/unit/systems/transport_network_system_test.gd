@@ -16,6 +16,7 @@ func _initialize() -> void:
 func _run() -> void:
 	terrain = CityTerrainMapScript.new()
 	_validate_catalog_and_planning_rules()
+	_validate_completed_corridor_classification()
 	_validate_demolition_races_and_snapshot_shapes()
 	_validate_active_project_round_trips_and_reserved_ids()
 	_validate_multi_attachment_route_continuity()
@@ -120,6 +121,51 @@ func _validate_disconnected_station_never_spawns_vehicle() -> void:
 	var bus_runtime: Dictionary = bus_network.visual_runtime_snapshot([], terrain)
 	_check(Array(bus_runtime.get("operational_lines", [])).is_empty(), "bus stations without road access must spawn zero vehicle-producing lines")
 	_check(Array(bus_runtime.get("station_access_edges", [])).is_empty(), "bus stations without road access must expose no derived visual connector")
+
+
+func _validate_completed_corridor_classification() -> void:
+	var network = TransportNetworkSystemScript.new()
+	var reused_path := _horizontal_path(6, 1, 3)
+	_check(_build_and_complete(network, {"segments": [{"id": "reuse_main", "kind": "road", "tile_path": reused_path}]}), "reuse fixture must complete")
+	var snapshot_before := network.to_dict()
+	var all_reuse: Dictionary = network.classify_completed_corridor("bus", reused_path, terrain)
+	_check(bool(all_reuse.get("ok", false)), "completed road corridor must classify")
+	_check(str(all_reuse.get("classification", "")) == "all_reuse", "completed corridor must classify as all-reuse")
+	_check(Array(all_reuse.get("new_runs", [])).is_empty(), "all-reuse corridor must not create new runs")
+	_check(Array(all_reuse.get("reused_segment_refs", [])).size() == 1 and str(Dictionary(Array(all_reuse.get("reused_segment_refs", []))[0]).get("id", "")) == "reuse_main", "reused segment references must be deterministic")
+	_check(network.to_dict() == snapshot_before, "corridor classification must not mutate a completed network")
+
+	var mixed_path := _horizontal_path(6, 1, 5)
+	var mixed: Dictionary = network.classify_completed_corridor("bus", mixed_path, terrain)
+	_check(bool(mixed.get("ok", false)) and str(mixed.get("classification", "")) == "mixed", "partially completed corridor must classify as mixed")
+	_check(Array(mixed.get("new_runs", [])).size() == 1 and Dictionary(Array(mixed.get("new_runs", []))[0]).get("tile_path", []) == [_tile(4, 6), _tile(5, 6)], "mixed corridor must retain its contiguous new run")
+	var all_new: Dictionary = network.classify_completed_corridor("bus", _horizontal_path(7, 1, 3), terrain)
+	_check(bool(all_new.get("ok", false)) and str(all_new.get("classification", "")) == "all_new", "empty corridor must classify as all-new")
+
+	_check(_build_and_complete(network, {"segments": [{"id": "reuse_left", "kind": "road", "tile_path": [_tile(1, 8)]}]}), "left split fixture must complete")
+	_check(_build_and_complete(network, {"segments": [{"id": "reuse_right", "kind": "road", "tile_path": [_tile(3, 8)]}]}), "right split fixture must complete")
+	var split: Dictionary = network.classify_completed_corridor("bus", _horizontal_path(8, 0, 4), terrain)
+	var split_runs: Array = split.get("new_runs", [])
+	_check(bool(split.get("ok", false)) and split_runs.size() == 3, "interleaved reuse must split discontinuous new runs")
+	_check(Dictionary(split_runs[0]).get("tile_path", []) == [_tile(0, 8)] and Dictionary(split_runs[1]).get("tile_path", []) == [_tile(2, 8)] and Dictionary(split_runs[2]).get("tile_path", []) == [_tile(4, 8)], "new runs must retain the requested corridor order")
+	var split_refs: Array = split.get("reused_segment_refs", [])
+	_check(split_refs.size() == 2 and str(Dictionary(split_refs[0]).get("id", "")) == "reuse_left" and str(Dictionary(split_refs[1]).get("id", "")) == "reuse_right", "multiple reused segment references must sort by ID")
+
+	_check(not bool(network.classify_completed_corridor("ferry", reused_path, terrain).get("ok", true)), "unknown route mode must fail closed")
+	_check(not bool(network.classify_completed_corridor("bus", [_tile(0, 9), _tile(1, 10)], terrain).get("ok", true)), "diagonal corridor must fail closed")
+	_check(not bool(network.classify_completed_corridor("bus", [_tile(0, 9), _tile(0, 9)], terrain).get("ok", true)), "duplicate corridor tile must fail closed")
+
+	var active_network = TransportNetworkSystemScript.new()
+	var active_tile := _tile(6, 9)
+	_check(bool(active_network.plan_project("build", {"segments": [{"kind": "road", "tile_path": [active_tile]}]}, terrain).get("ok", false)), "active-project fixture must plan")
+	_check(not bool(active_network.classify_completed_corridor("bus", [active_tile], terrain).get("ok", true)), "active project corridor tile must fail closed")
+
+	var crossing_network = TransportNetworkSystemScript.new()
+	var crossing_tile := _tile(8, 9)
+	_check(_build_and_complete(crossing_network, {"segments": [{"kind": "rail_track", "tile_path": [crossing_tile]}]}), "crossing rail fixture must complete")
+	_check(_build_and_complete(crossing_network, {"segments": [{"kind": "road", "tile_path": [crossing_tile]}]}), "crossing road fixture must complete")
+	crossing_network.crossings.clear()
+	_check(not bool(crossing_network.classify_completed_corridor("bus", [crossing_tile], terrain).get("ok", true)), "malformed crossing snapshot must fail closed")
 
 
 func _validate_demolition_races_and_snapshot_shapes() -> void:

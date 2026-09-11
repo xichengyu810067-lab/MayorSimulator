@@ -36,6 +36,121 @@ var routes: Dictionary = {}
 var _topology_map = CityTerrainMapScript.new()
 
 
+## Classifies a requested route corridor without creating a project or mutating
+## the authoritative network. Reused segment references are sorted by ID, while
+## new runs retain the requested path order for a later construction owner.
+func classify_completed_corridor(
+	mode: String,
+	tile_path: Variant,
+	terrain_map: Variant,
+	occupied_tile_ids: Variant = [],
+	construction_tile_ids: Variant = []
+) -> Dictionary:
+	var mode_spec := TransportModesScript.route_spec(mode)
+	if mode_spec.is_empty():
+		return _error("invalid_corridor_mode")
+	if terrain_map == null:
+		return _error("terrain_map_required")
+	if not tile_path is Array:
+		return _error("invalid_corridor_path")
+	var path: Array = tile_path
+	if not _path_is_cardinally_contiguous(path, terrain_map):
+		return _error("invalid_corridor_path")
+
+	# A malformed persisted crossing or segment must not be treated as reusable.
+	var snapshot_before := to_dict()
+	var snapshot_validation := validate_snapshot(snapshot_before)
+	if not bool(snapshot_validation.get("valid", false)):
+		return {
+			"ok": false,
+			"error": "invalid_transport_network_snapshot",
+			"issues": Array(snapshot_validation.get("issues", [])).duplicate(),
+		}
+
+	var segment_kind := str(mode_spec.get("guideway_kind", ""))
+	if segment_kind not in TransportModesScript.SEGMENT_KINDS:
+		return _error("invalid_corridor_mode")
+	var occupied := _tile_set(occupied_tile_ids)
+	var construction := _tile_set(construction_tile_ids)
+	for tile_variant: Variant in _active_project_tile_set().keys():
+		construction[int(tile_variant)] = true
+	var completed_by_tile := _completed_segment_kinds_by_tile()
+	var reused_tile_set: Dictionary = {}
+	var reused_tile_ids: Array[int] = []
+	var new_tile_ids: Array[int] = []
+	var issues: Array[String] = []
+	for tile_variant: Variant in path:
+		var tile_id := int(tile_variant)
+		if not terrain_map.is_buildable(tile_id):
+			issues.append("terrain_not_flat:%d" % tile_id)
+		if construction.has(tile_id):
+			issues.append("corridor_tile_under_construction:%d" % tile_id)
+		var existing_kinds: Array = completed_by_tile.get(tile_id, [])
+		if existing_kinds.has(segment_kind):
+			reused_tile_set[tile_id] = true
+			reused_tile_ids.append(tile_id)
+			continue
+		if occupied.has(tile_id):
+			issues.append("tile_occupied:%d" % tile_id)
+		for existing_kind_variant: Variant in existing_kinds:
+			var existing_kind := str(existing_kind_variant)
+			if not _segment_overlap_allowed(existing_kind, segment_kind):
+				issues.append("incompatible_segment_overlap:%s:%s:%d" % [existing_kind, segment_kind, tile_id])
+		new_tile_ids.append(tile_id)
+	if not issues.is_empty():
+		return {
+			"ok": false,
+			"error": "invalid_corridor",
+			"issues": _unique_strings(issues),
+		}
+
+	var reused_segment_refs: Array[Dictionary] = []
+	for segment_id: String in _sorted_string_keys(segments):
+		var segment: Dictionary = segments[segment_id]
+		if str(segment.get("kind", "")) != segment_kind:
+			continue
+		var matched_tile_ids: Array[int] = []
+		for tile_variant: Variant in Array(segment.get("tile_path", [])):
+			var tile_id := int(tile_variant)
+			if reused_tile_set.has(tile_id):
+				matched_tile_ids.append(tile_id)
+		if not matched_tile_ids.is_empty():
+			reused_segment_refs.append({
+				"id": segment_id,
+				"kind": segment_kind,
+				"tile_ids": matched_tile_ids,
+			})
+
+	var new_runs: Array[Dictionary] = []
+	var current_new_run: Array[int] = []
+	for tile_variant: Variant in path:
+		var tile_id := int(tile_variant)
+		if reused_tile_set.has(tile_id):
+			if not current_new_run.is_empty():
+				new_runs.append({"kind": segment_kind, "tile_path": current_new_run.duplicate()})
+				current_new_run.clear()
+		else:
+			current_new_run.append(tile_id)
+	if not current_new_run.is_empty():
+		new_runs.append({"kind": segment_kind, "tile_path": current_new_run.duplicate()})
+
+	var classification := "mixed"
+	if reused_tile_ids.is_empty():
+		classification = "all_new"
+	elif new_tile_ids.is_empty():
+		classification = "all_reuse"
+	return {
+		"ok": true,
+		"mode": mode,
+		"segment_kind": segment_kind,
+		"classification": classification,
+		"reused_tile_ids": reused_tile_ids,
+		"new_tile_ids": new_tile_ids,
+		"reused_segment_refs": reused_segment_refs,
+		"new_runs": new_runs,
+	}
+
+
 func quote_project(
 	operation: String,
 	plan: Dictionary,
