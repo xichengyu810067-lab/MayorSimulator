@@ -93,6 +93,8 @@ func _test_main_stage_and_single_autosave() -> void:
 	var events: Array[Dictionary] = main.vertical_slice.advance_days(days_due, main._vertical_city_context(), false)
 	main._consume_vertical_events(events)
 	main._update_ui()
+	main._open_municipal_center()
+	await process_frame
 	main.municipal_overlay.open_page("governance")
 	await _settle(3)
 	var stage = main.lower_council_stage
