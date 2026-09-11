@@ -2473,9 +2473,8 @@ func _build_bill_tab() -> Control:
 	bill_status_label = _label("", 15, _theme_text())
 	bill_status_label.name = "GovernanceStatusSummary"
 	bill_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	bill_status_label.max_lines_visible = 1
 	bill_status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bill_status_label.custom_minimum_size = Vector2(180, 44)
+	bill_status_label.custom_minimum_size = Vector2(180, 90)
 	bill_status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	catalog_header.add_child(bill_status_label)
 

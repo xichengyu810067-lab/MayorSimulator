@@ -11,6 +11,7 @@ const MAX_PAGE_SIZE := 6
 var page_size := DEFAULT_PAGE_SIZE
 var columns := 3
 var minimum_choice_width := 0.0
+var _forced_columns := 0
 var _page_index := 0
 var _choices: Array[Control] = []
 var _grid: GridContainer
@@ -85,6 +86,8 @@ func add_choice(control: Control) -> void:
 	_choices.append(control)
 	_grid.add_child(control)
 	_refresh()
+	if is_inside_tree():
+		_refresh_columns_for_width()
 
 
 func remove_choice(control: Control) -> void:
@@ -155,6 +158,11 @@ func set_minimum_choice_width(value: float) -> void:
 	_refresh_columns_for_width()
 
 
+func set_forced_columns(value: int) -> void:
+	_forced_columns = maxi(0, value)
+	_refresh_columns_for_width()
+
+
 func set_balanced_page_layout(enabled: bool) -> void:
 	_balanced_page_layout = enabled
 	set_meta("balanced_building_pager", enabled)
@@ -210,6 +218,9 @@ func debug_layout_state() -> Dictionary:
 
 
 func _refresh_columns_for_width() -> void:
+	if _forced_columns > 0:
+		_grid.columns = _forced_columns
+		return
 	if _balanced_page_layout or minimum_choice_width <= 0.0 or size.x <= 0.0:
 		return
 	var gutter := float(_grid.get_theme_constant("h_separation"))

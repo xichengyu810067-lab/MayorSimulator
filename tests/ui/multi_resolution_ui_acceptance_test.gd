@@ -4,7 +4,7 @@ const TestCleanup := preload("res://tests/helpers/scene_tree_test_cleanup.gd")
 
 const RESOLUTIONS: Array[Vector2i] = [
 	Vector2i(1280, 720),
-	Vector2i(1366, 768),
+	Vector2i(1440, 900),
 	Vector2i(1920, 1080),
 	Vector2i(2560, 1440),
 	Vector2i(2880, 1800),
@@ -14,6 +14,7 @@ const MUNICIPAL_PAGES: PackedStringArray = [
 	"governance",
 	"judicial",
 	"oversight",
+	"transport_planning",
 	"blueprint",
 	"finance",
 	"public_affairs",
@@ -215,6 +216,16 @@ func _validate_municipal_surface(overlay: Control, page_id: String, resolution: 
 		_check(int(hub_debug.get("secondary_columns", 0)) == 2 and int(hub_debug.get("secondary_rows", 0)) == 3, "%s keeps its six-card 2x3 grid" % label)
 		_check(float(hub_debug.get("minimum_target_extent", 0.0)) >= MIN_INTERACTIVE_EXTENT, "%s cards retain 44px targets" % label)
 		_check(str(hub_debug.get("layout_mode", "")) == ("narrow" if resolution.x < 1400 else "wide"), "%s uses its expected responsive structure" % label)
+	elif page_id == "transport_planning":
+		var transport_page := _first_visible_control_child(page_host)
+		_check(transport_page is ScrollContainer, "%s transport planning exposes its scroll container" % label)
+		if transport_page is ScrollContainer:
+			_check(
+				(transport_page as ScrollContainer).horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED,
+				"%s transport planning disables horizontal scrolling" % label
+			)
+		if resolution == Vector2i(1440, 900):
+			_validate_transport_three_column_pagers(overlay, label)
 	elif page_id == "buildings":
 		for pager_variant in overlay.find_children("BuildingChoices_*", "VBoxContainer", true, false):
 			var pager := pager_variant as VBoxContainer
@@ -246,6 +257,18 @@ func _validate_municipal_surface(overlay: Control, page_id: String, resolution: 
 
 	_validate_visible_control_tree(overlay, viewport_rect, label)
 	_validate_container_button_siblings(overlay, label)
+
+
+func _validate_transport_three_column_pagers(overlay: Control, label: String) -> void:
+	for pager_name in ["TransportInfrastructurePager", "TransportRouteModePager"]:
+		var pager := overlay.find_child(pager_name, true, false) as Control
+		_check(pager != null and pager.is_visible_in_tree(), "%s includes visible %s" % [label, pager_name])
+		if pager == null or not pager.is_visible_in_tree():
+			continue
+		_check(pager.has_method("choice_grid"), "%s %s exposes its choice grid" % [label, pager_name])
+		if pager.has_method("choice_grid"):
+			var grid := pager.call("choice_grid") as GridContainer
+			_check(grid != null and grid.columns == 3, "%s %s keeps three columns at 1440x900" % [label, pager_name])
 
 
 func _validate_required_surface(control: Control, outer_rect: Rect2, label: String) -> void:

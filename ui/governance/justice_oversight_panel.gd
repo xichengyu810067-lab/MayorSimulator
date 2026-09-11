@@ -252,7 +252,7 @@ func _build_content() -> void:
 		button.tooltip_text = str(option["detail"])
 		button.set_meta("semantic_label", str(option["label"]))
 		button.set_meta("semantic_detail", str(option["detail"]))
-		button.custom_minimum_size = Vector2(150, 58)
+		button.custom_minimum_size = Vector2(150, 100)
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		button.add_theme_font_size_override("font_size", 15)

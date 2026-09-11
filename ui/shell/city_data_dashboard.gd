@@ -120,7 +120,7 @@ func _build_dashboard() -> void:
 	)
 	overview_intro.name = "MonthlyDataComparisonRule"
 	overview_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	overview_intro.custom_minimum_size = Vector2(0, 36)
+	overview_intro.custom_minimum_size = Vector2(0, 56)
 	overview_header.add_child(overview_intro)
 	overview_stack.add_child(overview_panel)
 	var overview_grid := GridContainer.new()

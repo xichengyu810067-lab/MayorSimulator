@@ -16,7 +16,7 @@ const SECTION_FONT_SIZE := 22
 const TITLE_FONT_SIZE := 28
 const CONTROL_FONT_SIZE := 18
 const CONTROL_HEIGHT := 52.0
-const PAGER_MINIMUM_CHOICE_WIDTH := 240.0
+const PAGER_MINIMUM_CHOICE_WIDTH := 310.0
 
 const INFRASTRUCTURE_CHOICES: Array[Dictionary] = [
 	{"id": "road", "label": "道路", "hint": "汽車、摩托車與公車共用的連續路網。", "add": "build", "remove": "demolish", "add_label": "興建", "remove_label": "拆除"},
@@ -83,12 +83,18 @@ func _init() -> void:
 	_build_content()
 
 
+func _ready() -> void:
+	_refresh_pager_columns()
+
+
 func set_view_model(snapshot: Dictionary) -> void:
 	_view_model = snapshot.duplicate(true)
 	var session_value: Variant = snapshot.get("planning_session", {"state": "inactive"})
 	_planning_session = Dictionary(session_value).duplicate(true) if session_value is Dictionary else {"state": "inactive"}
 	_package_quote = Dictionary(snapshot.get("package_quote", {})).duplicate(true) if snapshot.get("package_quote", {}) is Dictionary else {}
 	_planning_unlocked = bool(snapshot.get("planning_unlocked", snapshot.get("unlocked", true)))
+	if is_inside_tree():
+		_refresh_pager_columns()
 	_refresh_session_scoped_choices()
 	_unlock_label.text = (
 		L10n.text("交通規劃已解鎖｜可繼續既有站點規劃、路網與營運決策。")
@@ -114,6 +120,13 @@ func set_view_model(snapshot: Dictionary) -> void:
 			operational_count += 1
 	_network_summary.text = L10n.text("路線總覽｜%d 條規劃｜%d 條營運中") % [routes.size(), operational_count]
 	_refresh_live_summary()
+
+
+func _refresh_pager_columns() -> void:
+	var target_columns := 3 if get_viewport_rect().size.x >= 1400.0 else 2
+	for pager in [_infrastructure_pager, _route_mode_pager]:
+		if pager != null:
+			pager.call("set_forced_columns", target_columns)
 
 
 func set_dark_mode(enabled: bool) -> void:
@@ -211,7 +224,7 @@ func _build_content() -> void:
 		"鋪設或拆除道路、捷運軌道、重型鐵路、跑道、滑行道；另可設置車庫、機廠與鐵路號誌。"
 	)
 	_infrastructure_section_card = infrastructure_section.get_parent() as Control
-	_infrastructure_pager = ProgressiveChoicePagerScript.new(3, 3)
+	_infrastructure_pager = ProgressiveChoicePagerScript.new(2, 3)
 	_infrastructure_pager.name = "TransportInfrastructurePager"
 	_infrastructure_pager.call("set_minimum_choice_width", PAGER_MINIMUM_CHOICE_WIDTH)
 	_register_pager(_infrastructure_pager)
@@ -245,7 +258,7 @@ func _build_content() -> void:
 	_live_summary.name = "TransportLiveSummary"
 	_live_summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	operations_section.add_child(_live_summary)
-	_route_mode_pager = ProgressiveChoicePagerScript.new(3, 3)
+	_route_mode_pager = ProgressiveChoicePagerScript.new(2, 3)
 	_route_mode_pager.name = "TransportRouteModePager"
 	_route_mode_pager.call("set_minimum_choice_width", PAGER_MINIMUM_CHOICE_WIDTH)
 	_register_pager(_route_mode_pager)

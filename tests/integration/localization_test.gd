@@ -193,8 +193,13 @@ func _run() -> void:
 		Vector2i(roundi(root.get_visible_rect().size.x), roundi(root.get_visible_rect().size.y)) == MUNICIPAL_LAYOUT_RESOLUTION,
 		"municipal localization layout uses the required %s viewport" % MUNICIPAL_LAYOUT_RESOLUTION
 	)
-	main.call("_open_municipal_center")
+	var municipal_button := main.find_child("MunicipalButton", true, false) as Button
+	_check(municipal_button != null, "public HUD MunicipalButton exists before municipal localization coverage")
+	_check(main.municipal_overlay == null, "municipal overlay remains lazy until the public HUD action")
+	if municipal_button != null:
+		municipal_button.pressed.emit()
 	await _settle(2)
+	_check(main.municipal_overlay != null, "public HUD MunicipalButton creates the lazy municipal overlay")
 	var forced_case_name := "商業促進法案強制施行審查"
 	var forced_case_result: Dictionary = main.vertical_slice.governance.justice_system.open_judicial_case(
 		"commerce_act",
@@ -431,8 +436,64 @@ func _check_horizontal_layout(node: Node, bounds: Rect2, locale: String, context
 					str(node.get("text")),
 				]
 			)
+			_assert_visible_text_metrics(control, locale, context)
 	for child in node.get_children():
 		_check_horizontal_layout(child, bounds, locale, context)
+
+
+func _assert_visible_text_metrics(control: Control, locale: String, context: String) -> void:
+	if not _requires_no_trimming(control):
+		return
+	var text := _visible_control_text(control)
+	if text.is_empty():
+		return
+	var font := control.get_theme_font("font")
+	var font_size := control.get_theme_font_size("font_size")
+	_check(font != null and font_size > 0, "%s %s control '%s' exposes a theme font and font size" % [locale, context, control.get_path()])
+	if font == null or font_size <= 0:
+		return
+	var content_size := _text_content_size(control)
+	var natural_size := font.get_multiline_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size, -1, TextServer.BREAK_MANDATORY)
+	var rendered_size := font.get_multiline_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, maxf(1.0, content_size.x), font_size)
+	var wraps := false
+	if control is Label:
+		wraps = (control as Label).autowrap_mode != TextServer.AUTOWRAP_OFF
+	elif control is Button:
+		wraps = (control as Button).autowrap_mode != TextServer.AUTOWRAP_OFF
+	var required_size := rendered_size if wraps else natural_size
+	var minimum_size := control.get_combined_minimum_size()
+	var allocated_size := control.get_global_rect().size
+	_check(
+		content_size.x + GEOMETRY_EPSILON >= required_size.x and content_size.y + GEOMETRY_EPSILON >= required_size.y,
+		"%s %s control '%s' renders its theme-font text without overflow: text=%s required=%s content=%s" % [locale, context, control.get_path(), text, required_size, content_size]
+	)
+	_check(
+		allocated_size.x + GEOMETRY_EPSILON >= minimum_size.x and allocated_size.y + GEOMETRY_EPSILON >= minimum_size.y,
+		"%s %s control '%s' receives at least its computed minimum size: minimum=%s actual=%s" % [locale, context, control.get_path(), minimum_size, allocated_size]
+	)
+
+
+func _requires_no_trimming(control: Control) -> bool:
+	if control is Label:
+		return (control as Label).text_overrun_behavior == TextServer.OVERRUN_NO_TRIMMING
+	if control is Button:
+		return (control as Button).text_overrun_behavior == TextServer.OVERRUN_NO_TRIMMING
+	return false
+
+
+func _visible_control_text(control: Control) -> String:
+	if control is Label or control is Button or control is OptionButton or control is LineEdit:
+		return str(control.get("text"))
+	return ""
+
+
+func _text_content_size(control: Control) -> Vector2:
+	var content_size := control.get_global_rect().size
+	var style_box := control.get_theme_stylebox("normal")
+	if style_box != null:
+		content_size.x -= style_box.get_margin(SIDE_LEFT) + style_box.get_margin(SIDE_RIGHT)
+		content_size.y -= style_box.get_margin(SIDE_TOP) + style_box.get_margin(SIDE_BOTTOM)
+	return Vector2(maxf(0.0, content_size.x), maxf(0.0, content_size.y))
 
 
 func _assert_municipal_page_layout(main: Node, page_id: String, locale: String) -> void:

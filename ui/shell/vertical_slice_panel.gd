@@ -140,6 +140,7 @@ func _build_content() -> void:
 	_selected_building_label.add_theme_font_size_override("font_size", UI_TITLE_FONT_SIZE)
 	hero_copy.add_child(_selected_building_label)
 	var guide := _status_label("五項設計會同頁顯示；每次調整都立即重算開工前估價。")
+	guide.custom_minimum_size = Vector2(0, 56)
 	hero_copy.add_child(guide)
 	content.add_child(hero)
 
