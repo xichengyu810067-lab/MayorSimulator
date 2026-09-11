@@ -205,6 +205,24 @@ func _test_candidate_failure_and_cancel_rollback_are_atomic() -> void:
 	_check(coordinator.transport.projects == Dictionary(original.get("transport", {})).get("projects", {}) and coordinator.transport.segments == Dictionary(original.get("transport", {})).get("segments", {}) and coordinator.transport.facilities == Dictionary(original.get("transport", {})).get("facilities", {}), "all-new rollback leaves no package transport project or entity")
 	_check(coordinator.blueprint_library_service.snapshot() == original.get("blueprints", {}), "all-new rollback restores blueprint usage counters")
 
+	fixture = _prepared_all_new_fixture()
+	coordinator = fixture["coordinator"]
+	grid = fixture["grid"]
+	coordinator.transport_session_package_quote(grid)
+	original = _authority_snapshot(coordinator)
+	started = coordinator.start_transport_session_package(grid)
+	var first_station_job_id := str(coordinator.transport_planning_session_snapshot().get("station_refs", [])[0].get("job_id", ""))
+	_check(bool(started.get("ok", false)) and not first_station_job_id.is_empty(), "partial-completion rollback fixture starts")
+	if not first_station_job_id.is_empty():
+		coordinator.construction.jobs[first_station_job_id]["remaining_work"] = 0.0
+		coordinator.advance_days(1, {}, false)
+		_check(str(coordinator.transport_planning_session_snapshot().get("station_refs", [])[0].get("status", "")) == "completed", "one current-package station completes before cancellation")
+		cancelled = coordinator.cancel_transport_planning_session()
+		_check(bool(cancelled.get("ok", false)), "partial-completion cancellation rolls back completed and active package work: %s" % [cancelled])
+		_check(coordinator.session.state.buildings == Dictionary(original.get("core", {})).get("state", {}).get("buildings", {}), "partial-completion rollback removes only the newly completed station building")
+		_check(coordinator.construction.jobs == Dictionary(original.get("construction", {})).get("jobs", {}), "partial-completion rollback removes remaining and completed package jobs")
+		_check(coordinator.transport.projects == Dictionary(original.get("transport", {})).get("projects", {}) and coordinator.transport.segments == Dictionary(original.get("transport", {})).get("segments", {}) and coordinator.transport.facilities == Dictionary(original.get("transport", {})).get("facilities", {}) and coordinator.transport.stations == Dictionary(original.get("transport", {})).get("stations", {}), "partial-completion rollback removes only current package transport entities")
+
 
 func _prepared_fixture(all_reuse: bool) -> Dictionary:
 	var coordinator = CoordinatorScript.new(20_260_911 + _checks, 3_000_000)

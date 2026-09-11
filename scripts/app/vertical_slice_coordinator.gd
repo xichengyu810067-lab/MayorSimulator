@@ -1462,6 +1462,8 @@ func cancel_transport_planning_session() -> Dictionary:
 	var candidate_construction = ConstructionSystemScript.create_from_dict(construction.to_dict())
 	var candidate_transport = TransportNetworkSystemScript.create_from_dict(transport.to_dict())
 	var candidate_planning = TransportPlanningSessionScript.create_from_dict(transport_planning_session.to_dict())
+	var candidate_population = PopulationSystemScript.from_dict(population.to_dict())
+	var candidate_durability = DurabilitySystemScript.create_from_dict(durability.to_dict())
 	var candidate_blueprints = BlueprintLibraryServiceScript.new()
 	var library_snapshot := blueprint_library_service.snapshot()
 	candidate_blueprints.restore(
@@ -1470,7 +1472,7 @@ func cancel_transport_planning_session() -> Dictionary:
 		Dictionary(library_snapshot.get("active_blueprint_by_building", {})),
 		building_definitions
 	)
-	if candidate_construction == null or candidate_transport == null or candidate_planning == null:
+	if candidate_construction == null or candidate_transport == null or candidate_planning == null or candidate_population == null or candidate_durability == null:
 		return {"ok": false, "error": "transport_package_rollback_clone_failed"}
 	var new_job_ids: Array[String] = []
 	for job_id_value: Variant in package_quote.get("new_job_ids", []):
@@ -1479,21 +1481,68 @@ func cancel_transport_planning_session() -> Dictionary:
 			return {"ok": false, "error": "transport_package_rollback_job_manifest_invalid"}
 		new_job_ids.append(job_id)
 	var operation_sequence := next_operation_sequence
+	var station_refs_by_job: Dictionary = {}
+	for station_ref_value: Variant in planning_snapshot.get("station_refs", []):
+		if station_ref_value is Dictionary:
+			var station_job_id := str((station_ref_value as Dictionary).get("job_id", ""))
+			if not station_job_id.is_empty():
+				station_refs_by_job[station_job_id] = station_ref_value
 	for job_id: String in new_job_ids:
 		if not candidate_construction.jobs.has(job_id):
 			return {"ok": false, "error": "transport_package_rollback_job_missing", "job_id": job_id}
 		var job: Dictionary = candidate_construction.jobs[job_id]
-		if str(job.get("status", "")) != "active":
-			return {"ok": false, "error": "transport_package_rollback_job_not_active", "job_id": job_id}
-		var cancelled: Dictionary = candidate_construction.cancel_job(job_id, game_day())
-		if not bool(cancelled.get("ok", false)):
-			return cancelled
+		var job_status := str(job.get("status", ""))
+		if job_status == "active":
+			var cancelled: Dictionary = candidate_construction.cancel_job(job_id, game_day())
+			if not bool(cancelled.get("ok", false)):
+				return cancelled
+		elif job_status == "completed" and station_refs_by_job.has(job_id):
+			var station_ref: Dictionary = station_refs_by_job[job_id]
+			var station_id := str(station_ref.get("station_id", ""))
+			if station_id.is_empty() or not candidate_core.state.buildings.has(station_id):
+				return {"ok": false, "error": "transport_package_rollback_station_missing", "job_id": job_id}
+			var building: Dictionary = candidate_core.state.buildings[station_id]
+			var resident_ids := PackedStringArray()
+			for resident_id_value: Variant in building.get("resident_ids", []):
+				resident_ids.append(str(resident_id_value))
+			var removed_residents: PackedStringArray = candidate_population.remove_residents_by_id(
+				resident_ids, game_day(), "population.transport_package_rolled_back"
+			)
+			if removed_residents.size() != resident_ids.size():
+				return {"ok": false, "error": "transport_package_rollback_population_mismatch", "job_id": job_id}
+			for resident_id: String in removed_residents:
+				candidate_core.submit_command("remove_npc", {
+					"npc_id": resident_id,
+					"reason_tag": "population.transport_package_rolled_back",
+				}, "transport_package_rollback_npc_%06d" % operation_sequence)
+				operation_sequence += 1
+			if int(candidate_core.state.metrics.get("population", -1)) != candidate_population.population_count():
+				candidate_core.submit_command("metric_change", {
+					"metric": "population",
+					"value": candidate_population.population_count(),
+					"reason_tag": "population.transport_package_rolled_back",
+				}, "transport_package_rollback_population_%06d" % operation_sequence)
+				operation_sequence += 1
+			if not bool(candidate_durability.unregister_building(station_id).get("ok", false)):
+				return {"ok": false, "error": "transport_package_rollback_durability_missing", "job_id": job_id}
+			if not bool(candidate_transport.unregister_station(station_id)):
+				return {"ok": false, "error": "transport_package_rollback_station_authority_missing", "job_id": job_id}
+			candidate_core.submit_command("remove_building", {
+				"building_id": station_id,
+				"reason_tag": "building.transport_package_rolled_back",
+			}, "transport_package_rollback_building_%06d" % operation_sequence)
+			operation_sequence += 1
+			if candidate_core.state.buildings.has(station_id):
+				return {"ok": false, "error": "transport_package_rollback_building_failed", "job_id": job_id}
+		elif job_status not in ["completed", "cancelled"]:
+			return {"ok": false, "error": "transport_package_rollback_job_status_invalid", "job_id": job_id}
 		candidate_construction.jobs.erase(job_id)
-		candidate_core.submit_command("remove_construction", {
-			"job_id": job_id,
-			"reason_tag": "construction.transport_package_rolled_back",
-		}, "transport_package_rollback_job_%06d" % operation_sequence)
-		operation_sequence += 1
+		if candidate_core.state.construction_jobs.has(job_id):
+			candidate_core.submit_command("remove_construction", {
+				"job_id": job_id,
+				"reason_tag": "construction.transport_package_rolled_back",
+			}, "transport_package_rollback_job_%06d" % operation_sequence)
+			operation_sequence += 1
 		if candidate_core.state.construction_jobs.has(job_id):
 			return {"ok": false, "error": "transport_package_rollback_core_job_failed", "job_id": job_id}
 	var new_project_ids: Array = Array(package_quote.get("new_project_ids", [])).duplicate()
@@ -1538,6 +1587,8 @@ func cancel_transport_planning_session() -> Dictionary:
 	transport = candidate_transport
 	transport_planning_session = candidate_planning
 	blueprint_library_service = candidate_blueprints
+	population = candidate_population
+	durability = candidate_durability
 	next_operation_sequence = operation_sequence
 	_push_ui_event("transport_package_rolled_back", {
 		"session": transport_planning_session.snapshot(),
