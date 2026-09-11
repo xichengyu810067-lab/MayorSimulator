@@ -4,7 +4,9 @@ param(
     [ValidateNotNullOrEmpty()][string]$GodotExe = 'C:\Users\USER\Tools\Godot\Godot_v4.7-stable_win64.exe',
     [ValidatePattern('^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9_-])?$')][string]$ProfileName = 'manual-visible',
     [ValidateSet('Mobile', 'Compatibility')][string]$RendererMode = 'Mobile',
-    [ValidateRange(0, 600)][int]$MinimumRuntimeSeconds = 3
+    [ValidateRange(0, 600)][int]$MinimumRuntimeSeconds = 3,
+    [string]$TestProjectRoot,
+    [switch]$AllowSyntheticTestChild
 )
 
 Set-StrictMode -Version Latest
@@ -56,7 +58,7 @@ function Get-IsolatedUserDataPath {
 
 function Initialize-WritableDirectory {
     param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Label)
-    New-Item -ItemType Directory -Path $Path -ErrorAction Stop | Out-Null
+    [IO.Directory]::CreateDirectory($Path) | Out-Null
     $null = Assert-NotReparsePoint -Path $Path -Label $Label
     $probe = Join-Path $Path '.renderer-runner-write-probe'
     [IO.File]::WriteAllText($probe, 'writable', [Text.UTF8Encoding]::new($false))
@@ -68,6 +70,16 @@ function Get-GitOutput {
     $output = @(& git -c "safe.directory=$ProjectRoot" -c core.quotePath=false -C $ProjectRoot @Arguments 2>&1)
     if ($LASTEXITCODE -ne 0) { throw "Git command failed: $($output -join ' ')" }
     return $output
+}
+
+function Get-SourceIdentity {
+    param([Parameter(Mandatory)][string]$ProjectRoot)
+    return [ordered]@{
+        branch = (@(Get-GitOutput -ProjectRoot $ProjectRoot -Arguments @('branch', '--show-current')) -join '').Trim()
+        head = (@(Get-GitOutput -ProjectRoot $ProjectRoot -Arguments @('rev-parse', 'HEAD')) -join '').Trim()
+        tree = (@(Get-GitOutput -ProjectRoot $ProjectRoot -Arguments @('rev-parse', 'HEAD^{tree}')) -join '').Trim()
+        status = @(Get-GitOutput -ProjectRoot $ProjectRoot -Arguments @('status', '--porcelain=v1', '--untracked-files=all')) -join "`n"
+    }
 }
 
 function ConvertTo-WindowsCommandLineArgument {
@@ -98,7 +110,20 @@ function ConvertTo-WindowsCommandLineArgument {
     return $builder.ToString()
 }
 
-$projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..') -ErrorAction Stop).Path
+$runnerProjectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..') -ErrorAction Stop).Path
+$projectRoot = $runnerProjectRoot
+if (-not [string]::IsNullOrWhiteSpace($TestProjectRoot)) {
+    $candidateTestRoot = (Resolve-Path -LiteralPath $TestProjectRoot -ErrorAction Stop).Path
+    $testRootsParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\', '/')
+    $testRootName = [IO.Path]::GetFileName($candidateTestRoot)
+    if (-not (Test-PathInside -Candidate $candidateTestRoot -Parent $testRootsParent) -or $testRootName -notmatch '^mayor-isolated-playtest-contract-project-[0-9a-f]{32}$') {
+        throw 'TestProjectRoot is restricted to a generated isolated-playtest contract fixture under the system temporary directory.'
+    }
+    $projectRoot = $candidateTestRoot
+}
+if ($AllowSyntheticTestChild -and [string]::IsNullOrWhiteSpace($TestProjectRoot)) {
+    throw 'AllowSyntheticTestChild requires the restricted TestProjectRoot fixture.'
+}
 $null = Assert-NotReparsePoint -Path $projectRoot -Label 'Project root'
 if ($ProfileName -match '^(?i:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$') {
     throw "ProfileName is reserved by Windows: $ProfileName"
@@ -112,6 +137,9 @@ if (-not (Test-Path -LiteralPath $GodotExe -PathType Leaf)) {
 }
 $godotItem = Assert-NotReparsePoint -Path $GodotExe -Label 'Godot executable'
 $GodotExe = $godotItem.FullName
+if (-not $AllowSyntheticTestChild -and [IO.Path]::GetExtension($GodotExe) -ine '.exe') {
+    throw "GodotExe must be a leaf .exe file: $GodotExe"
+}
 
 $profilesRoot = [IO.Path]::GetFullPath((Join-Path $projectRoot '.tmp\isolated-playtest'))
 $profileRoot = [IO.Path]::GetFullPath((Join-Path $profilesRoot $ProfileName))
@@ -159,11 +187,8 @@ $arguments = @(
 
 $env:APPDATA = $isolatedAppData
 $env:LOCALAPPDATA = $isolatedLocalAppData
-$branch = (@(Get-GitOutput -ProjectRoot $projectRoot -Arguments @('branch', '--show-current')) -join '').Trim()
-$head = (@(Get-GitOutput -ProjectRoot $projectRoot -Arguments @('rev-parse', 'HEAD')) -join '').Trim()
-$tree = (@(Get-GitOutput -ProjectRoot $projectRoot -Arguments @('rev-parse', 'HEAD^{tree}')) -join '').Trim()
-$statusText = @(Get-GitOutput -ProjectRoot $projectRoot -Arguments @('status', '--porcelain=v1', '--untracked-files=all')) -join "`n"
-if (-not [string]::IsNullOrWhiteSpace($statusText)) {
+$sourceBefore = Get-SourceIdentity -ProjectRoot $projectRoot
+if (-not [string]::IsNullOrWhiteSpace($sourceBefore.status)) {
     throw 'Isolated playtest requires a clean committed worktree.'
 }
 
@@ -203,6 +228,8 @@ try {
 $durationMilliseconds = [int][Math]::Round(($endedAtUtc - $startedAtUtc).TotalMilliseconds)
 $logExists = Test-Path -LiteralPath $godotLog -PathType Leaf
 $logSha256 = if ($logExists) { (Get-FileHash -LiteralPath $godotLog -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }
+$sourceAfter = Get-SourceIdentity -ProjectRoot $projectRoot
+$sourceChanged = ($sourceBefore.branch -ne $sourceAfter.branch) -or ($sourceBefore.head -ne $sourceAfter.head) -or ($sourceBefore.tree -ne $sourceAfter.tree) -or ($sourceBefore.status -ne $sourceAfter.status)
 $status = if ($launchError) {
     'launch_failed'
 } elseif ($exitCode -ne 0) {
@@ -214,12 +241,13 @@ $status = if ($launchError) {
 } else {
     'passed'
 }
+if ($sourceChanged) { $status = 'source_changed' }
 $summary = [ordered]@{
     schema_version = 1
     suite = 'mayor-simulator-isolated-native-playtest'
     status = $status
     renderer = [ordered]@{ requested_mode = $RendererMode; rendering_method = $renderer.method; rendering_driver = $renderer.driver }
-    source = [ordered]@{ worktree = $projectRoot; branch = $branch; head = $head; tree = $tree }
+    source = [ordered]@{ worktree = $projectRoot; before_run = $sourceBefore; after_run = $sourceAfter }
     isolation = [ordered]@{ profile_root = $profileRoot; appdata = $isolatedAppData; localappdata = $isolatedLocalAppData; user_data = $isolatedUserData; godot_log = $godotLog; godot_log_sha256 = $logSha256 }
     process = [ordered]@{ process_id = $processId; started_at_utc = $processStartUtc; ended_at_utc = $endedAtUtc.ToString('o'); duration_milliseconds = $durationMilliseconds; child_exit_code = $exitCode; minimum_runtime_seconds = $MinimumRuntimeSeconds; launch_error = $launchError }
 }
