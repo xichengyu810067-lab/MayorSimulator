@@ -140,5 +140,7 @@ Assert-True -Condition ($beforeReuseHash -eq $afterReuseHash) -Message 'reused p
 $invalidRendererResult = Invoke-IsolatedRunner -Runner $runner -Child $successChild -ProfileName ('synthetic-invalid-' + $profileSuffix) -MinimumRuntimeSeconds 1 -RendererMode 'Mobile;--path=C:\escape'
 $invalidRendererExit = [int]$invalidRendererResult.exit_code
 Assert-True -Condition ($invalidRendererExit -ne 0) -Message 'renderer argument injection unexpectedly passed validation'
+$traversalResult = Invoke-IsolatedRunner -Runner $runner -Child $successChild -ProfileName '..' -MinimumRuntimeSeconds 1 -RendererMode Mobile
+Assert-True -Condition ([int]$traversalResult.exit_code -ne 0) -Message 'traversal profile unexpectedly passed validation'
 
-Write-Output 'ISOLATED_PLAYTEST_RUNNER_CONTRACT_PASSED: checks=15'
+Write-Output 'ISOLATED_PLAYTEST_RUNNER_CONTRACT_PASSED: checks=16'
