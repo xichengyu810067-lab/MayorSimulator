@@ -1621,7 +1621,11 @@ func _on_municipal_page_opened(page_id: String) -> void:
 	_lower_council_final_decision.clear()
 	_refresh_governance_catalog()
 	_refresh_lower_council_stage()
-	_select_governance_status(_preferred_governance_status())
+	_select_governance_status(
+		"unimplemented"
+		if onboarding_progress.is_active() and onboarding_progress.current_target() == "governance"
+		else _preferred_governance_status()
+	)
 
 
 func _refresh_onboarding_guide() -> void:
@@ -1667,6 +1671,12 @@ func _resolve_onboarding_target() -> Control:
 			return _resolve_city_data_onboarding_target()
 		"public_affairs":
 			return _resolve_public_affairs_onboarding_target()
+		"governance":
+			return _resolve_governance_onboarding_target()
+		"judicial":
+			return _resolve_justice_onboarding_target("judicial")
+		"oversight":
+			return _resolve_justice_onboarding_target("oversight")
 	return null
 
 
@@ -1785,6 +1795,94 @@ func _resolve_public_affairs_onboarding_target() -> Control:
 			if target != null:
 				return target
 	return null
+
+
+func _resolve_governance_onboarding_target() -> Control:
+	if vertical_slice == null or vertical_slice.governance == null:
+		return null
+	var governance = vertical_slice.governance
+	var pending: Dictionary = governance.pending_bill
+	if municipal_overlay == null or not municipal_overlay.is_open():
+		# A submitted bill advances only through the real game clock. Keep the guide
+		# closed while the council is deliberating so time is not accidentally held.
+		if not pending.is_empty() and str(pending.get("status", "")) != "awaiting_mayor_response":
+			return null
+		return municipal_button
+	if municipal_overlay.current_page() == "hub":
+		return _visible_control_named("GovernanceButton")
+	if municipal_overlay.current_page() != "governance":
+		return municipal_button
+	var visible_stage_signature: Dictionary = lower_council_stage.debug_signature() if lower_council_stage != null else {}
+	if str(visible_stage_signature.get("stage_state", "")) == "final_vote":
+		return _visible_control_named("BackButton")
+	if not pending.is_empty():
+		if str(pending.get("status", "")) != "awaiting_mayor_response":
+			return _visible_control_named("CloseButton")
+		var response_id := _onboarding_governance_response_id(pending)
+		if response_id.is_empty():
+			return null
+		if str(visible_stage_signature.get("selected_response_id", "")) == response_id:
+			return _visible_control_named("LowerCouncilConfirmResponse")
+		return _visible_control_named("LowerCouncilResponse_%s" % response_id)
+	if not _onboarding_governance_bill_resolved("environment_act"):
+		return _visible_control_named("GovernanceBill_環境保護法案")
+	if not _onboarding_governance_bill_resolved("transit_act"):
+		return _visible_control_named("GovernanceBill_交通建設法案")
+	if not _onboarding_governance_bill_resolved("commerce_act"):
+		return _visible_control_named("GovernanceBill_商業促進法案")
+	if (
+		governance.rejected_bills.has("commerce_act")
+		and vertical_slice.latest_rejected_bill_id() == "commerce_act"
+	):
+		return governance_force_button
+	return null
+
+
+func _onboarding_governance_response_id(pending: Dictionary) -> String:
+	var bill_id := str(pending.get("bill_id", ""))
+	if bill_id in ["transit_act", "commerce_act"]:
+		return "focus_primary"
+	if bill_id != "environment_act":
+		return ""
+	var response_options: Array = pending.get("lower_house_hearing", {}).get("response_options", [])
+	for option_variant: Variant in response_options:
+		if not (option_variant is Dictionary):
+			continue
+		var response_id := str(Dictionary(option_variant).get("id", ""))
+		var preview: Dictionary = vertical_slice.preview_lower_house_response(response_id, _vertical_city_context())
+		if bool(preview.get("ok", false)) and not bool(preview.get("passed", true)):
+			return response_id
+	return str(Dictionary(response_options[0]).get("id", "")) if not response_options.is_empty() and response_options[0] is Dictionary else ""
+
+
+func _onboarding_governance_bill_resolved(bill_id: String) -> bool:
+	for decision_variant: Variant in vertical_slice.governance.legislative_history:
+		if decision_variant is Dictionary and str(Dictionary(decision_variant).get("bill_id", "")) == bill_id:
+			return true
+	return false
+
+
+func _resolve_justice_onboarding_target(mode: String) -> Control:
+	if mode not in ["judicial", "oversight"] or vertical_slice == null:
+		return null
+	if municipal_overlay == null or not municipal_overlay.is_open():
+		return municipal_button
+	if municipal_overlay.current_page() == "hub":
+		return _visible_control_named("JudicialButton" if mode == "judicial" else "OversightButton")
+	if municipal_overlay.current_page() != mode:
+		return municipal_button
+	var panel = judicial_panel if mode == "judicial" else oversight_panel
+	var expected_case_id := onboarding_action_router.linked_case_id(
+		mode,
+		vertical_slice.session.state.event_book
+	)
+	if expected_case_id.is_empty() or panel == null:
+		return null
+	if str(panel.call("selected_case_id")) != expected_case_id:
+		return _visible_control_named("CaseSelector")
+	return _visible_control_named(
+		"PublicInterestDefenseButton" if mode == "judicial" else "FullDisclosureDefenseButton"
+	)
 
 
 func _building_picker_target(building_name: String, group_id: String, family_tab: int) -> Control:
@@ -4861,6 +4959,7 @@ func _submit_bill(bill_name: String) -> void:
 			lower_council_stage.set_catalog_focus("bill_review", bill_name)
 		_select_governance_status("review")
 		_autosave("action:bill_submitted")
+		call_deferred("_refresh_onboarding_guide")
 
 
 func _on_lower_council_response_selected(response_id: String) -> void:
@@ -4870,6 +4969,7 @@ func _on_lower_council_response_selected(response_id: String) -> void:
 	lower_council_stage.set_preview(preview)
 	if not bool(preview.get("ok", false)):
 		_set_hint("表決預覽無法建立：%s" % _vertical_error_text(str(preview.get("error", "unknown"))), true)
+	call_deferred("_refresh_onboarding_guide")
 
 
 func _on_lower_council_response_confirmed(response_id: String) -> void:
@@ -4884,6 +4984,7 @@ func _on_lower_council_response_confirmed(response_id: String) -> void:
 	_consume_vertical_events(vertical_slice.drain_ui_events())
 	_update_ui()
 	_set_hint("答詢已確認，下議院完成正式表決。", false)
+	call_deferred("_refresh_onboarding_guide")
 
 
 func _is_transport_map_action_active() -> bool:
@@ -6570,6 +6671,7 @@ func _consume_vertical_events(events: Array[Dictionary], autosave_events: bool =
 				_settle_month(false)
 			"lower_house_hearing_ready":
 				_add_announcement("下議院完成初步意向，正在等待市長進入治理頁答詢。")
+				call_deferred("_refresh_onboarding_guide")
 			"bill_enacted":
 				_add_announcement("法案通過兩院並正式生效。")
 				_record_major_event("bill_enacted", str(payload.get("name", payload.get("bill_id", "法案"))), "", "bill_enacted:%s" % str(payload.get("bill_id", "")), event_game_time)
@@ -6674,8 +6776,17 @@ func _repair_selected_building() -> void:
 func _force_latest_rejected_bill() -> void:
 	var result: Dictionary = vertical_slice.force_latest_rejected(false)
 	if bool(result.get("ok", false)):
+		var onboarding_recorded := onboarding_action_router.record_governance_force_success(
+			result,
+			vertical_slice.governance,
+			vertical_slice.session.state.event_book,
+			vertical_slice.governance.checks_and_balances_history,
+			vertical_slice.game_day()
+		)
 		_consume_vertical_events(vertical_slice.drain_ui_events())
 		_set_hint("已進入司法與彈劾程序；請到市政中心的「法院審判」與「監察質詢」自行提出辯護。", true)
+		if onboarding_recorded:
+			call_deferred("_refresh_onboarding_guide")
 	else:
 		_set_hint("目前沒有可強制執行的遭否決法案。", true)
 	_update_ui()
@@ -6732,13 +6843,38 @@ func _reject_request_by_id(request_id: String) -> void:
 	_update_ui()
 
 
-func _on_defense_submitted(mode: String, _case_id: String, _defense_id: String, result: Dictionary) -> void:
+func _on_defense_submitted(mode: String, case_id: String, defense_id: String, result: Dictionary) -> void:
 	if not bool(result.get("ok", false)):
 		return
+	if mode not in ["judicial", "oversight"]:
+		return
 	vertical_slice.sync_governance_state("governance.%s_defense_submitted" % mode)
+	var onboarding_recorded := false
+	if mode == "judicial":
+		onboarding_recorded = onboarding_action_router.record_judicial_defense_success(
+			case_id,
+			defense_id,
+			result,
+			vertical_slice.governance,
+			vertical_slice.session.state.event_book,
+			vertical_slice.game_day()
+		)
+	else:
+		onboarding_recorded = onboarding_action_router.record_oversight_defense_success(
+			case_id,
+			defense_id,
+			result,
+			vertical_slice.governance,
+			vertical_slice.session.state.event_book,
+			vertical_slice.game_day()
+		)
+	if onboarding_recorded and onboarding_progress.is_completed():
+		tutorial_completed = true
 	_set_hint("%s辯護資料已提交。" % ("法院" if mode == "judicial" else "監察質詢"), false)
 	_autosave("action:%s_defense_submitted" % mode)
 	_update_ui()
+	if onboarding_recorded:
+		call_deferred("_refresh_onboarding_guide")
 
 func _rebuild_city_from_core() -> void:
 	city_grid.clear()
