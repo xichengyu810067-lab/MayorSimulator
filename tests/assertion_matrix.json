@@ -45,6 +45,7 @@
     { "id": "redundancy_audit", "script": "res://tests/integration/redundancy_audit_test.gd", "success_pattern": "Redundancy audit passed." },
     { "id": "save_recovery_self", "script": "res://tests/unit/core/save_recovery_self_test.gd", "success_pattern": "Save recovery self-test passed." },
     { "id": "save_memory_pipeline_self", "script": "res://tests/unit/core/save_memory_pipeline_test.gd", "success_pattern": "Save memory pipeline test passed." },
+    { "id": "save_input_limits", "script": "res://tests/unit/core/save_input_limits_test.gd", "success_pattern": "Save input limits test passed." },
     { "id": "save_error30_employment_sync", "script": "res://tests/integration/save_error30_regression_test.gd", "success_pattern": "Save error 30 employment-sync regression passed." },
     { "id": "settings_overlay_style", "script": "res://tests/ui/settings_overlay_style_test.gd", "success_pattern": "Settings overlay state style test passed." },
     { "id": "semantic_theme_contrast", "script": "res://tests/ui/semantic_theme_contrast_test.gd", "success_pattern": "Semantic theme contrast test passed." },

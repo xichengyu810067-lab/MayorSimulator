@@ -659,7 +659,7 @@ func _test_city_state_population_migration_boundary() -> void:
 	var over_ceiling_envelope = SaveEnvelopeScript.from_dict(over_ceiling_data)
 	var ceiling_hash := current_probe.deterministic_hash()
 	_check(over_ceiling_records.size() == 200_001, "over-ceiling fixture declares 200001 NPC slots")
-	_check(over_ceiling_envelope != null and not current_probe.restore_envelope(over_ceiling_envelope), "persisted population above 200000 is rejected")
+	_check(over_ceiling_envelope == null, "persisted population above 200000 is rejected before envelope migration or restore")
 	_check(current_probe.deterministic_hash() == ceiling_hash, "population ceiling rejection does not overwrite the live session")
 
 

@@ -4,7 +4,7 @@ const SaveEnvelopeScript = preload("res://scripts/core/save_envelope.gd")
 const SaveServiceScript = preload("res://scripts/core/save_service.gd")
 
 const TEST_PATH := "user://mayor_simulator/tests/save_memory_pipeline/large.json"
-const PAYLOAD_BYTES := 8 * 1024 * 1024
+const PAYLOAD_BYTES := SaveEnvelopeScript.MAX_STRING_BYTES
 
 var _failed := false
 var _checks := 0
