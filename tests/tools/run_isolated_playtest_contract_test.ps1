@@ -17,7 +17,7 @@ function Invoke-IsolatedRunner {
         [Parameter(Mandatory)][string]$ProfileName,
         [Parameter(Mandatory)][int]$MinimumRuntimeSeconds
     )
-    & $script:WindowsPowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Runner -GodotExe $Child -ProfileName $ProfileName -RendererMode Mobile -MinimumRuntimeSeconds $MinimumRuntimeSeconds | Out-Null
+    & $script:WindowsPowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Runner -GodotExe $Child -ProfileName $ProfileName -RendererMode Mobile -MinimumRuntimeSeconds $MinimumRuntimeSeconds 2>$null | Out-Null
     return [int]$LASTEXITCODE
 }
 
@@ -112,7 +112,7 @@ Assert-True -Condition ($reuseExit -ne 0) -Message 'reused profile unexpectedly 
 $afterReuseHash = (Get-FileHash -LiteralPath $successSummaryPath -Algorithm SHA256).Hash
 Assert-True -Condition ($beforeReuseHash -eq $afterReuseHash) -Message 'reused profile changed prior result evidence'
 
-& $WindowsPowerShellExe -NoProfile -ExecutionPolicy Bypass -File $runner -GodotExe $successChild -ProfileName ('synthetic-invalid-' + $profileSuffix) -RendererMode 'Mobile;--path=C:\escape'
+& $WindowsPowerShellExe -NoProfile -ExecutionPolicy Bypass -File $runner -GodotExe $successChild -ProfileName ('synthetic-invalid-' + $profileSuffix) -RendererMode 'Mobile;--path=C:\escape' 2>$null
 $invalidRendererExit = [int]$LASTEXITCODE
 Assert-True -Condition ($invalidRendererExit -ne 0) -Message 'renderer argument injection unexpectedly passed validation'
 
