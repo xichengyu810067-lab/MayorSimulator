@@ -2876,76 +2876,7 @@ func _handle_construction_fact(event: Dictionary) -> bool:
 		}, _operation_id("job_remove"))
 		return true
 	if operation == "build":
-		var display_name := str(metadata.get("building_name", ""))
-		var definition = _definition_for_name(display_name)
-		var footprint_validation := BuildingFootprintsScript.validate_persisted_record(
-			metadata,
-			terrain_map,
-			str(job.get("blueprint", {}).get("size_tier", ""))
-		)
-		if not bool(footprint_validation.get("valid", false)):
-			_push_ui_event("building_completion_failed", {
-				"job_id": job_id,
-				"error": str(footprint_validation.get("error", "invalid_footprint")),
-			})
-			return false
-		var instance_id := _next_building_id()
-		var record := {
-			"building_id": instance_id,
-			"definition_id": str(job.get("blueprint", {}).get("building_id", "")),
-			"building_name": display_name,
-			"tile_index": int(metadata.get("tile_index", -1)),
-			"anchor_tile_id": int(footprint_validation.get("anchor_tile_id", -1)),
-			"footprint_id": str(footprint_validation.get("footprint_id", "")),
-			"occupied_tile_ids": Array(footprint_validation.get("occupied_tile_ids", [])).duplicate(),
-			"status": "active",
-			"durability": 100,
-			"blueprint": job.get("blueprint", {}).duplicate(true)
-		}
-		if bool(footprint_validation.get("legacy_single_provenance", false)):
-			record[BuildingFootprintsScript.LEGACY_SINGLE_PROVENANCE_FIELD] = (
-				BuildingFootprintsScript.LEGACY_SINGLE_PROVENANCE
-			)
-		var population_change := _adjust_population(
-			maxi(0, int(definition.effects.get("population", 0))) if definition != null else 0,
-			"population.building_completed",
-			instance_id
-		)
-		record["resident_ids"] = Array(population_change["added_ids"])
-		record["population_delta"] = int(population_change["actual_delta"])
-		durability.register_building(instance_id, {
-			"durability": 100,
-			"material_value": int(definition.base_cost) if definition != null else 1000,
-			"engineering_fee": maxi(300, int((definition.base_cost if definition != null else 1000) * 0.1)),
-			"metadata": metadata
-		})
-		var completion_operation_id := _operation_id("building_complete")
-		var completion_events: Array = session.submit_command("complete_building_construction", {
-			"building_id": instance_id,
-			"job_id": job_id,
-			"record": record,
-			"reason_tag": "building.construction_completed",
-		}, completion_operation_id)
-		var completion_emitted := false
-		for completion_event in completion_events:
-			if (
-				str(completion_event.event_type) == "building.construction_completed"
-				and str(completion_event.caused_by) == completion_operation_id
-			):
-				completion_emitted = true
-				break
-		if not completion_emitted:
-			_push_ui_event("building_completion_failed", {
-				"job_id": job_id,
-				"error": "building_authority_transition_failed",
-			})
-			return false
-		_register_transport_station_for_building(record)
-		if transport_planning_session != null:
-			transport_planning_session.mark_job_completed(job_id, instance_id)
-		_try_materialize_completed_transport_package()
-		_push_ui_event("building_completed", record)
-		return true
+		return _complete_building_construction(job, metadata)
 	elif operation == "demolish":
 		var target_id := str(job.get("target_id", ""))
 		var building_record: Dictionary = session.state.buildings.get(target_id, {})
@@ -2970,6 +2901,91 @@ func _handle_construction_fact(event: Dictionary) -> bool:
 		"job_id": job_id,
 		"reason_tag": "construction.completed"
 	}, _operation_id("job_remove"))
+	return true
+
+
+func _complete_building_construction(job: Dictionary, metadata: Dictionary) -> bool:
+	var job_id := str(job.get("id", ""))
+	var display_name := str(metadata.get("building_name", ""))
+	var definition = _definition_for_name(display_name)
+	var footprint_validation := BuildingFootprintsScript.validate_persisted_record(
+		metadata,
+		terrain_map,
+		str(job.get("blueprint", {}).get("size_tier", ""))
+	)
+	if not bool(footprint_validation.get("valid", false)):
+		_push_ui_event("building_completion_failed", {
+			"job_id": job_id,
+			"error": str(footprint_validation.get("error", "invalid_footprint")),
+		})
+		return false
+	# Validate the immutable completion candidate before touching population,
+	# durability, building IDs, transport, or any save-visible operation sequence.
+	var instance_id := "building_%06d" % next_building_sequence
+	var record := {
+		"building_id": instance_id,
+		"definition_id": str(job.get("blueprint", {}).get("building_id", "")),
+		"building_name": display_name,
+		"tile_index": int(metadata.get("tile_index", -1)),
+		"anchor_tile_id": int(footprint_validation.get("anchor_tile_id", -1)),
+		"footprint_id": str(footprint_validation.get("footprint_id", "")),
+		"occupied_tile_ids": Array(footprint_validation.get("occupied_tile_ids", [])).duplicate(),
+		"status": "active",
+		"durability": 100,
+		"blueprint": job.get("blueprint", {}).duplicate(true)
+	}
+	if bool(footprint_validation.get("legacy_single_provenance", false)):
+		record[BuildingFootprintsScript.LEGACY_SINGLE_PROVENANCE_FIELD] = (
+			BuildingFootprintsScript.LEGACY_SINGLE_PROVENANCE
+		)
+	var validation_error: String = session.kernel.building_completion_validation_error(job_id, record)
+	if not validation_error.is_empty():
+		_push_ui_event("building_completion_failed", {
+			"job_id": job_id,
+			"error": validation_error,
+		})
+		return false
+	instance_id = _next_building_id()
+	record["building_id"] = instance_id
+	var population_change := _adjust_population(
+		maxi(0, int(definition.effects.get("population", 0))) if definition != null else 0,
+		"population.building_completed",
+		instance_id
+	)
+	record["resident_ids"] = Array(population_change["added_ids"])
+	record["population_delta"] = int(population_change["actual_delta"])
+	durability.register_building(instance_id, {
+		"durability": 100,
+		"material_value": int(definition.base_cost) if definition != null else 1000,
+		"engineering_fee": maxi(300, int((definition.base_cost if definition != null else 1000) * 0.1)),
+		"metadata": metadata
+	})
+	var completion_operation_id := _operation_id("building_complete")
+	var completion_events: Array = session.submit_command("complete_building_construction", {
+		"building_id": instance_id,
+		"job_id": job_id,
+		"record": record,
+		"reason_tag": "building.construction_completed",
+	}, completion_operation_id)
+	var completion_emitted := false
+	for completion_event in completion_events:
+		if (
+			str(completion_event.event_type) == "building.construction_completed"
+			and str(completion_event.caused_by) == completion_operation_id
+		):
+			completion_emitted = true
+			break
+	if not completion_emitted:
+		_push_ui_event("building_completion_failed", {
+			"job_id": job_id,
+			"error": "building_authority_transition_failed",
+		})
+		return false
+	_register_transport_station_for_building(record)
+	if transport_planning_session != null:
+		transport_planning_session.mark_job_completed(job_id, instance_id)
+	_try_materialize_completed_transport_package()
+	_push_ui_event("building_completed", record)
 	return true
 
 func _handle_durability_fact(event: Dictionary) -> void:

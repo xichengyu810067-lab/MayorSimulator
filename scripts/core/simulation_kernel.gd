@@ -117,7 +117,7 @@ func process_next() -> Array:
 			elif not record_value is Dictionary:
 				events.append(_rejected(command, "building_record_required"))
 			else:
-				var validation_error := _building_completion_validation_error(job_id, record_value as Dictionary)
+				var validation_error := building_completion_validation_error(job_id, record_value as Dictionary)
 				if not validation_error.is_empty():
 					events.append(_rejected(command, validation_error))
 				else:
@@ -269,7 +269,7 @@ func _remove_record(command, event_type: String, id_key: String):
 	return _emit(event_type, state.game_time, subject_id, null, str(command.payload.get("reason_tag", "record_removed")), {}, command.operation_id)
 
 
-func _building_completion_validation_error(job_id: String, record: Dictionary) -> String:
+func building_completion_validation_error(job_id: String, record: Dictionary) -> String:
 	if not state.construction_jobs.has(job_id):
 		return "construction_job_required"
 	var job_value: Variant = state.construction_jobs[job_id]

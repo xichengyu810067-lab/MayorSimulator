@@ -93,6 +93,7 @@ func _initialize() -> void:
 	_test_current_existing_registration_contract()
 	_test_atomic_placement_and_single_building_identity()
 	_test_completion_command_fails_closed()
+	_test_coordinator_completion_preflight_atomicity()
 	_test_atomic_completion_observer_state()
 	_test_pending_command_station_completion()
 	_test_save_load_and_secondary_cell_lifecycle()
@@ -586,6 +587,95 @@ func _test_json_integer_scalar_completion() -> void:
 	_check(not coordinator.session.state.construction_jobs.has(job_id), "JSON n.0 completion consumes its construction authority")
 
 
+func _test_coordinator_completion_preflight_atomicity() -> void:
+	var coordinator = VerticalSliceCoordinatorScript.new(20_263_900, 50_000_000)
+	var original_run := _find_available_flat_run(coordinator, 1)
+	_check(not original_run.is_empty(), "coordinator atomicity fixture finds its original legal footprint")
+	if original_run.is_empty():
+		return
+	var started: Dictionary = coordinator.start_approved_building("住宅", int(original_run["anchor"]), 20)
+	_check(bool(started.get("ok", false)), "coordinator atomicity fixture starts")
+	if not bool(started.get("ok", false)):
+		return
+	var completed_job: Dictionary = Dictionary(started.get("job", {})).duplicate(true)
+	var job_id := str(completed_job.get("id", ""))
+	completed_job["status"] = "completed"
+	completed_job["remaining_work"] = 0.0
+	completed_job["projected_remaining_days"] = 0
+	completed_job["elapsed_days"] = maxi(1, int(completed_job.get("elapsed_days", 0)))
+	completed_job["completed_day"] = coordinator.game_day()
+	coordinator.construction.jobs[job_id] = completed_job.duplicate(true)
+	coordinator.session.submit_command("upsert_construction", {
+		"job_id": job_id,
+		"record": completed_job,
+		"reason_tag": "test.atomicity_completed_job",
+	}, "test_atomicity_completed_job")
+	var alternate_run := _find_available_flat_run(coordinator, 1, Array(original_run["tiles"]))
+	_check(not alternate_run.is_empty(), "coordinator atomicity fixture finds a second legal footprint")
+	if alternate_run.is_empty():
+		return
+	var rejected_job := completed_job.duplicate(true)
+	var rejected_metadata: Dictionary = Dictionary(rejected_job.get("metadata", {})).duplicate(true)
+	rejected_metadata["tile_index"] = int(alternate_run["anchor"])
+	rejected_metadata["anchor_tile_id"] = int(alternate_run["anchor"])
+	rejected_metadata["occupied_tile_ids"] = Array(alternate_run["tiles"]).duplicate()
+	rejected_job["target_id"] = "tile_%02d" % int(alternate_run["anchor"])
+	rejected_job["metadata"] = rejected_metadata
+	var footprint_validation := BuildingFootprintsScript.validate_persisted_record(
+		rejected_metadata,
+		coordinator.terrain_map,
+		str(rejected_job.get("blueprint", {}).get("size_tier", ""))
+	)
+	_check(bool(footprint_validation.get("valid", false)), "coordinator atomicity rejection passes footprint validation first")
+	var rejected_record := _completion_record_for_job(rejected_job, "building_candidate")
+	_check(
+		coordinator.session.kernel.building_completion_validation_error(job_id, rejected_record) == "building_tile_mismatch",
+		"coordinator atomicity fixture reaches a specific core completion mismatch"
+	)
+	coordinator.drain_ui_events()
+	var save_hash_before: String = coordinator.deterministic_hash()
+	var population_before: Dictionary = coordinator.population.to_dict()
+	var durability_before: Dictionary = coordinator.durability.to_dict()
+	var construction_before: Dictionary = coordinator.construction.to_dict()
+	var core_before: Dictionary = coordinator.session.state.to_dict()
+	var transport_before: Dictionary = coordinator.transport.to_dict()
+	var transport_session_before: Dictionary = coordinator.transport_planning_session.to_dict()
+	var building_sequence_before: int = coordinator.next_building_sequence
+	var operation_sequence_before: int = coordinator.next_operation_sequence
+	var event_sequence_before: int = coordinator.session.kernel.event_sequence
+	var command_sequence_before: int = coordinator.session.kernel.command_sequence
+	var rejected := coordinator._complete_building_construction(rejected_job, rejected_metadata)
+	var rejection_events: Array[Dictionary] = coordinator.drain_ui_events()
+	var save_hash_after: String = coordinator.deterministic_hash()
+	_check(not rejected, "coordinator rejects the core completion mismatch")
+	_check(_ui_event_count(rejection_events, "building_completion_failed") == 1, "coordinator emits one completion failure")
+	if _ui_event_count(rejection_events, "building_completion_failed") == 1:
+		_check(str(rejection_events[0].get("payload", {}).get("error", "")) == "building_tile_mismatch", "coordinator exposes the core mismatch reason")
+	_check(coordinator.population.to_dict() == population_before, "rejected completion preserves canonical population")
+	_check(coordinator.durability.to_dict() == durability_before, "rejected completion preserves durability authority")
+	_check(coordinator.construction.to_dict() == construction_before, "rejected completion preserves construction authority")
+	_check(coordinator.session.state.to_dict() == core_before, "rejected completion preserves CityState authority and resident ownership")
+	_check(coordinator.transport.to_dict() == transport_before, "rejected completion preserves transport authority")
+	_check(coordinator.transport_planning_session.to_dict() == transport_session_before, "rejected completion preserves transport planning state")
+	_check(coordinator.next_building_sequence == building_sequence_before, "rejected completion consumes no building identity")
+	_check(coordinator.next_operation_sequence == operation_sequence_before, "rejected completion consumes no coordinator operation")
+	_check(coordinator.session.kernel.event_sequence == event_sequence_before, "rejected completion emits no domain event")
+	_check(coordinator.session.kernel.command_sequence == command_sequence_before, "rejected completion submits no core command")
+	_check(save_hash_after == save_hash_before, "rejected completion preserves the full save-visible envelope")
+	var original_metadata: Dictionary = Dictionary(completed_job.get("metadata", {})).duplicate(true)
+	var population_count_before_success: int = coordinator.population.population_count()
+	var completed := coordinator._complete_building_construction(completed_job, original_metadata)
+	var completion_events: Array[Dictionary] = coordinator.drain_ui_events()
+	_check(completed, "validated coordinator completion still succeeds")
+	_check(_ui_event_count(completion_events, "building_completed") == 1, "validated completion emits one success event")
+	_check(not _ui_event_seen(completion_events, "building_completion_failed"), "validated completion emits no failure event")
+	_check(coordinator.session.state.buildings.size() == 1, "validated completion writes one building authority")
+	_check(not coordinator.session.state.construction_jobs.has(job_id), "validated completion consumes its core construction authority")
+	_check(coordinator.population.population_count() > population_count_before_success, "validated completion applies its population effect")
+	var completed_id := str(coordinator.session.state.buildings.keys()[0])
+	_check(not coordinator.durability.get_building(completed_id).is_empty(), "validated completion registers durability")
+
+
 func _test_pending_command_station_completion() -> void:
 	var coordinator = VerticalSliceCoordinatorScript.new(20_264_000, 50_000_000)
 	var run := _find_available_flat_run(coordinator, 1)
@@ -735,7 +825,7 @@ func _test_save_load_and_secondary_cell_lifecycle() -> void:
 		_check(large_reloaded.active_construction_for_tile(tile_id).is_empty(), "large demolition leaves no construction occupancy")
 
 
-func _find_available_flat_run(coordinator, length: int) -> Dictionary:
+func _find_available_flat_run(coordinator, length: int, excluded_tile_ids: Array = []) -> Dictionary:
 	var blocked_transport: PackedInt32Array = coordinator.transport_navigation_blocked_tile_ids()
 	for row: int in range(coordinator.terrain_map.grid_size().y):
 		for column: int in range(coordinator.terrain_map.grid_size().x - length + 1):
@@ -745,6 +835,7 @@ func _find_available_flat_run(coordinator, length: int) -> Dictionary:
 				var tile_id: int = int(coordinator.terrain_map.tile_id_for_coordinate(Vector2i(column + offset, row)))
 				if (
 					not coordinator.terrain_map.is_buildable(tile_id)
+					or excluded_tile_ids.has(tile_id)
 					or not coordinator.get_building_by_tile(tile_id).is_empty()
 					or not coordinator.active_construction_for_tile(tile_id).is_empty()
 					or blocked_transport.has(tile_id)
