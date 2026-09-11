@@ -28,6 +28,12 @@ func _run() -> void:
 		main.tutorial_overlay.close_as_completed(false)
 	main._set_map_interaction_enabled(true)
 
+	main._ensure_municipal_overlay()
+	var overlay_before: Control = main.municipal_overlay
+	main._ensure_municipal_overlay()
+	var overlay_after: Control = main.municipal_overlay
+	_check(overlay_before != null, "municipal overlay was not created before session flow assertions")
+	_check(overlay_before == overlay_after, "municipal overlay should be reused by _ensure_municipal_overlay")
 	main.municipal_overlay.open_page("buildings")
 	main._select_building_group("economy")
 	await process_frame
