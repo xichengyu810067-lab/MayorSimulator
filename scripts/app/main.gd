@@ -26,6 +26,7 @@ const WeatherVisualLayerScript = preload("res://ui/effects/weather_visual_layer.
 const SettingsOverlayScript = preload("res://ui/shell/settings_overlay.gd")
 const TutorialStoryOverlayScript = preload("res://ui/tutorial/tutorial_story_overlay.gd")
 const OnboardingProgressScript = preload("res://scripts/app/onboarding_progress.gd")
+const OnboardingActionRouterScript = preload("res://scripts/app/onboarding_action_router.gd")
 const OnboardingGuideScript = preload("res://ui/tutorial/onboarding_guide.gd")
 const AudioDirectorScript = preload("res://scripts/audio/audio_director.gd")
 const UserSettingsServiceScript = preload("res://scripts/app/user_settings_service.gd")
@@ -307,6 +308,7 @@ var settings_overlay
 var tutorial_overlay
 var onboarding_guide
 var onboarding_progress = OnboardingProgressScript.new()
+var onboarding_action_router = OnboardingActionRouterScript.new(onboarding_progress)
 var audio_director
 var construction_confirmation
 var action_dock: Control
@@ -641,6 +643,7 @@ func _build_ui() -> void:
 	onboarding_guide.set_dark_mode(is_dark_mode)
 	onboarding_guide.advanced.connect(Callable(self, "_on_onboarding_advanced"))
 	add_child(onboarding_guide)
+	call_deferred("_refresh_onboarding_guide")
 	for blocking_surface in [municipal_overlay, settings_overlay, construction_confirmation, exit_confirmation, tutorial_overlay, onboarding_guide]:
 		if blocking_surface != null:
 			blocking_surface.visibility_changed.connect(Callable(self, "_sync_time_pause_for_ui"))
@@ -672,7 +675,11 @@ func _sync_time_pause_for_ui() -> void:
 	should_pause = should_pause or (construction_confirmation != null and construction_confirmation.is_open())
 	should_pause = should_pause or (exit_confirmation != null and exit_confirmation.visible)
 	should_pause = should_pause or (tutorial_overlay != null and tutorial_overlay.is_open())
-	should_pause = should_pause or (onboarding_guide != null and onboarding_guide.is_open())
+	should_pause = should_pause or (
+		onboarding_guide != null
+		and onboarding_guide.is_open()
+		and not onboarding_guide.is_product_mode()
+	)
 	vertical_slice.set_time_paused(should_pause)
 	_refresh_time_hud()
 
@@ -892,6 +899,7 @@ func _finish_start_load(mode: String) -> void:
 	_tutorial_replay_active = false
 	if onboarding_progress.is_story_pending() and tutorial_overlay != null:
 		tutorial_overlay.open(true)
+	call_deferred("_refresh_onboarding_guide")
 	_sync_time_pause_for_ui()
 	# A completed tutorial does not open another blocking surface, so there is no
 	# visibility signal that would otherwise restore map input after Continue.
@@ -944,6 +952,7 @@ func _initialize_fresh_game() -> void:
 	last_report = "新城市尚無月度收支紀錄。"
 	last_report_details = "新城市尚無可展開的月度明細。"
 	onboarding_progress.reset_for_new_game()
+	onboarding_action_router.bind_progress(onboarding_progress)
 	tutorial_completed = false
 	_tutorial_replay_active = false
 	if audio_director != null:
@@ -1023,6 +1032,7 @@ func _restore_player_shell_state(state: Dictionary) -> bool:
 		if onboarding_guide != null:
 			onboarding_guide.invalidate_target()
 		return false
+	onboarding_action_router.bind_progress(onboarding_progress)
 	if state.is_empty():
 		tutorial_completed = not onboarding_progress.is_story_pending()
 		return true
@@ -1203,6 +1213,7 @@ func _on_locale_changed(_locale: String) -> void:
 		city_data_dashboard.refresh_localization()
 	if onboarding_guide != null and is_instance_valid(onboarding_guide):
 		onboarding_guide.refresh_localization()
+	call_deferred("_refresh_onboarding_guide")
 	if reopen_settings and settings_overlay != null:
 		settings_overlay.open()
 
@@ -1334,6 +1345,7 @@ func _build_action_dock() -> PanelContainer:
 	panel.add_child(grid)
 
 	municipal_button = _hud_picture_button("municipal", "市政", "開啟市政中心：建築、政策法案、藍圖與財政", "primary")
+	municipal_button.name = "MunicipalButton"
 	municipal_button.pressed.connect(Callable(self, "_open_municipal_center"))
 	grid.add_child(municipal_button)
 	settings_button = _hud_picture_button("settings", "設定", "調整語言與顯示模式")
@@ -1578,7 +1590,11 @@ func _sync_map_interaction_for_ui() -> void:
 	blocked = blocked or (construction_confirmation != null and construction_confirmation.is_open())
 	blocked = blocked or (exit_confirmation != null and exit_confirmation.visible)
 	blocked = blocked or (tutorial_overlay != null and tutorial_overlay.is_open())
-	blocked = blocked or (onboarding_guide != null and onboarding_guide.is_open())
+	blocked = blocked or (
+		onboarding_guide != null
+		and onboarding_guide.is_open()
+		and not onboarding_guide.is_product_mode()
+	)
 	_set_map_interaction_enabled(not blocked)
 
 
@@ -1586,10 +1602,12 @@ func _on_municipal_overlay_closed() -> void:
 	if _fiscal_draft_active:
 		_discard_fiscal_draft(false, false)
 	_sync_map_interaction_for_ui()
+	call_deferred("_refresh_onboarding_guide")
 
 
 func _on_municipal_page_opened(page_id: String) -> void:
 	_set_map_npc_tooltips_enabled(false)
+	call_deferred("_refresh_onboarding_guide")
 	if page_id == "finance":
 		_begin_fiscal_draft()
 		return
@@ -1604,6 +1622,212 @@ func _on_municipal_page_opened(page_id: String) -> void:
 	_refresh_governance_catalog()
 	_refresh_lower_council_stage()
 	_select_governance_status(_preferred_governance_status())
+
+
+func _refresh_onboarding_guide() -> void:
+	if onboarding_guide == null or not is_instance_valid(onboarding_guide):
+		return
+	if not _game_started or not onboarding_progress.is_active() or not onboarding_action_router.supports_current_target():
+		onboarding_guide.invalidate_target()
+		_sync_map_interaction_for_ui()
+		return
+	var target := _resolve_onboarding_target()
+	if target == null or not is_instance_valid(target) or not target.is_visible_in_tree():
+		onboarding_guide.invalidate_target()
+		_sync_map_interaction_for_ui()
+		return
+	if target is BaseButton and (target as BaseButton).disabled:
+		onboarding_guide.invalidate_target()
+		_sync_map_interaction_for_ui()
+		return
+	if onboarding_guide.is_product_mode() and onboarding_guide.target_control() == target:
+		return
+	onboarding_guide.open_product_target(
+		onboarding_progress,
+		target,
+		OnboardingGuideScript.INPUT_MOUSE_LEFT,
+		KEY_NONE,
+		_onboarding_target_message(target)
+	)
+	_sync_time_pause_for_ui()
+	_sync_map_interaction_for_ui()
+
+
+func _resolve_onboarding_target() -> Control:
+	match onboarding_progress.current_target():
+		"build":
+			return _resolve_build_onboarding_target()
+		"blueprint":
+			return _resolve_blueprint_onboarding_target()
+		"route":
+			return _resolve_route_onboarding_target()
+		"fiscal":
+			return _resolve_fiscal_onboarding_target()
+		"city_data":
+			return _resolve_city_data_onboarding_target()
+		"public_affairs":
+			return _resolve_public_affairs_onboarding_target()
+	return null
+
+
+func _resolve_build_onboarding_target() -> Control:
+	if construction_confirmation != null and construction_confirmation.is_open():
+		return _visible_control_named("ConfirmConstructionButton")
+	if placement_mode_active:
+		return _first_onboarding_grid_target()
+	if municipal_overlay == null or not municipal_overlay.is_open():
+		return municipal_button
+	match municipal_overlay.current_page():
+		"hub":
+			return _visible_control_named("BuildingsButton")
+		"buildings":
+			return _building_picker_target("住宅", "housing", 0)
+		"blueprint":
+			if selected_building == "住宅":
+				return _visible_control_named("SubmitBlueprintButton")
+	return municipal_button
+
+
+func _resolve_blueprint_onboarding_target() -> Control:
+	if municipal_overlay == null or not municipal_overlay.is_open():
+		return municipal_button
+	match municipal_overlay.current_page():
+		"hub":
+			return _visible_control_named("BuildingsButton")
+		"buildings":
+			return _building_picker_target("公園", "community", 1)
+		"blueprint":
+			if selected_building == "公園" and vertical_slice_panel != null:
+				var payload: Dictionary = vertical_slice_panel.current_design_payload()
+				onboarding_action_router.begin_blueprint_design(payload)
+				if onboarding_action_router.blueprint_design_changed():
+					var custom_submit := _visible_control_named("SubmitCustomBlueprintButton")
+					return custom_submit if custom_submit != null else _visible_control_named("SubmitBlueprintButton")
+				return _visible_control_named("BlueprintMaterial")
+	return municipal_button
+
+
+func _resolve_route_onboarding_target() -> Control:
+	if construction_confirmation != null and construction_confirmation.is_open():
+		return _visible_control_named("ConfirmConstructionButton")
+	var session := _transport_session_snapshot()
+	var state := str(session.get("state", "inactive"))
+	if placement_mode_active:
+		var minimum_stops := 1 if str(session.get("mode", "")) == "air" else 2
+		if _transport_session_station_count(session) >= minimum_stops:
+			return placement_confirm_button
+		return _first_onboarding_grid_target()
+	if map_action_mode in ["transport_infrastructure", "transport_route_stops"]:
+		if not transport_plan_tiles.is_empty() or transport_route_station_tiles.size() >= 2:
+			return placement_confirm_button
+		return _first_onboarding_grid_target()
+	if state not in ["inactive", "closed"]:
+		if municipal_overlay == null or not municipal_overlay.is_open():
+			return municipal_button
+		if municipal_overlay.current_page() == "hub":
+			return _visible_control_named("BuildingsButton")
+		if municipal_overlay.current_page() != "transport_planning":
+			return municipal_button
+		if state == "network_placement" and Dictionary(session.get("network_draft", {})).get("tile_ids", []).is_empty():
+			return _visible_control_named("InfrastructureAdd_road")
+		if state == "route_edit" and Dictionary(session.get("route_draft", {})).get("station_tile_ids", []).is_empty():
+			return _visible_control_named("PlanRoute_bus")
+		return _visible_control_named("TransportPlanningSessionContinue")
+	if municipal_overlay == null or not municipal_overlay.is_open():
+		return municipal_button
+	match municipal_overlay.current_page():
+		"hub":
+			return _visible_control_named("BuildingsButton")
+		"buildings":
+			return _building_picker_target("公車站", "mobility", 1)
+		"blueprint":
+			if selected_building == "公車站":
+				return _visible_control_named("SubmitBlueprintButton")
+	return municipal_button
+
+
+func _resolve_fiscal_onboarding_target() -> Control:
+	if municipal_overlay == null or not municipal_overlay.is_open():
+		return municipal_button
+	if municipal_overlay.current_page() == "hub":
+		return _visible_control_named("FinanceButton")
+	if municipal_overlay.current_page() != "finance":
+		return municipal_button
+	if _fiscal_flow_step == "preview":
+		return fiscal_apply_button
+	if _fiscal_dirty_count() > 0:
+		return fiscal_preview_button
+	return _visible_control_named("FiscalSlider_tax_income")
+
+
+func _resolve_city_data_onboarding_target() -> Control:
+	if municipal_overlay == null or not municipal_overlay.is_open():
+		return municipal_button
+	if municipal_overlay.current_page() == "hub":
+		return _visible_control_named("City DataButton")
+	if municipal_overlay.current_page() != "city_data" or city_data_dashboard == null:
+		return municipal_button
+	onboarding_action_router.note_city_data_opened(city_data_dashboard.current_tab, city_data_dashboard.get_tab_count())
+	return city_data_dashboard.get_tab_bar()
+
+
+func _resolve_public_affairs_onboarding_target() -> Control:
+	if municipal_overlay == null or not municipal_overlay.is_open():
+		return municipal_button
+	if municipal_overlay.current_page() == "hub":
+		return _visible_control_named("Public AffairsButton")
+	if municipal_overlay.current_page() != "public_affairs":
+		return municipal_button
+	for request_variant: Variant in vertical_slice.get_view_model(selected_cell_index).get("citizen_requests", []):
+		if request_variant is Dictionary and str(Dictionary(request_variant).get("status", "")) == "pending":
+			var request_id := str(Dictionary(request_variant).get("request_id", ""))
+			var target := _visible_control_named("AcceptRequest_%s" % request_id)
+			if target != null:
+				return target
+	return null
+
+
+func _building_picker_target(building_name: String, group_id: String, family_tab: int) -> Control:
+	if building_family_tabs != null and building_family_tabs.current_tab != family_tab:
+		return building_family_tabs.get_tab_bar()
+	if selected_building_group != group_id:
+		return _visible_control_named("BuildingGroup_%s" % group_id)
+	return _visible_control_named("BuildingCard_%s" % building_name)
+
+
+func _visible_control_named(control_name: String) -> Control:
+	var node := find_child(control_name, true, false)
+	return node as Control if node is Control and (node as Control).is_visible_in_tree() else null
+
+
+func _first_onboarding_grid_target() -> Control:
+	for button_variant: Variant in grid_buttons:
+		var button := button_variant as Button
+		if button != null and is_instance_valid(button) and button.is_visible_in_tree() and not button.disabled:
+			return button
+	return null
+
+
+func _onboarding_target_message(target: Control) -> String:
+	if target == null:
+		return ""
+	if not target.tooltip_text.is_empty():
+		return target.tooltip_text
+	if target.has_meta("semantic_label"):
+		return str(target.get_meta("semantic_label"))
+	if target is BaseButton:
+		return (target as BaseButton).text
+	return ""
+
+
+func _on_city_data_tab_changed(tab_index: int) -> void:
+	if city_data_dashboard == null or vertical_slice == null:
+		return
+	if onboarding_action_router.record_city_data_tab_changed(
+		tab_index, city_data_dashboard.get_tab_count(), vertical_slice.game_day()
+	):
+		_autosave("action:onboarding_city_data_tab_changed")
+		call_deferred("_refresh_onboarding_guide")
 
 
 func _preferred_governance_status() -> String:
@@ -1654,6 +1878,7 @@ func _build_city_data_page() -> Control:
 		"metric_specs": _city_metric_specs(),
 		"resident_group_names": group_satisfaction.keys(),
 	})
+	city_data_dashboard.tab_changed.connect(Callable(self, "_on_city_data_tab_changed"))
 	monthly_data_kpi_charts = city_data_dashboard.monthly_data_kpi_charts
 	monthly_data_service_charts = city_data_dashboard.monthly_data_service_charts
 	benchmark_charts = city_data_dashboard.benchmark_charts
@@ -3905,6 +4130,7 @@ func _show_fiscal_preview() -> void:
 		fiscal_draft_preview.show()
 	_refresh_fiscal_draft_actions()
 	_update_ui()
+	call_deferred("_refresh_onboarding_guide")
 
 
 func _select_fiscal_category(category_id: String) -> void:
@@ -4081,6 +4307,7 @@ func _set_fiscal_draft_value(kind: String, key: String, value: int, do_refresh: 
 			_sync_number_input(service_inputs, key, normalized, true)
 	if do_refresh:
 		_update_ui()
+	call_deferred("_refresh_onboarding_guide")
 
 
 func _sync_fiscal_controls_from_draft() -> void:
@@ -4155,6 +4382,8 @@ func _apply_fiscal_draft() -> void:
 	if not _fiscal_draft_active or changed == 0 or _fiscal_flow_step != "preview" or _fiscal_preview_revision != _fiscal_draft_revision:
 		_set_hint("草稿預覽已失效；請返回修改後重新預覽。", true)
 		return
+	var accepted_preview_revision := _fiscal_preview_revision
+	var accepted_draft_revision := _fiscal_draft_revision
 	var commit_tax := _fiscal_draft_tax_rates.duplicate(true)
 	var commit_utility := _fiscal_draft_utility_fees.duplicate(true)
 	var commit_service := _fiscal_draft_service_fees.duplicate(true)
@@ -4169,17 +4398,27 @@ func _apply_fiscal_draft() -> void:
 	_fiscal_draft_utility_fees = utility_fees.duplicate(true)
 	_fiscal_draft_service_fees = service_fees.duplicate(true)
 	_fiscal_apply_generation += 1
+	var onboarding_recorded := onboarding_action_router.record_fiscal_apply_success(
+		accepted_preview_revision,
+		accepted_draft_revision,
+		changed,
+		_fiscal_apply_generation,
+		vertical_slice.game_day()
+	)
 	_fiscal_flow_step = "edit"
 	_fiscal_draft_revision = 0
 	_fiscal_preview_revision = -1
 	_recalculate_satisfaction()
 	_recalculate_score()
-	_reconcile_resident_request_completion()
+	_reconcile_resident_request_completion(false)
+	_consume_vertical_events(vertical_slice.drain_ui_events(), false)
 	_sync_fiscal_controls_from_draft()
 	_show_fiscal_categories()
 	_update_ui()
 	_set_hint("已一次套用 %d 項稅務與收費變更。" % changed, false)
 	_autosave("action:fiscal_draft_applied")
+	if onboarding_recorded:
+		call_deferred("_refresh_onboarding_guide")
 
 
 func _fiscal_projection_snapshot(use_draft: bool) -> Dictionary:
@@ -4467,6 +4706,7 @@ func _select_building_from_catalog(building_name: String) -> void:
 	if municipal_overlay != null:
 		municipal_overlay.open_page("blueprint")
 	_set_hint("已進入「%s」設計；調整規格後，總價、工期與占地會立即更新。" % building_name, false)
+	call_deferred("_refresh_onboarding_guide")
 
 
 func _select_building_group(group_id: String) -> void:
@@ -4484,6 +4724,7 @@ func _select_building_group(group_id: String) -> void:
 	for button_id in building_group_buttons.keys():
 		var button: Button = building_group_buttons[button_id]
 		_apply_button_style(button, "primary" if str(button_id) == group_id else "normal")
+	call_deferred("_refresh_onboarding_guide")
 
 
 func _on_building_family_changed(family_index: int) -> void:
@@ -4494,6 +4735,7 @@ func _on_building_family_changed(family_index: int) -> void:
 		return
 	if not group_ids.is_empty():
 		_select_building_group(str(group_ids[0]))
+	call_deferred("_refresh_onboarding_guide")
 
 
 func _building_group_definition(group_id: String) -> Dictionary:
@@ -4508,9 +4750,14 @@ func _on_blueprint_submit_requested(payload: Dictionary) -> void:
 	_cancel_building_placement(false)
 	var result: Dictionary = vertical_slice.submit_blueprint(payload)
 	if bool(result.get("ok", false)):
+		var onboarding_recorded := onboarding_action_router.record_blueprint_success(
+			payload, result, vertical_slice.game_day()
+		)
 		var review: Dictionary = result.get("review", {})
 		_set_hint("「%s」藍圖已送審，預計 %d 個遊戲日完成審核。" % [payload.get("building_name", selected_building), int(review.get("review_days", 0))], false)
 		_add_announcement("「%s」藍圖已收件，預計 %d 個遊戲日完成審核。" % [payload.get("building_name", selected_building), int(review.get("review_days", 0))])
+		if onboarding_recorded:
+			call_deferred("_refresh_onboarding_guide")
 	else:
 		_set_hint("藍圖無法送審：%s" % _vertical_error_text(str(result.get("error", "unknown"))), true)
 	_sync_vertical_state()
@@ -4532,10 +4779,12 @@ func _on_blueprint_worker_count_changed(_count: int) -> void:
 	_update_scoped_municipal_pages(vertical_slice.get_view_model(selected_cell_index))
 
 
-func _on_blueprint_design_changed(_payload: Dictionary) -> void:
+func _on_blueprint_design_changed(payload: Dictionary) -> void:
 	if vertical_slice == null:
 		return
+	onboarding_action_router.note_blueprint_design(payload)
 	_update_scoped_municipal_pages(vertical_slice.get_view_model(selected_cell_index))
+	call_deferred("_refresh_onboarding_guide")
 
 
 func _on_blueprint_library_selection_requested(building_name: String, library_id: String) -> void:
@@ -4959,6 +5208,7 @@ func _handle_transport_tile_pressed(index: int) -> void:
 		transport_plan_tiles.size(),
 		_transport_visible_plan_cost(quote, transport_plan_tiles.size(), _transport_session_snapshot()),
 	], false)
+	call_deferred("_refresh_onboarding_guide")
 
 
 func _handle_transport_demolition_tile(index: int) -> void:
@@ -5003,6 +5253,7 @@ func _handle_transport_station_tile(index: int) -> void:
 	_sync_placement_banner()
 	_update_transport_runtime()
 	_set_hint("已依序選擇 %d 個站點。" % transport_route_station_tiles.size(), false)
+	call_deferred("_refresh_onboarding_guide")
 
 
 func _transport_project_quote(tile_ids: Array[int]) -> Dictionary:
@@ -5216,7 +5467,10 @@ func _confirm_transport_session_package(fleet_size: int, headway_minutes: int, f
 		_set_hint("交通總包無法開工：%s" % _vertical_error_text(str(result.get("error", "unknown"))), true)
 		_refresh_transport_planning_panel()
 		return
-	_consume_vertical_events(vertical_slice.drain_ui_events())
+	var onboarding_recorded := onboarding_action_router.record_route_package_success(
+		result, vertical_slice.game_day()
+	)
+	_consume_vertical_events(vertical_slice.drain_ui_events(), false)
 	debug_sync_npc_navigation_obstacles()
 	_update_ui()
 	_refresh_transport_planning_panel()
@@ -5224,6 +5478,8 @@ func _confirm_transport_session_package(fleet_size: int, headway_minutes: int, f
 		int(result.get("total_cost", 0)), int(quote.get("route_tile_count", 0)),
 	], false)
 	_autosave("action:transport_route_package_started")
+	if onboarding_recorded:
+		call_deferred("_refresh_onboarding_guide")
 
 
 func _cancel_transport_map_action(show_feedback: bool) -> void:
@@ -5446,6 +5702,7 @@ func _on_grid_pressed(index: int) -> void:
 			_transport_session_station_count(drafted.get("session", {})), placement_building_name,
 		], false)
 		_autosave("action:transport_session_station_drafted")
+		call_deferred("_refresh_onboarding_guide")
 		return
 	_pending_construction_tile = index
 	_pending_construction_workers = workers
@@ -5453,6 +5710,7 @@ func _on_grid_pressed(index: int) -> void:
 	if construction_confirmation != null:
 		_set_map_interaction_enabled(false)
 		construction_confirmation.open(placement_building_name, index, quote, funds)
+		call_deferred("_refresh_onboarding_guide")
 
 
 func _enter_building_placement(building_name: String) -> void:
@@ -5479,6 +5737,7 @@ func _enter_building_placement(building_name: String) -> void:
 		settings_overlay.close()
 	_sync_placement_banner()
 	_update_ui()
+	call_deferred("_refresh_onboarding_guide")
 
 
 func _cancel_active_map_action(show_feedback: bool = true) -> void:
@@ -5697,14 +5956,22 @@ func _confirm_pending_construction(tile_index: int) -> void:
 		_set_hint("「%s」第 %d 站已開工；規劃未結束，可直接選擇下一個站點。" % [building_name, station_count], false)
 	else:
 		_set_hint("「%s」已開工，分配 %d 名工程人員，預付總造價 $%d。" % [building_name, _pending_construction_workers, int(result.get("total_cost", 0))], false)
+	var onboarding_recorded := onboarding_action_router.record_build_success(
+		building_name,
+		session_placement or building_name in TRANSPORT_SESSION_STATIONS,
+		result,
+		vertical_slice.game_day()
+	)
 	# start_approved_building() queues construction_started immediately, while
 	# process_frame() only drains UI events on the next 120-second game-day tick.
 	# Consume it now so the worksite footprint and every resident path are updated
 	# in the same frame as the confirmed placement.
-	_consume_vertical_events(vertical_slice.drain_ui_events())
+	_consume_vertical_events(vertical_slice.drain_ui_events(), false)
 	_sync_vertical_state()
 	_update_ui()
 	_autosave("action:transport_session_station_started" if session_placement else "action:construction_started")
+	if onboarding_recorded:
+		call_deferred("_refresh_onboarding_guide")
 
 
 func _on_construction_confirmation_cancelled() -> void:
@@ -6202,7 +6469,7 @@ func _update_scoped_municipal_pages(view_model: Dictionary) -> void:
 	if governance_force_button:
 		governance_force_button.disabled = not bool(view_model.get("can_force_enact", false))
 
-func _consume_vertical_events(events: Array[Dictionary]) -> void:
+func _consume_vertical_events(events: Array[Dictionary], autosave_events: bool = true) -> void:
 	var event_types := PackedStringArray()
 	var navigation_changed := false
 	var request_context_changed := false
@@ -6368,7 +6635,7 @@ func _consume_vertical_events(events: Array[Dictionary]) -> void:
 			npc_map_controller.repath_all()
 	_sync_vertical_state()
 	refresh_visible_npc_proxies()
-	if not event_types.is_empty():
+	if autosave_events and not event_types.is_empty():
 		_autosave("event:%s" % ",".join(event_types))
 
 func _start_selected_demolition() -> void:
@@ -6414,25 +6681,46 @@ func _force_latest_rejected_bill() -> void:
 	_update_ui()
 
 func _accept_request_by_id(request_id: String) -> void:
+	var before := _resident_request_snapshot(request_id)
 	if vertical_slice.accept_request_by_id(request_id, false):
+		var after := _resident_request_snapshot(request_id)
+		var onboarding_recorded := onboarding_action_router.record_public_request_accept_success(
+			before, after, vertical_slice.game_day()
+		)
+		_reconcile_resident_request_completion(false)
 		_consume_vertical_events(vertical_slice.drain_ui_events())
-		_reconcile_resident_request_completion()
 		_set_hint("居民陳情已列入處理。", false)
+		if onboarding_recorded:
+			call_deferred("_refresh_onboarding_guide")
 	else:
 		_set_hint("這筆陳情已處理或不存在。", true)
 	_update_ui()
 
 
-func _reconcile_resident_request_completion() -> bool:
+func _reconcile_resident_request_completion(consume_events: bool = true) -> bool:
 	if vertical_slice == null:
 		return false
 	var completed: Array[String] = vertical_slice.complete_requests(_vertical_city_context())
 	if completed.is_empty():
 		return false
+	if not consume_events:
+		return true
 	var completion_events: Array[Dictionary] = vertical_slice.drain_ui_events()
 	if not completion_events.is_empty():
 		_consume_vertical_events(completion_events)
 	return true
+
+
+func _resident_request_snapshot(request_id: String) -> Dictionary:
+	if vertical_slice == null or request_id.is_empty():
+		return {}
+	var view_model: Dictionary = vertical_slice.get_view_model(selected_cell_index)
+	for request_variant: Variant in view_model.get("citizen_requests", []):
+		if request_variant is Dictionary:
+			var request := request_variant as Dictionary
+			if str(request.get("request_id", "")) == request_id:
+				return request.duplicate(true)
+	return {}
 
 
 func _reject_request_by_id(request_id: String) -> void:
@@ -7188,6 +7476,7 @@ func _on_tutorial_completed(skipped: bool) -> void:
 	if not replay_only and onboarding_progress.is_story_pending():
 		onboarding_progress.begin_guide()
 	tutorial_completed = not onboarding_progress.is_story_pending()
+	_refresh_onboarding_guide()
 	_sync_time_pause_for_ui()
 	_set_hint("故事教學已略過；實作導覽將從興建開始。" if skipped else "故事教學完成；實作導覽將從興建開始。", false)
 	if not replay_only:
@@ -7217,6 +7506,7 @@ func _wire_ui_sounds() -> void:
 func _rebuild_ui() -> void:
 	if npc_map_controller != null:
 		npc_map_controller.unmount()
+	onboarding_action_router.reset_transient_evidence()
 	if onboarding_guide != null:
 		onboarding_guide.invalidate_target()
 	for child in get_children():
@@ -7326,6 +7616,7 @@ func _rebuild_ui() -> void:
 	_pending_construction_tile = -1
 	_build_ui()
 	_update_ui()
+	call_deferred("_refresh_onboarding_guide")
 
 func _number_input(text: String) -> LineEdit:
 	var input := LineEdit.new()

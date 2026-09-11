@@ -46,6 +46,9 @@ func _run() -> void:
 	_check(main.tutorial_completed, "schema 9 active restore preserves the legacy story-seen flag")
 	_check(main.onboarding_progress.current_target() == "route", "schema 9 resumes the exact current target")
 	_check(main.onboarding_progress.receipts().size() == 2, "schema 9 preserves bounded receipts")
+	var router_resume: Dictionary = main.onboarding_action_router.debug_snapshot()
+	_check(str(router_resume.get("current_target", "")) == "route" and bool(router_resume.get("supported", false)), "router binds the exact restored current target")
+	_check(Dictionary(router_resume.get("blueprint_baseline", {})).is_empty() and not bool(router_resume.get("blueprint_changed", true)) and int(router_resume.get("city_data_initial_tab", 0)) == -1, "reload restores no transient action evidence to replay")
 	_check(int(main.tax_rates["income"]) == 19, "valid schema 9 applies Main-owned fields")
 	_check(schema9_active == incoming_copy, "valid restore does not rewrite the incoming snapshot")
 
@@ -57,6 +60,7 @@ func _run() -> void:
 	var malformed_copy := malformed.duplicate(true)
 	_check(not bool(main.call("_restore_player_shell_state", malformed)), "malformed schema 9 is rejected")
 	_check(main.onboarding_progress.is_locked(), "malformed schema 9 locks only onboarding")
+	_check(not main.onboarding_action_router.supports_current_target(), "locked malformed onboarding cannot route a domain action")
 	_check(int(main.tax_rates["income"]) == before_tax, "malformed schema does not mutate Main-owned tax state")
 	_check(int(main.get("_autosave_count")) == before_autosaves, "malformed restore does not autosave")
 	_check(main.call("_autosave", "test:locked_onboarding") == ERR_INVALID_DATA, "locked onboarding prevents later autosave overwrite")

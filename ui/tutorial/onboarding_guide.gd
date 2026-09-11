@@ -2,6 +2,7 @@ class_name OnboardingGuide
 extends Control
 
 signal advanced(target_id: String, receipt: Dictionary)
+signal target_input_observed(target_id: String, input_kind: String)
 
 const INPUT_MOUSE_LEFT := "mouse_left"
 const INPUT_KEY := "key"
@@ -12,6 +13,8 @@ var _target: Control
 var _input_kind := ""
 var _expected_keycode := KEY_NONE
 var _receipt: Dictionary = {}
+var _bound_target_id := ""
+var _product_mode := false
 var _target_input_callable := Callable()
 var _target_exit_callable := Callable()
 var _generation := 0
@@ -42,10 +45,36 @@ func open_for_target(
 	game_day: int,
 	message: String = ""
 ) -> bool:
+	return _open_target(progress, target, input_kind, expected_keycode, authority_id, entity_id, game_day, message, false)
+
+
+func open_product_target(
+	progress,
+	target: Control,
+	input_kind: String,
+	expected_keycode: Key = KEY_NONE,
+	message: String = ""
+) -> bool:
+	return _open_target(progress, target, input_kind, expected_keycode, "", "", 0, message, true)
+
+
+func _open_target(
+	progress,
+	target: Control,
+	input_kind: String,
+	expected_keycode: Key,
+	authority_id: String,
+	entity_id: String,
+	game_day: int,
+	message: String,
+	product_mode: bool
+) -> bool:
 	invalidate_target()
 	if progress == null or not progress.has_method("is_active") or not bool(progress.call("is_active")):
 		return false
-	if target == null or not is_instance_valid(target) or not target.is_inside_tree() or not target.visible:
+	if target == null or not is_instance_valid(target) or not target.is_inside_tree() or not target.is_visible_in_tree():
+		return false
+	if target is BaseButton and (target as BaseButton).disabled:
 		return false
 	if input_kind not in [INPUT_MOUSE_LEFT, INPUT_KEY]:
 		return false
@@ -55,12 +84,15 @@ func open_for_target(
 	_target = target
 	_input_kind = input_kind
 	_expected_keycode = expected_keycode
-	_receipt = {
-		"kind": str(progress.call("current_target")),
-		"authority_id": authority_id,
-		"entity_id": entity_id,
-		"game_day": game_day,
-	}
+	_bound_target_id = str(progress.call("current_target"))
+	_product_mode = product_mode
+	if not _product_mode:
+		_receipt = {
+			"kind": _bound_target_id,
+			"authority_id": authority_id,
+			"entity_id": entity_id,
+			"game_day": game_day,
+		}
 	_generation += 1
 	var binding_generation := _generation
 	_target_input_callable = Callable(self, "_on_target_gui_input").bind(binding_generation)
@@ -85,6 +117,8 @@ func invalidate_target() -> void:
 	_progress = null
 	_input_kind = ""
 	_expected_keycode = KEY_NONE
+	_bound_target_id = ""
+	_product_mode = false
 	_receipt.clear()
 	_target_input_callable = Callable()
 	_target_exit_callable = Callable()
@@ -92,7 +126,16 @@ func invalidate_target() -> void:
 
 
 func is_open() -> bool:
-	return visible and is_instance_valid(_target) and _progress != null
+	return (
+		visible
+		and is_instance_valid(_target)
+		and _progress != null
+		and str(_progress.call("current_target")) == _bound_target_id
+	)
+
+
+func is_product_mode() -> bool:
+	return is_open() and _product_mode
 
 
 func target_control() -> Control:
@@ -129,6 +172,9 @@ func _input(event: InputEvent) -> void:
 		return
 	var focus_owner := get_viewport().gui_get_focus_owner()
 	if _input_kind == INPUT_KEY and focus_owner == _target and key_event.keycode == _expected_keycode:
+		if _product_mode:
+			target_input_observed.emit(_bound_target_id, _input_kind)
+			return
 		_advance_once()
 	accept_event()
 	get_viewport().set_input_as_handled()
@@ -141,6 +187,9 @@ func _on_target_gui_input(event: InputEvent, binding_generation: int) -> void:
 		return
 	var mouse_event := event as InputEventMouseButton
 	if not mouse_event.pressed or mouse_event.button_index != MOUSE_BUTTON_LEFT:
+		return
+	if _product_mode:
+		target_input_observed.emit(_bound_target_id, _input_kind)
 		return
 	_advance_once()
 	accept_event()
