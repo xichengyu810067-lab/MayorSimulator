@@ -57,11 +57,23 @@ New-Item -ItemType Directory -Path $testRoot -ErrorAction Stop | Out-Null
 $profileSuffix = [Guid]::NewGuid().ToString('N').Substring(0, 12)
 
 $successChild = Join-Path $testRoot 'success-child.cmd'
-$crashChild = Join-Path $testRoot 'crash-child.cmd'
+$crashChild = Join-Path $testRoot 'crash-child.exe'
 $shortChild = Join-Path $testRoot 'short-child.cmd'
 New-SyntheticChild -Path $successChild -SleepSeconds 2 -ExitCode 0
-New-SyntheticChild -Path $crashChild -SleepSeconds 0 -ExitCode 23
 New-SyntheticChild -Path $shortChild -SleepSeconds 0 -ExitCode 0
+$crashSource = @'
+using System;
+using System.IO;
+public static class SyntheticCrashChild {
+    public static int Main(string[] args) {
+        for (var index = 0; index + 1 < args.Length; index++) {
+            if (args[index] == "--log-file") { File.WriteAllText(args[index + 1], "synthetic crash child log"); break; }
+        }
+        return unchecked((int)0xC0000005);
+    }
+}
+'@
+Add-Type -TypeDefinition $crashSource -Language CSharp -OutputAssembly $crashChild -OutputType ConsoleApplication -ErrorAction Stop
 
 $expectedHead = (& git -c "safe.directory=$projectRoot" -C $projectRoot rev-parse HEAD).Trim()
 $expectedTree = (& git -c "safe.directory=$projectRoot" -C $projectRoot rev-parse 'HEAD^{tree}').Trim()
@@ -84,7 +96,7 @@ Assert-True -Condition ($crashExit -ne 0) -Message 'synthetic crash child unexpe
 $crashSummaryPath = Join-Path $projectRoot ('.tmp\isolated-playtest\' + $crashProfile + '\playtest-result.json')
 $crashSummary = Get-Content -LiteralPath $crashSummaryPath -Raw | ConvertFrom-Json
 Assert-True -Condition ($crashSummary.status -eq 'child_failed') -Message 'synthetic crash child was not recorded as child_failed'
-Assert-True -Condition ([int]$crashSummary.process.child_exit_code -eq 23) -Message 'synthetic crash child exit code was not preserved'
+Assert-True -Condition ([int]$crashSummary.process.child_exit_code -eq -1073741819) -Message 'synthetic Windows crash exit code was not preserved as signed Int32'
 
 $shortProfile = 'synthetic-short-' + $profileSuffix
 $shortExit = Invoke-IsolatedRunner -Runner $runner -Child $shortChild -ProfileName $shortProfile -MinimumRuntimeSeconds 2
