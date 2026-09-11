@@ -58,8 +58,7 @@ func _run() -> void:
 	_check(_hovered_grid_count(main) == 0, "exit X exposed a white hover marker before pointer movement")
 	await _release_guard(exit_close_guard)
 
-	await _verify_npc_dialogue_planning_barrier(main, false)
-	await _verify_npc_dialogue_planning_barrier(main, true)
+	await _verify_transport_planning_npc_barrier(main)
 	await _verify_npc_dialogue_keyboard_dismiss_keeps_building_placement(main)
 	await _verify_npc_dialogue_timeout_boundary(main)
 
@@ -114,7 +113,7 @@ func _release_guard(guard: Control) -> void:
 	_check(not is_instance_valid(guard), "pointer guard did not release after real pointer movement")
 
 
-func _verify_npc_dialogue_planning_barrier(main, inject_on_next_frame: bool) -> void:
+func _verify_transport_planning_npc_barrier(main) -> void:
 	main.call("_on_transport_infrastructure_requested", "road", "build")
 	await _settle(2)
 	_check(main.map_action_mode == "transport_infrastructure", "road planning did not enter map mode")
@@ -124,39 +123,48 @@ func _verify_npc_dialogue_planning_barrier(main, inject_on_next_frame: bool) -> 
 	_check(target_tile_index >= 0, "could not find a quoteable road tile under the map")
 	if target_tile_index < 0:
 		return
-	main.debug_show_npc_dialogue(0)
-	await _settle(3)
-	var card := main.get_npc_dialogue_card_control() as Control
-	_check(card != null and card.visible, "NPC dialogue did not open above planning mode")
-	if card == null or not card.visible:
-		return
-	var close_button := card.find_child("DismissButton", true, false) as Button
+	var actor := main.get_visible_npc_actor(0) as Button
 	var target_tile := main.grid_buttons[target_tile_index] as Button
-	_check(close_button != null and target_tile != null, "NPC close button or target tile is unavailable")
-	if close_button == null or target_tile == null:
+	_check(actor != null and target_tile != null, "NPC actor or planning tile is unavailable")
+	if actor == null or target_tile == null:
 		return
+	_check(actor.mouse_filter == Control.MOUSE_FILTER_IGNORE, "planning did not disable NPC pointer capture")
+	_check(actor.tooltip_text.is_empty(), "planning did not disable NPC tooltip")
+	_check(target_tile.mouse_filter == Control.MOUSE_FILTER_STOP, "planning disabled its tile input")
+	var selected_npc_before := str(main.vertical_slice.selected_npc_id)
 	var treasury_before := int(main.funds)
 	var construction_before: Dictionary = main.vertical_slice.construction.to_dict()
 	var transport_before: Dictionary = main.vertical_slice.transport.to_dict()
-	var banner_before: String = str(main.placement_label.text)
-
-	await _click_without_post_settle(close_button)
-	_check(not card.visible, "NPC dialogue close action did not hide the card")
-	if inject_on_next_frame:
-		await process_frame
+	var planning_before: Dictionary = main.call("_transport_session_snapshot")
+	var autosaves_before := int(main._autosave_count)
+	var shell_before: Dictionary = main.vertical_slice.get_player_shell_state()
+	main.debug_show_npc_dialogue(0)
+	await _settle(2)
+	var card := main.get_npc_dialogue_card_control() as Control
+	_check(card != null and not card.visible, "planning allowed a programmatic NPC dialogue route")
+	main.call("_open_selected_npc_request")
+	_check(not main.municipal_overlay.is_open(), "planning allowed the stale public-affairs action")
 	main.call("_on_grid_pressed", target_tile_index)
-	if inject_on_next_frame:
-		await process_frame
+	_check(main.transport_plan_tiles.has(target_tile_index), "planning tile intent was unavailable while NPC input was disabled")
+	_check(str(main.vertical_slice.selected_npc_id) == selected_npc_before, "planning input changed the selected NPC")
+	_check(int(main.funds) == treasury_before, "planning input deducted treasury funds")
+	_check(main.vertical_slice.construction.to_dict() == construction_before, "planning input started construction")
+	_check(main.vertical_slice.transport.to_dict() == transport_before, "planning input changed authoritative transport state")
+	_check(main.call("_transport_session_snapshot") == planning_before, "planning input changed the authoritative planning session")
+	_check(int(main._autosave_count) == autosaves_before, "planning input triggered autosave")
+	_check(main.vertical_slice.get_player_shell_state() == shell_before, "planning input changed saved shell state")
+	main.call("_clear_transport_map_action")
+	await _settle(2)
+	_check(actor.mouse_filter == Control.MOUSE_FILTER_STOP and not actor.tooltip_text.is_empty(), "leaving planning did not restore NPC interaction")
 
-	var timing := "next frame" if inject_on_next_frame else "dismiss frame"
-	_check(main.transport_plan_tiles.is_empty(), "NPC close leaked a tile intent on the %s" % timing)
-	_check(main.placement_label.text == banner_before, "NPC close changed the planning quote banner on the %s" % timing)
-	_check(int(main.funds) == treasury_before, "NPC close deducted treasury funds on the %s" % timing)
-	_check(main.vertical_slice.construction.to_dict() == construction_before, "NPC close started construction on the %s" % timing)
-	_check(main.vertical_slice.transport.to_dict() == transport_before, "NPC close changed authoritative transport state on the %s" % timing)
-	var guard := main.get_node_or_null("ModalPointerGuard") as Control
-	_check(guard != null, "NPC close did not leave the shared pointer guard on the %s" % timing)
-	await _release_guard(guard)
+	main.call("_on_transport_infrastructure_requested", "road", "build")
+	main.call("_on_transport_infrastructure_requested", "road", "build")
+	await _settle(2)
+	_check(actor.mouse_filter == Control.MOUSE_FILTER_IGNORE and actor.tooltip_text.is_empty(), "re-entering planning was not idempotently isolated")
+	_check(int(main.funds) == treasury_before, "re-entering planning changed treasury")
+	_check(main.vertical_slice.construction.to_dict() == construction_before, "re-entering planning changed construction")
+	_check(main.vertical_slice.transport.to_dict() == transport_before, "re-entering planning changed transport authority")
+	_check(int(main._autosave_count) == autosaves_before, "re-entering planning triggered autosave")
 	main.call("_clear_transport_map_action")
 	await _settle(2)
 
@@ -311,15 +319,9 @@ func _verify_npc_dialogue_timeout_boundary(main) -> void:
 	main.debug_show_npc_dialogue(0)
 	await _settle(2)
 	card = main.get_npc_dialogue_card_control() as Control
-	_check(card != null and card.visible, "NPC dialogue did not open above transport planning for timeout verification")
-	if card == null or not card.visible:
-		return
-	main.call("_update_ambient", timeout_delta)
-	_check(card.visible, "NPC dialogue auto-timed out during active transport planning")
-	await _press_escape_once()
-	_check(not card.visible, "Escape did not close the retained NPC dialogue above transport planning")
-	_check(main.map_action_mode == "transport_infrastructure", "Escape reached transport planning after retained NPC dialogue dismissal")
-	_check(main.transport_plan_kind == "road" and main.transport_plan_operation == "build", "Escape changed the retained transport planning action")
+	_check(card != null and not card.visible, "transport planning accepted an NPC dialogue that should be unreachable")
+	_check(main.map_action_mode == "transport_infrastructure", "NPC isolation changed transport planning mode")
+	_check(main.transport_plan_kind == "road" and main.transport_plan_operation == "build", "NPC isolation changed the retained transport planning action")
 	main.call("_clear_transport_map_action")
 	await _settle(2)
 

@@ -1595,7 +1595,14 @@ func _sync_map_interaction_for_ui() -> void:
 		and onboarding_guide.is_open()
 		and not onboarding_guide.is_product_mode()
 	)
-	_set_map_interaction_enabled(not blocked)
+	if blocked:
+		_set_map_interaction_enabled(false)
+		return
+	# Transport planning owns tile clicks, but never NPC clicks. Keeping these
+	# controls separate prevents a moving resident from stealing a route/track
+	# tile while preserving ordinary map interaction.
+	_set_map_tile_tooltips_enabled(true)
+	_set_map_npc_tooltips_enabled(not _transport_planning_owns_map_input())
 
 
 func _on_municipal_overlay_closed() -> void:
@@ -3193,6 +3200,10 @@ func refresh_visible_npc_proxies() -> void:
 	# controller.
 	if not npc_map_controller.reconcile_proxy_pool(desired, is_dark_mode):
 		npc_map_controller.rebuild_actor_pool(desired, is_dark_mode)
+	# Proxy reconciliation refreshes display names on the actor controls. Re-apply
+	# the current input owner so transport planning cannot regain NPC tooltips or
+	# pointer capture when the authoritative roster changes mid-session.
+	_sync_map_interaction_for_ui()
 
 
 func _update_ambient(delta: float) -> void:
@@ -3343,6 +3354,8 @@ func format_npc_display_name(npc: Dictionary) -> String:
 
 
 func _show_npc_dialogue(npc_index: int) -> void:
+	if _transport_planning_owns_map_input():
+		return
 	var npc: Dictionary = get_visible_npc_snapshot(npc_index)
 	if npc.is_empty():
 		return
@@ -3483,6 +3496,8 @@ func _modal_pointer_guard_blocks_grid_intent() -> bool:
 
 
 func _open_selected_npc_request() -> void:
+	if _transport_planning_owns_map_input():
+		return
 	_hide_npc_dialogue()
 	_close_building_context()
 	if municipal_overlay != null:
@@ -4993,6 +5008,10 @@ func _is_transport_map_action_active() -> bool:
 	return map_action_mode in ["transport_infrastructure", "transport_route_stops"]
 
 
+func _transport_planning_owns_map_input() -> bool:
+	return _is_transport_map_action_active() or _is_transport_station_session_placement()
+
+
 func _transport_session_snapshot() -> Dictionary:
 	if vertical_slice == null or not vertical_slice.has_method("transport_planning_session_snapshot"):
 		return {"state": "inactive"}
@@ -5086,6 +5105,7 @@ func _on_transport_infrastructure_requested(kind: String, operation: String) -> 
 		municipal_overlay.close_overlay()
 	_sync_placement_banner()
 	_update_transport_runtime()
+	_sync_map_interaction_for_ui()
 	_set_hint("請依序點選相鄰地格規劃%s；確認前不會扣款。" % _transport_kind_label(transport_plan_kind), false)
 
 
@@ -5148,6 +5168,7 @@ func _on_transport_route_planning_requested(mode: String, fleet_size: int, headw
 		municipal_overlay.close_overlay()
 	_sync_placement_banner()
 	_update_transport_runtime()
+	_sync_map_interaction_for_ui()
 	_set_hint("請依營運順序點選%s；確認後才會驗證完整路網與車隊。" % _transport_route_label(mode), false)
 
 
@@ -5609,6 +5630,7 @@ func _clear_transport_map_action() -> void:
 	_pending_terrain_tile = -1
 	_sync_placement_banner()
 	_update_transport_runtime()
+	_sync_map_interaction_for_ui()
 
 
 func _transport_station_for_mode(mode: String) -> String:
@@ -5877,6 +5899,7 @@ func _clear_building_placement_ui() -> void:
 	if is_node_ready() and grid_buttons.size() == CELL_COUNT:
 		for index in CELL_COUNT:
 			_update_tile_visual(index, city_grid[index])
+	_sync_map_interaction_for_ui()
 
 
 func _refresh_placement_preview(index: int) -> void:
