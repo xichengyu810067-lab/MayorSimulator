@@ -342,6 +342,11 @@ func record_route_package_jobs(
 			return _error("invalid_route_package_quote")
 		if str(package_quote.get("quote_network_revision", "")).is_empty():
 			return _error("invalid_route_package_network_revision")
+	elif str(package_quote.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V2:
+		if not _valid_v2_route_package_quote(package_quote):
+			return _error("invalid_route_package_quote")
+	else:
+		return _error("invalid_route_package_quote")
 	var station_refs: Array = []
 	var station_job_index := 0
 	for index in range(station_jobs.size()):
@@ -738,6 +743,11 @@ static func validate_snapshot(data: Dictionary) -> Dictionary:
 			var package_revision := str(package_quote.get("quote_network_revision", ""))
 			if package_revision.length() != 64 or not package_revision.is_valid_hex_number(false):
 				return {"valid": false, "error": "invalid_route_package_network_revision"}
+		elif str(package_quote.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V2:
+			if not _valid_v2_route_package_quote(package_quote):
+				return {"valid": false, "error": "invalid_route_package_quote"}
+		else:
+			return {"valid": false, "error": "invalid_route_package_quote"}
 	for array_field: String in ["station_refs", "network_refs", "route_refs"]:
 		if not current.get(array_field, null) is Array:
 			return {"valid": false, "error": "invalid_session_field:%s" % array_field}
@@ -1526,6 +1536,23 @@ static func _normalize_corridor_quote(value: Variant) -> Dictionary:
 	return result
 
 
+static func _valid_v2_route_package_quote(quote: Dictionary) -> bool:
+	for reuse_only_field: String in [
+		"corridor_quote", "price_breakdown", "maintenance_breakdown", "reused_segment_refs", "new_segment_refs",
+	]:
+		if quote.has(reuse_only_field):
+			return false
+	var expected := TransportModesScript.route_package_price_quote(
+		int(quote.get("route_tile_count", -1)), str(quote.get("network_kind", ""))
+	)
+	return (
+		bool(expected.get("ok", false))
+		and str(quote.get("price_provenance", "")) == str(expected.get("price_provenance", ""))
+		and int(quote.get("route_construction_cost", -1)) == int(expected.get("construction_cost", -1))
+		and int(quote.get("route_monthly_maintenance", -1)) == int(expected.get("monthly_maintenance", -1))
+	)
+
+
 static func _normalize_package_quote(value: Variant) -> Dictionary:
 	if not value is Dictionary:
 		return {}
@@ -1541,14 +1568,15 @@ static func _normalize_package_quote(value: Variant) -> Dictionary:
 		"level_crossing_monthly_maintenance", "total_monthly_maintenance",
 	]:
 		result[field_name] = int(source.get(field_name, 0))
-	result["corridor_quote"] = _normalize_corridor_quote(source.get("corridor_quote", {}))
-	result["price_breakdown"] = _normalize_integer_dictionary(source.get("price_breakdown", {}))
-	result["maintenance_breakdown"] = _normalize_integer_dictionary(source.get("maintenance_breakdown", {}))
 	result["crossing_tile_ids"] = _normalized_int_array(source.get("crossing_tile_ids", []))
 	result["new_project_ids"] = _normalized_string_array(source.get("new_project_ids", []))
 	result["new_job_ids"] = _normalized_string_array(source.get("new_job_ids", []))
-	result["reused_segment_refs"] = _normalize_package_segment_refs(source.get("reused_segment_refs", []), false)
-	result["new_segment_refs"] = _normalize_package_segment_refs(source.get("new_segment_refs", []), true)
+	if str(source.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V3:
+		result["corridor_quote"] = _normalize_corridor_quote(source.get("corridor_quote", {}))
+		result["price_breakdown"] = _normalize_integer_dictionary(source.get("price_breakdown", {}))
+		result["maintenance_breakdown"] = _normalize_integer_dictionary(source.get("maintenance_breakdown", {}))
+		result["reused_segment_refs"] = _normalize_package_segment_refs(source.get("reused_segment_refs", []), false)
+		result["new_segment_refs"] = _normalize_package_segment_refs(source.get("new_segment_refs", []), true)
 	var blueprint_usage_before: Array = []
 	for usage_value: Variant in source.get("blueprint_usage_before", []):
 		if usage_value is Dictionary:

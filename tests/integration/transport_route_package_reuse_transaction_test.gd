@@ -17,6 +17,7 @@ func _initialize() -> void:
 
 func _run() -> void:
 	_cleanup()
+	_test_all_new_retains_v2_without_reuse_payload()
 	_test_all_reuse_commits_without_duplicate_work()
 	_test_mixed_commits_only_new_runs_and_round_trips()
 	_test_stale_tampered_changed_and_future_quotes_are_zero_write()
@@ -25,6 +26,62 @@ func _run() -> void:
 	if not _failed:
 		print("Transport route package reuse transaction test passed. Checks=%d" % _checks)
 	quit(1 if _failed else 0)
+
+
+func _test_all_new_retains_v2_without_reuse_payload() -> void:
+	var fixture := _prepared_all_new_fixture()
+	var coordinator = fixture["coordinator"]
+	var grid: Array = fixture["grid"]
+	var quote: Dictionary = coordinator.transport_session_package_quote(grid)
+	_check(bool(quote.get("ok", false)), "all-new quote succeeds: %s" % [quote])
+	_check(
+		str(quote.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V2
+		and str(quote.get("price_provenance", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_PROVENANCE,
+		"all-new route package retains v2 pricing provenance"
+	)
+	_check(
+		not quote.has("corridor_quote") and not quote.has("corridor_contract")
+		and not quote.has("price_breakdown") and not quote.has("maintenance_breakdown"),
+		"all-new quote does not carry v3 reuse payload"
+	)
+	var started: Dictionary = coordinator.start_transport_session_package(grid)
+	_check(bool(started.get("ok", false)), "all-new package commits with v2: %s" % [started])
+	if not bool(started.get("ok", false)):
+		return
+	var package_quote: Dictionary = coordinator.transport_planning_session_snapshot().get("route_draft", {}).get("package_quote", {})
+	_check(
+		str(package_quote.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V2
+		and not package_quote.has("corridor_quote") and not package_quote.has("reused_segment_refs")
+		and not package_quote.has("new_segment_refs"),
+		"all-new persisted package quote remains v2 without reuse refs"
+	)
+	_check(coordinator.save_game(SAVE_PATH) == OK, "waiting all-new v2 package saves")
+	var pending_restore = CoordinatorScript.new(1, 1)
+	_check(pending_restore.load_game(SAVE_PATH), "waiting all-new v2 package reloads")
+	if pending_restore.transport_planning_session_snapshot().get("state", "") == "waiting_construction":
+		var pending_quote: Dictionary = pending_restore.transport_planning_session_snapshot().get("route_draft", {}).get("package_quote", {})
+		_check(Array(pending_quote.get("new_job_ids", [])).size() == 4 and Array(pending_quote.get("new_project_ids", [])).size() == 2, "waiting all-new v2 save retains rollback job and project manifests")
+		var cancelled: Dictionary = pending_restore.cancel_transport_planning_session()
+		_check(bool(cancelled.get("ok", false)) and Array(cancelled.get("rolled_back_job_ids", [])).size() == 4, "reloaded all-new v2 package cancellation remains atomic")
+	coordinator.advance_days(_maximum_active_days(coordinator), {}, false)
+	_check(coordinator.transport.routes.size() == 1, "all-new package materializes one route")
+	if coordinator.transport.routes.size() == 1:
+		var route: Dictionary = coordinator.transport.routes.values()[0]
+		_check(
+			str(route.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V2
+			and str(route.get("price_provenance", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_PROVENANCE,
+			"all-new materialized route retains v2 pricing provenance"
+		)
+		_check(
+			not route.has("corridor_quote") and not route.has("reused_segment_refs")
+			and not route.has("new_segment_refs") and not route.has("price_breakdown"),
+			"all-new materialized route has no v3 reuse-only fields"
+		)
+	_validate_current(coordinator, "all-new v2 materialized")
+	_check(coordinator.save_game(SAVE_PATH) == OK, "all-new v2 route saves")
+	var restored = CoordinatorScript.new(1, 1)
+	_check(restored.load_game(SAVE_PATH), "all-new v2 route reloads: %s" % restored.session.save_service.last_error_message)
+	_check(restored.transport.to_dict() == coordinator.transport.to_dict(), "all-new v2 transport round-trips exactly: %s" % _first_difference(coordinator.transport.to_dict(), restored.transport.to_dict()))
 
 
 func _test_all_reuse_commits_without_duplicate_work() -> void:

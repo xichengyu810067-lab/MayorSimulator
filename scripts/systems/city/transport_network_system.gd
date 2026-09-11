@@ -174,6 +174,7 @@ func quote_completed_corridor(
 	var new_runs: Array = Array(classification.get("new_runs", [])).duplicate(true)
 	var reused_units := Array(classification.get("reused_tile_ids", [])).size()
 	var new_units := Array(classification.get("new_tile_ids", [])).size()
+	var is_all_new := str(classification.get("classification", "")) == "all_new"
 	var corridor_contract := {
 		"schema_version": TransportModesScript.ROUTE_PACKAGE_CORRIDOR_SCHEMA_VERSION,
 		"mode": mode,
@@ -194,19 +195,24 @@ func quote_completed_corridor(
 		segments.append({
 			"kind": str(run.get("kind", "")),
 			"tile_path": run_tiles,
-			"price_model": TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_MODEL,
-			"price_provenance": TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_PROVENANCE,
+			"price_model": TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V2 if is_all_new else TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_MODEL,
+			"price_provenance": TransportModesScript.ROUTE_PACKAGE_PRICE_PROVENANCE if is_all_new else TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_PROVENANCE,
 			"route_construction_cost": int(segment_spec.get("build_cost_per_tile", 0)) * run_tiles.size(),
 			"route_monthly_maintenance": int(segment_spec.get("monthly_maintenance_per_tile", 0)) * run_tiles.size(),
 		})
-	return quote_project("build", {
+	var plan := {
 		"title": "交通走廊建設專案",
 		"source_decision_id": "",
 		"segments": segments,
 		"facilities": [],
 		"stations": [],
-		"corridor_contract": corridor_contract,
-	}, terrain_map, occupied_tile_ids, construction_tile_ids)
+	}
+	if not is_all_new:
+		plan["corridor_contract"] = corridor_contract
+	var result := quote_project("build", plan, terrain_map, occupied_tile_ids, construction_tile_ids)
+	if bool(result.get("ok", false)):
+		result["corridor_classification"] = str(classification.get("classification", ""))
+	return result
 
 
 func quote_project(

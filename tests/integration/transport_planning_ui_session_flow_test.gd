@@ -189,9 +189,14 @@ func _run() -> void:
 		"five-tile all-new bus package does not produce a confirmation quote: %s" % [all_new_package_quote]
 	)
 	_check(
-		str(all_new_package_quote.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_MODEL
-		and str(all_new_package_quote.get("price_provenance", "")) == TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_PROVENANCE,
-		"five-tile all-new bus package does not retain the R5C v3 corridor price contract"
+		str(all_new_package_quote.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V2
+		and str(all_new_package_quote.get("price_provenance", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_PROVENANCE,
+		"five-tile all-new bus package does not retain the v2 route price contract"
+	)
+	_check(
+		not all_new_package_quote.has("corridor_quote") and not all_new_package_quote.has("corridor_contract")
+		and not all_new_package_quote.has("price_breakdown") and not all_new_package_quote.has("maintenance_breakdown"),
+		"five-tile all-new bus package carries v3 reuse-only quote fields"
 	)
 	continue_button = main.transport_planning_panel.find_child("TransportPlanningSessionContinue", true, false) as Button
 	_check(continue_button != null and continue_button.text.contains("確認總包") and not continue_button.disabled, "route-edit phase lacks an enabled one-step package confirmation")
@@ -252,8 +257,9 @@ func _run() -> void:
 	_check(_contains_all(main.hint_label.text, ["公車車庫", "已完工"]) and not main.hint_label.text.contains("施工中"), "completed BUS depot selection presents the wrong construction state: %s" % main.hint_label.text)
 	_check(selected_completed_depot_button != null and selected_completed_depot_button.tooltip_text.contains("公車車庫") and not selected_completed_depot_button.tooltip_text.contains("施工中"), "completed BUS depot selection and hover disagree: selection=%s hover=%s" % [main.hint_label.text, selected_completed_depot_button.tooltip_text if selected_completed_depot_button != null else "missing button"])
 	var route: Dictionary = main.vertical_slice.transport.routes.values()[0]
-	_check(str(route.get("status", "")) == "operational" and str(route.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_MODEL, "automatically materialized route is not operational with R5C v3 pricing")
-	_check(str(route.get("price_provenance", "")) == TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_PROVENANCE, "materialized route lost its completed-corridor provenance")
+	_check(str(route.get("status", "")) == "operational" and str(route.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V2, "automatically materialized route is not operational with v2 pricing")
+	_check(str(route.get("price_provenance", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_PROVENANCE, "materialized route lost its v2 provenance")
+	_check(not route.has("corridor_quote") and not route.has("reused_segment_refs") and not route.has("new_segment_refs"), "materialized all-new route carries v3 reuse-only fields")
 	var completed_station_refs: Array = session.get("station_refs", [])
 	var completed_station_ids: Array[String] = []
 	for ref_value: Variant in completed_station_refs:

@@ -839,11 +839,25 @@ func _build_transport_session_package_quote(city_grid: Array, cache_corridor_quo
 		return _transport_public_quote_error(model_quote)
 	var plan: Dictionary = Dictionary(model_quote.get("plan", {})).duplicate(true)
 	var corridor_quote: Dictionary = Dictionary(model_quote.get("corridor_quote", {})).duplicate(true)
-	var corridor_quote_validation := TransportModesScript.validate_route_package_corridor_price_quote(corridor_quote)
-	if not bool(corridor_quote_validation.get("valid", false)):
-		return {"ok": false, "error": "transport_package_invalid_corridor_quote"}
+	var corridor_contract: Dictionary = Dictionary(corridor_quote.get("corridor", {})).duplicate(true)
+	var is_all_new := str(model_quote.get("corridor_classification", corridor_contract.get("classification", ""))) == "all_new"
+	var price_model := TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V2 if is_all_new else TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_MODEL
+	var price_provenance := TransportModesScript.ROUTE_PACKAGE_PRICE_PROVENANCE if is_all_new else TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_PROVENANCE
+	var v2_quote: Dictionary = TransportModesScript.route_package_price_quote(route_tiles.size(), network_kind)
+	if is_all_new:
+		if not bool(v2_quote.get("ok", false)):
+			return {"ok": false, "error": "transport_package_invalid_route_price_quote"}
+	else:
+		var corridor_quote_validation := TransportModesScript.validate_route_package_corridor_price_quote(corridor_quote)
+		if not bool(corridor_quote_validation.get("valid", false)):
+			return {"ok": false, "error": "transport_package_invalid_corridor_quote"}
 	var route_construction_cost := int(Dictionary(model_quote.get("breakdown", {})).get("segments", 0))
 	var route_monthly_maintenance := int(Dictionary(model_quote.get("maintenance_breakdown", {})).get("segments", 0))
+	if is_all_new and (
+		route_construction_cost != int(v2_quote.get("construction_cost", -1))
+		or route_monthly_maintenance != int(v2_quote.get("monthly_maintenance", -1))
+	):
+		return {"ok": false, "error": "transport_package_v2_price_mismatch"}
 	var segments: Array = Array(plan.get("segments", [])).duplicate(true)
 	var crossing_tiles: Array = Array(model_quote.get("crossing_tile_ids", [])).duplicate()
 	var crossing_cost := crossing_tiles.size() * TransportModesScript.LEVEL_CROSSING_BUILD_COST
@@ -877,11 +891,9 @@ func _build_transport_session_package_quote(city_grid: Array, cache_corridor_quo
 	var result := {
 		"ok": true,
 		"workflow": TransportPlanningSessionScript.WORKFLOW_ROUTE_PACKAGE_V1,
-		"price_model": TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_MODEL,
-		"price_provenance": TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_PROVENANCE,
+		"price_model": price_model,
+		"price_provenance": price_provenance,
 		"quote_network_revision": network_revision,
-		"corridor_quote": corridor_quote,
-		"corridor_contract": Dictionary(corridor_quote.get("corridor", {})).duplicate(true),
 		"mode": str(current.get("mode", "")),
 		"network_kind": network_kind,
 		"route_tile_ids": route_tiles,
@@ -905,7 +917,10 @@ func _build_transport_session_package_quote(city_grid: Array, cache_corridor_quo
 		"can_afford": treasury_balance() >= total_cost,
 		"can_start": treasury_balance() >= total_cost and available_workers >= requested_workers,
 	}
-	if cache_corridor_quote:
+	if not is_all_new:
+		result["corridor_quote"] = corridor_quote
+		result["corridor_contract"] = corridor_contract
+	if cache_corridor_quote and not is_all_new:
 		var cache_result: Dictionary = transport_planning_session.update_route_draft({
 			"corridor_quote": corridor_quote,
 			"corridor_network_revision": network_revision,
@@ -1212,17 +1227,11 @@ func _transport_package_persisted_quote(
 			"had_last_used_day": library_entry.has("last_used_day"),
 			"last_used_day": int(library_entry.get("last_used_day", 0)),
 		})
-	var corridor_quote: Dictionary = Dictionary(quote.get("corridor_quote", {})).duplicate(true)
-	return {
+	var result := {
 		"workflow": str(quote.get("workflow", "")),
 		"price_model": str(quote.get("price_model", "")),
 		"price_provenance": str(quote.get("price_provenance", "")),
 		"quote_network_revision": str(quote.get("quote_network_revision", "")),
-		"corridor_quote": corridor_quote,
-		"price_breakdown": Dictionary(corridor_quote.get("price_breakdown", {})).duplicate(true),
-		"maintenance_breakdown": Dictionary(corridor_quote.get("maintenance_breakdown", {})).duplicate(true),
-		"reused_segment_refs": Array(Dictionary(corridor_quote.get("corridor", {})).get("reused_segment_refs", [])).duplicate(true),
-		"new_segment_refs": new_segment_refs,
 		"new_project_ids": new_project_ids,
 		"new_job_ids": new_job_ids,
 		"blueprint_usage_before": blueprint_usage_before,
@@ -1240,14 +1249,40 @@ func _transport_package_persisted_quote(
 		"total_monthly_maintenance": int(quote.get("total_monthly_maintenance", 0)),
 		"crossing_tile_ids": Array(quote.get("crossing_tile_ids", [])).duplicate(),
 	}
+	if str(quote.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V3:
+		var corridor_quote: Dictionary = Dictionary(quote.get("corridor_quote", {})).duplicate(true)
+		result["corridor_quote"] = corridor_quote
+		result["price_breakdown"] = Dictionary(corridor_quote.get("price_breakdown", {})).duplicate(true)
+		result["maintenance_breakdown"] = Dictionary(corridor_quote.get("maintenance_breakdown", {})).duplicate(true)
+		result["reused_segment_refs"] = Array(Dictionary(corridor_quote.get("corridor", {})).get("reused_segment_refs", [])).duplicate(true)
+		result["new_segment_refs"] = new_segment_refs
+	return result
 
 
 func _validate_transport_package_quote_for_commit(quote: Dictionary, city_grid: Array) -> Dictionary:
-	var corridor_validation := TransportModesScript.validate_route_package_corridor_price_quote(
-		quote.get("corridor_quote", null)
-	)
-	if not bool(corridor_validation.get("valid", false)):
-		return {"ok": false, "error": "transport_package_quote_invalid"}
+	var price_model := str(quote.get("price_model", ""))
+	if price_model == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V3:
+		var corridor_validation := TransportModesScript.validate_route_package_corridor_price_quote(
+			quote.get("corridor_quote", null)
+		)
+		if not bool(corridor_validation.get("valid", false)):
+			return {"ok": false, "error": "transport_package_quote_invalid"}
+	elif price_model == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V2:
+		for reuse_only_field: String in ["corridor_quote", "corridor_contract", "price_breakdown", "maintenance_breakdown", "reused_segment_refs", "new_segment_refs"]:
+			if quote.has(reuse_only_field):
+				return {"ok": false, "error": "transport_package_v2_schema_polluted"}
+		var v2_quote: Dictionary = TransportModesScript.route_package_price_quote(
+			int(quote.get("route_tile_count", -1)), str(quote.get("network_kind", ""))
+		)
+		if (
+			not bool(v2_quote.get("ok", false))
+			or str(quote.get("price_provenance", "")) != str(v2_quote.get("price_provenance", ""))
+			or int(quote.get("route_construction_cost", -1)) != int(v2_quote.get("construction_cost", -1))
+			or int(quote.get("route_monthly_maintenance", -1)) != int(v2_quote.get("monthly_maintenance", -1))
+		):
+			return {"ok": false, "error": "transport_package_v2_quote_invalid"}
+	else:
+		return {"ok": false, "error": "transport_package_price_model_invalid"}
 	var quoted_revision := str(quote.get("quote_network_revision", ""))
 	if quoted_revision.is_empty() or quoted_revision != transport.authority_revision():
 		return {"ok": false, "error": "transport_package_network_revision_stale"}
@@ -1319,21 +1354,23 @@ func _transport_package_reused_network_refs(quote: Dictionary) -> Array:
 
 
 func _transport_route_metadata_from_package_quote(package_quote: Dictionary) -> Dictionary:
-	return {
+	var result := {
 		"price_model": str(package_quote.get("price_model", "")),
 		"price_provenance": str(package_quote.get("price_provenance", "")),
 		"route_tile_count": int(package_quote.get("route_tile_count", 0)),
 		"route_construction_cost": int(package_quote.get("route_construction_cost", 0)),
 		"route_monthly_maintenance": int(package_quote.get("route_monthly_maintenance", 0)),
-		"quote_network_revision": str(package_quote.get("quote_network_revision", "")),
-		"corridor_quote": Dictionary(package_quote.get("corridor_quote", {})).duplicate(true),
-		"reused_segment_refs": Array(package_quote.get("reused_segment_refs", [])).duplicate(true),
-		"new_segment_refs": Array(package_quote.get("new_segment_refs", [])).duplicate(true),
-		"new_project_ids": Array(package_quote.get("new_project_ids", [])).duplicate(),
-		"new_job_ids": Array(package_quote.get("new_job_ids", [])).duplicate(),
-		"price_breakdown": Dictionary(package_quote.get("price_breakdown", {})).duplicate(true),
-		"maintenance_breakdown": Dictionary(package_quote.get("maintenance_breakdown", {})).duplicate(true),
 	}
+	if str(package_quote.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V3:
+		result["quote_network_revision"] = str(package_quote.get("quote_network_revision", ""))
+		result["corridor_quote"] = Dictionary(package_quote.get("corridor_quote", {})).duplicate(true)
+		result["reused_segment_refs"] = Array(package_quote.get("reused_segment_refs", [])).duplicate(true)
+		result["new_segment_refs"] = Array(package_quote.get("new_segment_refs", [])).duplicate(true)
+		result["new_project_ids"] = Array(package_quote.get("new_project_ids", [])).duplicate()
+		result["new_job_ids"] = Array(package_quote.get("new_job_ids", [])).duplicate()
+		result["price_breakdown"] = Dictionary(package_quote.get("price_breakdown", {})).duplicate(true)
+		result["maintenance_breakdown"] = Dictionary(package_quote.get("maintenance_breakdown", {})).duplicate(true)
+	return result
 
 
 func _materialize_candidate_transport_package(candidate_transport, candidate_planning, quote: Dictionary) -> Dictionary:
