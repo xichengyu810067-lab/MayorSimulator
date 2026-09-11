@@ -11,8 +11,8 @@ func _initialize() -> void:
 
 
 func _run() -> void:
-	root.content_scale_size = Vector2i(1280, 720)
-	root.size = Vector2i(1280, 720)
+	root.content_scale_size = Vector2i(1440, 900)
+	root.size = Vector2i(1440, 900)
 	var PanelScript = load("res://ui/shell/transport_planning_panel.gd")
 	if PanelScript == null:
 		push_error("Transport planning panel script could not be loaded.")
@@ -23,6 +23,15 @@ func _run() -> void:
 	panel.size = Vector2(1180, 680)
 	root.add_child(panel)
 	await process_frame
+	_check_transport_pager_columns(panel, 3, "wide transport panel")
+	root.content_scale_size = Vector2i(1280, 720)
+	root.size = Vector2i(1280, 720)
+	await process_frame
+	_check_transport_pager_columns(panel, 2, "narrow viewport transport panel")
+	root.content_scale_size = Vector2i(1440, 900)
+	root.size = Vector2i(1440, 900)
+	await process_frame
+	_check_transport_pager_columns(panel, 3, "restored viewport transport panel")
 
 	var infrastructure_events: Array[Dictionary] = []
 	var route_events: Array[Dictionary] = []
@@ -340,10 +349,29 @@ func _run() -> void:
 		var route_button := panel.find_child("PlanRoute_%s" % route_mode, true, false) as Button
 		_check(route_button != null and route_button.is_inside_tree(), "inactive management surface does not restore all route modes: %s" % route_mode)
 
+	var panel_resize_callable := Callable(panel, "_on_layout_resized")
+	var viewport: Viewport = panel.get_viewport()
+	panel.queue_free()
+	await process_frame
+	_check(viewport != null and not viewport.size_changed.is_connected(panel_resize_callable), "freed transport panel disconnects its viewport resize callback")
+	root.size = Vector2i(1280, 720)
+	await process_frame
+	root.size = Vector2i(1440, 900)
+	await process_frame
 	var exit_code := 1 if _failed else 0
 	if not _failed:
 		print("Transport planning panel test passed. Checks=%d" % _checks)
-	await TestCleanup.finish(self, [panel], exit_code)
+	await TestCleanup.finish(self, [], exit_code)
+
+
+func _check_transport_pager_columns(panel: Control, expected_columns: int, label: String) -> void:
+	for pager_name in ["TransportInfrastructurePager", "TransportRouteModePager"]:
+		var pager := panel.find_child(pager_name, true, false) as Control
+		_check(pager != null, "%s exposes %s" % [label, pager_name])
+		if pager == null or not pager.has_method("choice_grid"):
+			continue
+		var grid := pager.call("choice_grid") as GridContainer
+		_check(grid != null and grid.columns == expected_columns, "%s uses %d columns for %s" % [label, expected_columns, pager_name])
 
 
 func _check_infrastructure_controls(panel: Control) -> void:

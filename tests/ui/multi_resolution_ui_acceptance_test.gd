@@ -224,8 +224,9 @@ func _validate_municipal_surface(overlay: Control, page_id: String, resolution: 
 				(transport_page as ScrollContainer).horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED,
 				"%s transport planning disables horizontal scrolling" % label
 			)
+		_validate_transport_pager_columns(overlay, label, 3 if resolution.x >= 1400 else 2)
 		if resolution == Vector2i(1440, 900):
-			_validate_transport_three_column_pagers(overlay, label)
+			await _validate_transport_pager_resize(overlay, label, resolution)
 	elif page_id == "buildings":
 		for pager_variant in overlay.find_children("BuildingChoices_*", "VBoxContainer", true, false):
 			var pager := pager_variant as VBoxContainer
@@ -259,7 +260,7 @@ func _validate_municipal_surface(overlay: Control, page_id: String, resolution: 
 	_validate_container_button_siblings(overlay, label)
 
 
-func _validate_transport_three_column_pagers(overlay: Control, label: String) -> void:
+func _validate_transport_pager_columns(overlay: Control, label: String, expected_columns: int) -> void:
 	for pager_name in ["TransportInfrastructurePager", "TransportRouteModePager"]:
 		var pager := overlay.find_child(pager_name, true, false) as Control
 		_check(pager != null and pager.is_visible_in_tree(), "%s includes visible %s" % [label, pager_name])
@@ -268,7 +269,18 @@ func _validate_transport_three_column_pagers(overlay: Control, label: String) ->
 		_check(pager.has_method("choice_grid"), "%s %s exposes its choice grid" % [label, pager_name])
 		if pager.has_method("choice_grid"):
 			var grid := pager.call("choice_grid") as GridContainer
-			_check(grid != null and grid.columns == 3, "%s %s keeps three columns at 1440x900" % [label, pager_name])
+			_check(grid != null and grid.columns == expected_columns, "%s %s uses %d columns" % [label, pager_name, expected_columns])
+
+
+func _validate_transport_pager_resize(overlay: Control, label: String, original_resolution: Vector2i) -> void:
+	root.content_scale_size = Vector2i(1280, 720)
+	root.size = Vector2i(1280, 720)
+	await _settle(2)
+	_validate_transport_pager_columns(overlay, "%s resize-to-1280x720" % label, 2)
+	root.content_scale_size = original_resolution
+	root.size = original_resolution
+	await _settle(2)
+	_validate_transport_pager_columns(overlay, "%s resize-back-to-%s" % [label, original_resolution], 3)
 
 
 func _validate_required_surface(control: Control, outer_rect: Rect2, label: String) -> void:

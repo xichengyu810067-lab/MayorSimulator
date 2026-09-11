@@ -17,6 +17,7 @@ const TITLE_FONT_SIZE := 28
 const CONTROL_FONT_SIZE := 18
 const CONTROL_HEIGHT := 52.0
 const PAGER_MINIMUM_CHOICE_WIDTH := 310.0
+const THREE_COLUMN_PAGER_MINIMUM_WIDTH := PAGER_MINIMUM_CHOICE_WIDTH * 3.0 + 20.0
 
 const INFRASTRUCTURE_CHOICES: Array[Dictionary] = [
 	{"id": "road", "label": "道路", "hint": "汽車、摩托車與公車共用的連續路網。", "add": "build", "remove": "demolish", "add_label": "興建", "remove_label": "拆除"},
@@ -84,7 +85,19 @@ func _init() -> void:
 
 
 func _ready() -> void:
+	resized.connect(_on_layout_resized)
+	var viewport := get_viewport()
+	if viewport != null:
+		viewport.size_changed.connect(_on_layout_resized)
 	_refresh_pager_columns()
+
+
+func _exit_tree() -> void:
+	if resized.is_connected(_on_layout_resized):
+		resized.disconnect(_on_layout_resized)
+	var viewport := get_viewport()
+	if viewport != null and viewport.size_changed.is_connected(_on_layout_resized):
+		viewport.size_changed.disconnect(_on_layout_resized)
 
 
 func set_view_model(snapshot: Dictionary) -> void:
@@ -123,10 +136,19 @@ func set_view_model(snapshot: Dictionary) -> void:
 
 
 func _refresh_pager_columns() -> void:
-	var target_columns := 3 if get_viewport_rect().size.x >= 1400.0 else 2
+	if is_queued_for_deletion():
+		return
+	var viewport_width := get_viewport_rect().size.x
+	var available_width := size.x
+	var has_three_column_width := available_width <= 0.0 or available_width >= THREE_COLUMN_PAGER_MINIMUM_WIDTH
+	var target_columns := 3 if viewport_width >= 1400.0 and has_three_column_width else 2
 	for pager in [_infrastructure_pager, _route_mode_pager]:
 		if pager != null:
 			pager.call("set_forced_columns", target_columns)
+
+
+func _on_layout_resized() -> void:
+	_refresh_pager_columns()
 
 
 func set_dark_mode(enabled: bool) -> void:
