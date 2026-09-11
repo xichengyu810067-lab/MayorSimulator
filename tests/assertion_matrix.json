@@ -53,6 +53,7 @@
     { "id": "onboarding_progress", "script": "res://tests/unit/app/onboarding_progress_test.gd", "success_pattern": "Onboarding progress state test passed." },
     { "id": "onboarding_save_resume", "script": "res://tests/integration/onboarding_save_resume_test.gd", "success_pattern": "Onboarding save/resume test passed." },
     { "id": "onboarding_feature_flow", "script": "res://tests/integration/onboarding_feature_flow_test.gd", "success_pattern": "Onboarding feature flow test passed.", "timeout_seconds": 240 },
+    { "id": "guided_onboarding_entry", "script": "res://tests/integration/guided_onboarding_entry_test.gd", "success_pattern": "Guided onboarding formal entry test passed." },
     { "id": "onboarding_input_gate", "script": "res://tests/ui/onboarding_input_gate_test.gd", "success_pattern": "Onboarding input gate test passed." },
     { "id": "start_screen_flow", "script": "res://tests/integration/start_screen_flow_test.gd", "success_pattern": "Start screen new/continue loading test passed." },
     { "id": "systems_self", "script": "res://tests/unit/systems/systems_self_test.gd", "success_pattern": "Mayor Simulator systems self-test passed." },

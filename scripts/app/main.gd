@@ -24,7 +24,7 @@ const ConstructionConfirmOverlayScript = preload("res://ui/shell/construction_co
 const StartScreenScript = preload("res://ui/shell/start_screen.gd")
 const WeatherVisualLayerScript = preload("res://ui/effects/weather_visual_layer.gd")
 const SettingsOverlayScript = preload("res://ui/shell/settings_overlay.gd")
-const TutorialStoryOverlayScript = preload("res://ui/tutorial/tutorial_story_overlay.gd")
+const IntroCinematicScript = preload("res://ui/tutorial/intro_cinematic.gd")
 const OnboardingProgressScript = preload("res://scripts/app/onboarding_progress.gd")
 const OnboardingActionRouterScript = preload("res://scripts/app/onboarding_action_router.gd")
 const OnboardingGuideScript = preload("res://ui/tutorial/onboarding_guide.gd")
@@ -631,7 +631,9 @@ func _build_ui() -> void:
 		start_screen.load_action_requested.connect(Callable(self, "_perform_start_load"))
 		start_screen.loading_finished.connect(Callable(self, "_finish_start_load"))
 		add_child(start_screen)
-	tutorial_overlay = TutorialStoryOverlayScript.new()
+	# Keep the established property name for save/test compatibility, but the
+	# formal entry now owns the multi-shot CG rather than the text-only overlay.
+	tutorial_overlay = IntroCinematicScript.new()
 	tutorial_overlay.completed.connect(Callable(self, "_on_tutorial_completed"))
 	tutorial_overlay.audio_cue.connect(Callable(self, "_on_tutorial_audio_cue"))
 	add_child(tutorial_overlay)

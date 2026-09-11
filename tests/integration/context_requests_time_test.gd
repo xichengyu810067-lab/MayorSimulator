@@ -29,7 +29,6 @@ func _run() -> void:
 			break
 	_check(main.tutorial_overlay != null and main.tutorial_overlay.is_open(), "new game pauses on the story tutorial")
 	main.tutorial_overlay.close_as_completed(false)
-	main.tutorial_overlay._transition.custom_step(1.0)
 	await process_frame
 
 	_test_two_minute_clock()

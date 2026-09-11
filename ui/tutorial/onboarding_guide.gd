@@ -7,6 +7,9 @@ signal target_input_observed(target_id: String, input_kind: String)
 const INPUT_MOUSE_LEFT := "mouse_left"
 const INPUT_KEY := "key"
 const HOLE_PADDING := 8.0
+const FAIRY_ATLAS_PATH := "res://assets/images/tutorial/cg_v1/xiaoli_expressions_atlas.png"
+const FAIRY_ATLAS_COUNT := 4
+const FAIRY_SIZE := Vector2(96.0, 96.0)
 
 var _progress
 var _target: Control
@@ -21,6 +24,7 @@ var _generation := 0
 var _masks: Array[ColorRect] = []
 var _arrow: Label
 var _guide: Label
+var _fairy: TextureRect
 
 
 func _init() -> void:
@@ -79,6 +83,8 @@ func _open_target(
 	if input_kind not in [INPUT_MOUSE_LEFT, INPUT_KEY]:
 		return false
 	if input_kind == INPUT_KEY and expected_keycode == KEY_NONE:
+		return false
+	if not _ensure_fairy_texture():
 		return false
 	_progress = progress
 	_target = target
@@ -227,6 +233,14 @@ func _build() -> void:
 		mask.gui_input.connect(_consume_mask_input)
 		add_child(mask)
 		_masks.append(mask)
+	_fairy = TextureRect.new()
+	_fairy.name = "OnboardingFairy"
+	_fairy.custom_minimum_size = FAIRY_SIZE
+	_fairy.size = FAIRY_SIZE
+	_fairy.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_fairy.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_fairy.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_fairy)
 	_arrow = Label.new()
 	_arrow.name = "OnboardingArrow"
 	_arrow.text = "➜"
@@ -241,6 +255,29 @@ func _build() -> void:
 	_guide.custom_minimum_size = Vector2(320, 64)
 	add_child(_guide)
 	set_dark_mode(false)
+
+
+func _ensure_fairy_texture() -> bool:
+	if _fairy.texture is AtlasTexture:
+		return true
+	if not ResourceLoader.exists(FAIRY_ATLAS_PATH):
+		return false
+	var resource := load(FAIRY_ATLAS_PATH)
+	if not resource is Texture2D:
+		return false
+	var atlas := resource as Texture2D
+	if atlas.get_width() <= 0 or atlas.get_height() <= 0 or atlas.get_width() % FAIRY_ATLAS_COUNT != 0:
+		return false
+	var portrait := AtlasTexture.new()
+	portrait.atlas = atlas
+	portrait.region = Rect2(
+		float(atlas.get_width()) / float(FAIRY_ATLAS_COUNT),
+		0.0,
+		float(atlas.get_width()) / float(FAIRY_ATLAS_COUNT),
+		float(atlas.get_height())
+	)
+	_fairy.texture = portrait
+	return true
 
 
 func _layout_hole() -> void:
@@ -259,7 +296,15 @@ func _layout_hole() -> void:
 	_set_rect(_masks[2], Rect2(0.0, hole.position.y, hole.position.x, hole.size.y))
 	_set_rect(_masks[3], Rect2(hole.end.x, hole.position.y, maxf(0.0, size.x - hole.end.x), hole.size.y))
 	_arrow.position = Vector2(maxf(8.0, hole.position.x - 52.0), hole.position.y + hole.size.y * 0.5 - 24.0)
-	_guide.position = Vector2(clampf(hole.position.x, 12.0, maxf(12.0, size.x - 340.0)), minf(size.y - 76.0, hole.end.y + 10.0))
+	var guide_position := Vector2(
+		clampf(hole.position.x, 116.0, maxf(116.0, size.x - 340.0)),
+		minf(size.y - 76.0, hole.end.y + 10.0)
+	)
+	_guide.position = guide_position
+	_fairy.position = Vector2(
+		clampf(guide_position.x - FAIRY_SIZE.x - 12.0, 8.0, maxf(8.0, size.x - FAIRY_SIZE.x - 8.0)),
+		clampf(guide_position.y - 16.0, 8.0, maxf(8.0, size.y - FAIRY_SIZE.y - 8.0))
+	)
 
 
 func _set_rect(control: Control, rect: Rect2) -> void:

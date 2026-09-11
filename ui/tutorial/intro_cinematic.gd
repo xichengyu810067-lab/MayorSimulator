@@ -4,11 +4,17 @@ extends Control
 const StorySequence = preload("res://data/tutorial/story_sequence.gd")
 const PORTRAIT_ATLAS_PATH := "res://assets/images/tutorial/cg_v1/xiaoli_expressions_atlas.png"
 const PORTRAIT_COUNT := 4
+const PORTRAIT_DISPLAY_SIZE := Vector2(96.0, 96.0)
+const PAGES := StorySequence.SHOTS
 
-signal completed
+signal completed(skipped: bool)
 signal load_failed(message: String)
+signal audio_cue(cue: String)
 
 var current_index := 0
+var current_page: int:
+	get:
+		return current_index
 var current_texture: Texture2D
 var next_texture: Texture2D
 var current_foreground_texture: Texture2D
@@ -26,6 +32,8 @@ var title_label: Label
 var subtitle_label: Label
 var error_label: Label
 var next_button: Button
+var skip_button: Button
+var story_panel: Control
 var animation_player: AnimationPlayer
 
 
@@ -38,13 +46,15 @@ func _init() -> void:
 	_build()
 
 
-func open() -> bool:
+func open(reset_to_start: bool = true) -> bool:
 	if not StorySequence.is_valid():
 		_fail_closed("開場動畫資料無效，無法安全播放。")
 		return false
 	_completed_emitted = false
 	_closing = false
-	current_index = 0
+	error_label.hide()
+	if reset_to_start or current_index < 0 or current_index >= StorySequence.SHOTS.size():
+		current_index = 0
 	if not _set_initial_shot():
 		return false
 	show()
@@ -61,6 +71,7 @@ func advance() -> void:
 	if current_index >= StorySequence.SHOTS.size() - 1:
 		_finish()
 		return
+	audio_cue.emit("page_turn")
 	current_index += 1
 	if next_texture == null:
 		_fail_closed("下一個開場鏡頭遺失，動畫已安全停止。")
@@ -83,6 +94,14 @@ func close() -> void:
 	_closing = true
 	_release_textures()
 	hide()
+
+
+func close_as_completed(skipped: bool = false) -> void:
+	_complete(skipped)
+
+
+func is_open() -> bool:
+	return visible and not _closing
 
 
 func resident_texture_count() -> int:
@@ -213,6 +232,7 @@ func _apply_text() -> void:
 	title_label.text = _l10n(str(shot["title"]))
 	subtitle_label.text = _l10n(str(shot["subtitle"]))
 	next_button.text = _l10n("進入城市") if current_index == StorySequence.SHOTS.size() - 1 else _l10n("下一步")
+	skip_button.text = _l10n("跳過教學")
 
 
 func _start_parallax() -> void:
@@ -231,11 +251,21 @@ func _start_parallax() -> void:
 
 
 func _finish() -> void:
-	if _completed_emitted:
+	_complete(false)
+
+
+func _complete(skipped: bool) -> void:
+	if _completed_emitted or _closing or not visible:
 		return
 	_completed_emitted = true
-	close()
-	completed.emit()
+	_closing = true
+	if _transition != null and _transition.is_valid():
+		_transition.kill()
+	_release_textures()
+	hide()
+	_closing = false
+	audio_cue.emit("click" if skipped else "success")
+	completed.emit(skipped)
 
 
 func _fail_closed(message: String) -> void:
@@ -274,6 +304,7 @@ func _l10n(source: String) -> String:
 
 
 func _build() -> void:
+	story_panel = self
 	for node_name in ["CurrentLayer", "NextLayer"]:
 		var layer := TextureRect.new()
 		layer.name = node_name
@@ -305,13 +336,13 @@ func _build() -> void:
 	add_child(parallax_tint)
 	portrait_layer = TextureRect.new()
 	portrait_layer.name = "XiaoLiPortraitLayer"
+	portrait_layer.custom_minimum_size = PORTRAIT_DISPLAY_SIZE
+	portrait_layer.size = PORTRAIT_DISPLAY_SIZE
 	portrait_layer.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	portrait_layer.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	portrait_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	portrait_layer.anchor_left = 0.66
-	portrait_layer.anchor_top = 0.24
-	portrait_layer.anchor_right = 0.96
-	portrait_layer.anchor_bottom = 0.82
+	portrait_layer.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	portrait_layer.position = Vector2(-116.0, 24.0)
 	add_child(portrait_layer)
 	var text_box := VBoxContainer.new()
 	text_box.name = "CinematicSubtitles"
@@ -331,12 +362,20 @@ func _build() -> void:
 	subtitle_label.add_theme_color_override("font_color", Color.WHITE)
 	subtitle_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	text_box.add_child(subtitle_label)
+	var actions := HBoxContainer.new()
+	actions.size_flags_horizontal = Control.SIZE_SHRINK_END
+	actions.add_theme_constant_override("separation", 12)
+	text_box.add_child(actions)
+	skip_button = Button.new()
+	skip_button.name = "CinematicSkipButton"
+	skip_button.custom_minimum_size = Vector2(132, 48)
+	skip_button.pressed.connect(func() -> void: close_as_completed(true))
+	actions.add_child(skip_button)
 	next_button = Button.new()
 	next_button.name = "CinematicNextButton"
 	next_button.custom_minimum_size = Vector2(144, 48)
-	next_button.size_flags_horizontal = Control.SIZE_SHRINK_END
 	next_button.pressed.connect(advance)
-	text_box.add_child(next_button)
+	actions.add_child(next_button)
 	error_label = Label.new()
 	error_label.name = "CinematicError"
 	error_label.add_theme_font_size_override("font_size", 24)

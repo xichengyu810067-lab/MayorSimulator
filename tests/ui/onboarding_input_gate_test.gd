@@ -8,6 +8,7 @@ var _failed := false
 var _map_presses := 0
 var _target_presses := 0
 var _advanced_targets: Array[String] = []
+var _product_inputs := 0
 
 
 func _initialize() -> void:
@@ -28,18 +29,33 @@ func _run() -> void:
 	host.add_child(target)
 	var guide = OnboardingGuideScript.new()
 	guide.advanced.connect(func(target_id: String, _receipt: Dictionary) -> void: _advanced_targets.append(target_id))
+	guide.target_input_observed.connect(func(_target_id: String, _input_kind: String) -> void: _product_inputs += 1)
 	host.add_child(guide)
 	await _settle(3)
 
 	var progress = OnboardingProgressScript.new()
 	progress.begin_guide()
+	_check(not guide.open_product_target(progress, null, guide.INPUT_MOUSE_LEFT), "missing target fails closed")
+	_check(not guide.is_open() and not guide.visible, "missing target leaves no masks or false completion surface")
+	target.hide()
+	_check(not guide.open_product_target(progress, target, guide.INPUT_MOUSE_LEFT), "hidden target fails closed")
+	target.show()
+	target.disabled = true
+	_check(not guide.open_product_target(progress, target, guide.INPUT_MOUSE_LEFT), "disabled target fails closed")
+	target.disabled = false
+	_check(guide.open_product_target(progress, target, guide.INPUT_MOUSE_LEFT, KEY_NONE, "perform the real action"), "product target gate opens")
+	await _click_at(target.get_global_rect().get_center())
+	_check(_product_inputs == 1 and progress.next_index() == 0 and progress.receipts().is_empty(), "target click reaches product UI but cannot synthesize or skip an authoritative receipt")
+	guide.invalidate_target()
 	_check(guide.open_for_target(progress, target, guide.INPUT_MOUSE_LEFT, KEY_NONE, "authority_0", "entity_0", 1, "click"), "mouse target gate opens")
 	await _settle(2)
-	_check(guide.get_child_count() >= 6, "guide creates four masks plus guide and arrow")
+	_check(guide.get_child_count() >= 7, "guide creates four masks plus Xiao Li, guide text, and arrow")
 	for index in 4:
 		_check((guide.get_child(index) as Control).mouse_filter == Control.MOUSE_FILTER_STOP, "mask %d blocks pointer input" % index)
 	_check((guide.get_node("OnboardingArrow") as Control).mouse_filter == Control.MOUSE_FILTER_IGNORE, "arrow ignores pointer input")
 	_check((guide.get_node("OnboardingMessage") as Control).mouse_filter == Control.MOUSE_FILTER_IGNORE, "guide text ignores pointer input")
+	var fairy := guide.get_node("OnboardingFairy") as TextureRect
+	_check(fairy != null and fairy.size == guide.FAIRY_SIZE and fairy.texture is AtlasTexture, "guide renders the existing Xiao Li atlas as a 96px fairy")
 	var target_center := target.get_global_rect().get_center()
 	for index in 4:
 		_check(not (guide.get_child(index) as Control).get_global_rect().has_point(target_center), "mask %d leaves the target hole open" % index)
