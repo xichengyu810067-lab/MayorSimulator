@@ -39,10 +39,13 @@ func _run() -> void:
 	await _wait_for_loading(first)
 	_check(not first.start_screen.visible and first._game_started, "new game enters the city after loading")
 	_check(first.tutorial_overlay != null and first.tutorial_overlay.is_open(), "new game starts with the story tutorial")
+	_check(first.onboarding_progress.is_story_pending(), "new game begins at the story phase before any city interaction")
+	_check(first.onboarding_guide != null and not first.onboarding_guide.is_open(), "unfinished domain adapters do not prematurely enable the nine-step guide")
 	_check(first.vertical_slice.is_time_paused(), "story tutorial pauses game time")
 	first.tutorial_overlay.close_as_completed(false)
 	await _settle(30)
-	_check(first.tutorial_completed, "completing the tutorial is recorded")
+	_check(first.tutorial_completed and first.onboarding_progress.is_active(), "story completion preserves the legacy story-seen flag without claiming onboarding completion")
+	_check(first.onboarding_progress.current_target() == "build", "story completion prepares the first canonical target")
 	_check(not first.vertical_slice.is_time_paused(), "new game resumes simulation time after loading")
 	_check(_load_action_count == 2, "both continue and new game execute the shared loading midpoint")
 	_check(first.city_grid.count("") == first.CELL_COUNT, "new game starts with a completely empty map")
@@ -52,7 +55,7 @@ func _run() -> void:
 	var opening_entries: Array[Dictionary] = first.vertical_slice.session.state.ledger.get_entries()
 	_check(opening_entries.size() == 1 and str(opening_entries[0].get("reason_tag", "")) == "opening_balance", "new game only records starting capital, not historical income")
 	_check(first.vertical_slice.has_save_game(TEST_SAVE_PATH), "new game immediately creates a continue save")
-	_check(first._autosave_count >= 2 and first._last_autosave_reason == "tutorial:completed", "new game creation and tutorial completion are both autosaved")
+	_check(first._autosave_count >= 2 and first._last_autosave_reason == "onboarding:story_completed", "new game creation and story progress are both autosaved")
 
 	first.city_grid[18] = "住宅"
 	first.building_customizations[18] = {"variant": 2, "roof": 3, "wall": 4}
@@ -107,7 +110,8 @@ func _run() -> void:
 	resumed.start_screen.continue_game_button.emit_signal("pressed")
 	await _wait_for_loading(resumed)
 	_check(not resumed.start_screen.visible and resumed._game_started, "continue enters the saved city after loading")
-	_check(resumed.tutorial_completed and not resumed.tutorial_overlay.is_open(), "continue restores tutorial completion without replaying it")
+	_check(resumed.tutorial_completed and resumed.onboarding_progress.current_target() == "build", "continue restores the legacy story-seen flag and exact schema-9 onboarding progress")
+	_check(not resumed.tutorial_overlay.is_open() and not resumed.onboarding_guide.is_open(), "continue neither replays the story nor enables unfinished domain adapters")
 	_check(int(resumed.vertical_slice.game_day()) == saved_day, "continue restores the saved game day")
 	_check(not resumed.vertical_slice.is_time_paused(), "continued game resumes time only after loading finishes")
 	_check(not resumed.city_grid.is_empty() and resumed.city_grid[18] == "住宅", "continue rebuilds saved buildings on the map")

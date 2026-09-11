@@ -25,6 +25,8 @@ const StartScreenScript = preload("res://ui/shell/start_screen.gd")
 const WeatherVisualLayerScript = preload("res://ui/effects/weather_visual_layer.gd")
 const SettingsOverlayScript = preload("res://ui/shell/settings_overlay.gd")
 const TutorialStoryOverlayScript = preload("res://ui/tutorial/tutorial_story_overlay.gd")
+const OnboardingProgressScript = preload("res://scripts/app/onboarding_progress.gd")
+const OnboardingGuideScript = preload("res://ui/tutorial/onboarding_guide.gd")
 const AudioDirectorScript = preload("res://scripts/audio/audio_director.gd")
 const UserSettingsServiceScript = preload("res://scripts/app/user_settings_service.gd")
 const CityTerrainMapScript = preload("res://scripts/world/city_terrain_map.gd")
@@ -303,6 +305,8 @@ var exit_confirmation
 var start_screen
 var settings_overlay
 var tutorial_overlay
+var onboarding_guide
+var onboarding_progress = OnboardingProgressScript.new()
 var audio_director
 var construction_confirmation
 var action_dock: Control
@@ -330,6 +334,7 @@ var start_save_path: String:
 			vertical_slice.set_save_path(value)
 var _game_started := false
 var tutorial_completed := false
+var _tutorial_replay_active := false
 var music_enabled := true
 var sfx_enabled := true
 var music_volume := 1.0
@@ -632,7 +637,11 @@ func _build_ui() -> void:
 	tutorial_overlay.completed.connect(Callable(self, "_on_tutorial_completed"))
 	tutorial_overlay.audio_cue.connect(Callable(self, "_on_tutorial_audio_cue"))
 	add_child(tutorial_overlay)
-	for blocking_surface in [municipal_overlay, settings_overlay, construction_confirmation, exit_confirmation, tutorial_overlay]:
+	onboarding_guide = OnboardingGuideScript.new()
+	onboarding_guide.set_dark_mode(is_dark_mode)
+	onboarding_guide.advanced.connect(Callable(self, "_on_onboarding_advanced"))
+	add_child(onboarding_guide)
+	for blocking_surface in [municipal_overlay, settings_overlay, construction_confirmation, exit_confirmation, tutorial_overlay, onboarding_guide]:
 		if blocking_surface != null:
 			blocking_surface.visibility_changed.connect(Callable(self, "_sync_time_pause_for_ui"))
 			blocking_surface.visibility_changed.connect(Callable(self, "_sync_map_interaction_for_ui"))
@@ -663,6 +672,7 @@ func _sync_time_pause_for_ui() -> void:
 	should_pause = should_pause or (construction_confirmation != null and construction_confirmation.is_open())
 	should_pause = should_pause or (exit_confirmation != null and exit_confirmation.visible)
 	should_pause = should_pause or (tutorial_overlay != null and tutorial_overlay.is_open())
+	should_pause = should_pause or (onboarding_guide != null and onboarding_guide.is_open())
 	vertical_slice.set_time_paused(should_pause)
 	_refresh_time_hud()
 
@@ -779,7 +789,7 @@ func _can_zoom_map_at(global_position: Vector2) -> bool:
 		return false
 	if not _game_started:
 		return false
-	for blocking_surface in [municipal_overlay, settings_overlay, construction_confirmation, exit_confirmation, tutorial_overlay]:
+	for blocking_surface in [municipal_overlay, settings_overlay, construction_confirmation, exit_confirmation, tutorial_overlay, onboarding_guide]:
 		if blocking_surface != null and blocking_surface.visible:
 			return false
 	return true
@@ -857,9 +867,13 @@ func _perform_start_load(mode: String) -> void:
 			_pending_start_success = vertical_slice.load_game(start_save_path) if not start_save_path.is_empty() else vertical_slice.load_game()
 			if _pending_start_success:
 				_consume_vertical_events(vertical_slice.drain_ui_events())
-				_restore_player_shell_state(vertical_slice.get_player_shell_state())
-				_sync_vertical_state()
-				_update_ui()
+				var shell_restore_ok := _restore_player_shell_state(vertical_slice.get_player_shell_state())
+				if shell_restore_ok:
+					_sync_vertical_state()
+					_update_ui()
+				else:
+					_pending_start_success = false
+					_pending_start_message = "存檔的導覽狀態無法安全讀取，未套用介面資料。"
 			else:
 				_pending_start_message = "找不到可讀取的存檔，請選擇新遊戲。"
 	vertical_slice.set_time_paused(true)
@@ -875,7 +889,8 @@ func _finish_start_load(mode: String) -> void:
 	start_screen.complete_success()
 	if mode == "continue" and is_dark_mode:
 		_rebuild_ui()
-	if not tutorial_completed and tutorial_overlay != null:
+	_tutorial_replay_active = false
+	if onboarding_progress.is_story_pending() and tutorial_overlay != null:
 		tutorial_overlay.open(true)
 	_sync_time_pause_for_ui()
 	# A completed tutorial does not open another blocking surface, so there is no
@@ -928,7 +943,9 @@ func _initialize_fresh_game() -> void:
 	city_rating = "B 級城市"
 	last_report = "新城市尚無月度收支紀錄。"
 	last_report_details = "新城市尚無可展開的月度明細。"
+	onboarding_progress.reset_for_new_game()
 	tutorial_completed = false
+	_tutorial_replay_active = false
 	if audio_director != null:
 		audio_director.set_music_enabled(music_enabled)
 		audio_director.set_sfx_enabled(sfx_enabled)
@@ -958,13 +975,16 @@ func _capture_player_shell_state() -> Dictionary:
 		serialized_customizations[str(tile_variant)] = Dictionary(building_customizations[tile_variant]).duplicate(true)
 	var report_history_snapshot := city_report_history_service.snapshot()
 	return {
-		"schema_version": 8,
+		"schema_version": OnboardingProgressScript.SHELL_SCHEMA_VERSION,
 		"tax_rates": tax_rates.duplicate(true),
 		"utility_fees": utility_fees.duplicate(true),
 		"service_fees": service_fees.duplicate(true),
 		"active_policies": active_policies.duplicate(true),
 		"is_dark_mode": is_dark_mode,
+		# Kept as the legacy story-seen flag for schema-8 readers. Schema 9 uses
+		# the separate onboarding snapshot as the authoritative nine-step state.
 		"tutorial_completed": tutorial_completed,
+		"onboarding": onboarding_progress.snapshot(),
 		"music_enabled": music_enabled,
 		"sfx_enabled": sfx_enabled,
 		"music_volume": music_volume,
@@ -997,9 +1017,15 @@ func _capture_player_shell_state() -> Dictionary:
 	}
 
 
-func _restore_player_shell_state(state: Dictionary) -> void:
+func _restore_player_shell_state(state: Dictionary) -> bool:
+	var onboarding_restore: Dictionary = onboarding_progress.restore_from_shell_state(state)
+	if not bool(onboarding_restore.get("ok", false)):
+		if onboarding_guide != null:
+			onboarding_guide.invalidate_target()
+		return false
 	if state.is_empty():
-		return
+		tutorial_completed = not onboarding_progress.is_story_pending()
+		return true
 	_fiscal_draft_active = false
 	var saved_tax: Dictionary = state.get("tax_rates", {})
 	for key in tax_rates.keys():
@@ -1018,7 +1044,7 @@ func _restore_player_shell_state(state: Dictionary) -> void:
 	for policy_name in active_policies.keys():
 		active_policies[policy_name] = bool(saved_policies.get(policy_name, false))
 	is_dark_mode = bool(state.get("is_dark_mode", false))
-	tutorial_completed = bool(state.get("tutorial_completed", false))
+	tutorial_completed = not onboarding_progress.is_story_pending()
 	# Audio preferences are user settings shared by every save.  Only migrate
 	# legacy per-save values when no global audio section exists yet.
 	if not _audio_preferences_found:
@@ -1107,6 +1133,7 @@ func _restore_player_shell_state(state: Dictionary) -> void:
 		_migrate_legacy_hospital_direct_effects()
 		_healthcare_legacy_migration_applied = true
 	_reconcile_healthcare_service()
+	return true
 
 
 func _update_autosave_timer(delta: float) -> void:
@@ -1121,6 +1148,8 @@ func _update_autosave_timer(delta: float) -> void:
 func _autosave(reason: String) -> Error:
 	if not _game_started or vertical_slice == null:
 		return ERR_UNAVAILABLE
+	if onboarding_progress.is_locked():
+		return ERR_INVALID_DATA
 	if _autosave_in_progress:
 		return ERR_BUSY
 	_autosave_in_progress = true
@@ -1172,6 +1201,8 @@ func _on_locale_changed(_locale: String) -> void:
 		transport_planning_panel.call("refresh_localization")
 	if city_data_dashboard != null and is_instance_valid(city_data_dashboard):
 		city_data_dashboard.refresh_localization()
+	if onboarding_guide != null and is_instance_valid(onboarding_guide):
+		onboarding_guide.refresh_localization()
 	if reopen_settings and settings_overlay != null:
 		settings_overlay.open()
 
@@ -1547,6 +1578,7 @@ func _sync_map_interaction_for_ui() -> void:
 	blocked = blocked or (construction_confirmation != null and construction_confirmation.is_open())
 	blocked = blocked or (exit_confirmation != null and exit_confirmation.visible)
 	blocked = blocked or (tutorial_overlay != null and tutorial_overlay.is_open())
+	blocked = blocked or (onboarding_guide != null and onboarding_guide.is_open())
 	_set_map_interaction_enabled(not blocked)
 
 
@@ -7139,6 +7171,7 @@ func _save_audio_preferences() -> Error:
 func _replay_tutorial() -> void:
 	if tutorial_overlay == null:
 		return
+	_tutorial_replay_active = true
 	_set_map_interaction_enabled(false)
 	tutorial_overlay.open(true)
 	_sync_time_pause_for_ui()
@@ -7150,10 +7183,22 @@ func _on_tutorial_audio_cue(cue: String) -> void:
 
 
 func _on_tutorial_completed(skipped: bool) -> void:
-	tutorial_completed = true
+	var replay_only := _tutorial_replay_active
+	_tutorial_replay_active = false
+	if not replay_only and onboarding_progress.is_story_pending():
+		onboarding_progress.begin_guide()
+	tutorial_completed = not onboarding_progress.is_story_pending()
 	_sync_time_pause_for_ui()
-	_set_hint("故事教學已略過；可從設定頁重播。" if skipped else "故事教學完成。從官方入門藍圖開始興建吧。", false)
-	_autosave("tutorial:skipped" if skipped else "tutorial:completed")
+	_set_hint("故事教學已略過；實作導覽將從興建開始。" if skipped else "故事教學完成；實作導覽將從興建開始。", false)
+	if not replay_only:
+		_autosave("onboarding:story_skipped" if skipped else "onboarding:story_completed")
+
+
+func _on_onboarding_advanced(_target_id: String, _receipt: Dictionary) -> void:
+	tutorial_completed = not onboarding_progress.is_story_pending()
+	_sync_time_pause_for_ui()
+	_sync_map_interaction_for_ui()
+	_autosave("onboarding:step_completed")
 
 
 func _wire_ui_sounds() -> void:
@@ -7172,6 +7217,8 @@ func _wire_ui_sounds() -> void:
 func _rebuild_ui() -> void:
 	if npc_map_controller != null:
 		npc_map_controller.unmount()
+	if onboarding_guide != null:
+		onboarding_guide.invalidate_target()
 	for child in get_children():
 		if child == audio_director:
 			continue
@@ -7254,6 +7301,7 @@ func _rebuild_ui() -> void:
 	municipal_overlay = null
 	settings_overlay = null
 	tutorial_overlay = null
+	onboarding_guide = null
 	construction_confirmation = null
 	exit_confirmation = null
 	start_screen = null
