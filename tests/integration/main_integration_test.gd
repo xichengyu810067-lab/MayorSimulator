@@ -494,10 +494,7 @@ func _run() -> void:
 	_check(main.municipal_overlay.is_open() and main.municipal_overlay.current_page() == "hub", "municipal control reopens the overlay after Escape closes it")
 	main.municipal_overlay.open_page("buildings")
 	await process_frame
-	var print_error_messages_before_expected_warning := Engine.print_error_messages
-	Engine.print_error_messages = false
 	main.municipal_overlay.open_page("unknown_municipal_page")
-	Engine.print_error_messages = print_error_messages_before_expected_warning
 	await process_frame
 	_check(main.municipal_overlay.current_page() == "buildings", "unknown municipal page fails safe without replacing the current page")
 	if municipal_back != null:
@@ -512,10 +509,7 @@ func _run() -> void:
 	await process_frame
 	released_page.queue_free()
 	await process_frame
-	print_error_messages_before_expected_warning = Engine.print_error_messages
-	Engine.print_error_messages = false
 	main.municipal_overlay.open_page("released_navigation_test")
-	Engine.print_error_messages = print_error_messages_before_expected_warning
 	await process_frame
 	_check(main.municipal_overlay.current_page() == "released_navigation_test", "opening a freed registered page fails safe without changing the current route")
 	main.municipal_overlay.set_dark_mode(true)
@@ -523,10 +517,7 @@ func _run() -> void:
 	main.municipal_overlay.open_page("blueprint")
 	await process_frame
 	if municipal_back != null:
-		print_error_messages_before_expected_warning = Engine.print_error_messages
-		Engine.print_error_messages = false
 		municipal_back.emit_signal("pressed")
-		Engine.print_error_messages = print_error_messages_before_expected_warning
 		await process_frame
 		_check(main.municipal_overlay.current_page() == "buildings", "released history page is skipped safely while navigating back")
 	main.municipal_overlay.close_overlay()

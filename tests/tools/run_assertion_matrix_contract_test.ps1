@@ -95,9 +95,9 @@ try {
     $syntheticGodot = Write-SyntheticGodot -FixtureRoot $fixtureRoot
 
     $expectedBlocks = @(
-        New-MunicipalDiagnosticBlock -Warning "MunicipalOverlay has no registered page named 'unknown_municipal_page'." -OverlayFunction 'open_page' -OverlayLine 179 -TestLine 465
-        New-MunicipalDiagnosticBlock -Warning "MunicipalOverlay page 'released_navigation_test' is no longer valid." -OverlayFunction 'open_page' -OverlayLine 183 -TestLine 480
-        New-MunicipalDiagnosticBlock -Warning "MunicipalOverlay skipped an unavailable history page named 'released_navigation_test'." -OverlayFunction '_handle_back' -OverlayLine 564 -TestLine 488
+        New-MunicipalDiagnosticBlock -Warning "MunicipalOverlay has no registered page named 'unknown_municipal_page'." -OverlayFunction 'open_page' -OverlayLine 179 -TestLine 497
+        New-MunicipalDiagnosticBlock -Warning "MunicipalOverlay page 'released_navigation_test' is no longer valid." -OverlayFunction 'open_page' -OverlayLine 183 -TestLine 512
+        New-MunicipalDiagnosticBlock -Warning "MunicipalOverlay skipped an unavailable history page named 'released_navigation_test'." -OverlayFunction '_handle_back' -OverlayLine 584 -TestLine 520
     )
     $positive = Invoke-ContractCase -Runner $runner -FixtureRoot $fixtureRoot -SyntheticGodot $syntheticGodot -FixtureLog ($expectedBlocks -join "`r`n") -CaseName 'positive'
     Assert-True -Condition ($positive.exit_code -eq 0 -and $positive.summary.results[0].product_clean) -Message ("exact main integration diagnostics were not accepted; exit={0}; reasons={1}" -f $positive.exit_code, (@($positive.summary.results[0].failure_reasons) -join '; '))

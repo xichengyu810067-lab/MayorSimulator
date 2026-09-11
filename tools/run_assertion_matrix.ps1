@@ -125,19 +125,19 @@ $mainIntegrationExpectedMunicipalDiagnostics = @(
         warning = "MunicipalOverlay has no registered page named 'unknown_municipal_page'."
         overlay_function = 'open_page'
         overlay_line = 179
-        test_line = 465
+        test_line = 497
     },
     [pscustomobject]@{
         warning = "MunicipalOverlay page 'released_navigation_test' is no longer valid."
         overlay_function = 'open_page'
         overlay_line = 183
-        test_line = 480
+        test_line = 512
     },
     [pscustomobject]@{
         warning = "MunicipalOverlay skipped an unavailable history page named 'released_navigation_test'."
         overlay_function = '_handle_back'
-        overlay_line = 564
-        test_line = 488
+        overlay_line = 584
+        test_line = 520
     }
 )
 
