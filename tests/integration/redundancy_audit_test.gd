@@ -19,6 +19,8 @@ func _run() -> void:
 	await process_frame
 	await process_frame
 	await process_frame
+	main._open_municipal_center()
+	await process_frame
 
 	_audit_feature_ownership(main)
 	_audit_catalogs(main)
