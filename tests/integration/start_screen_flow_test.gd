@@ -66,9 +66,19 @@ func _run() -> void:
 	_check(first.population == 328, "seeded residence updates main population from the canonical system")
 	_check(first.vertical_slice.session.state.npcs.size() == 328 and int(first.vertical_slice.session.state.metrics.get("population", -1)) == 328, "seeded residence keeps core population mirrors consistent")
 	var action_save_count: int = first._autosave_count
+	var city_state_before_deferred_tax: Dictionary = first.vertical_slice.session.state.to_dict()
+	_check(first.municipal_overlay == null and not first.tax_sliders.has("income"), "new-game tax changes begin before lazy finance controls are materialized")
 	first.call("_on_tax_changed", 17.0, "income")
+	var deferred_fiscal_state: Dictionary = first.call("debug_fiscal_draft_state")
+	_check(int(Dictionary(deferred_fiscal_state.get("tax", {})).get("income", -1)) == 17, "tax change updates the draft without a materialized finance slider")
 	_check(int(first.tax_rates["income"]) != 17, "a tax slider change remains a draft before preview")
+	_check(first.vertical_slice.session.state.to_dict() == city_state_before_deferred_tax, "deferred tax draft does not mutate CityState")
 	_check(first._autosave_count == action_save_count, "an unapplied tax draft does not autosave")
+	var deferred_overlay = first.call("_ensure_municipal_overlay")
+	deferred_overlay.open_page("finance")
+	await process_frame
+	var materialized_income_slider: Variant = first.tax_sliders.get("income")
+	_check(materialized_income_slider is HSlider and int((materialized_income_slider as HSlider).value) == 17, "materialized finance slider attaches to the existing tax draft")
 	first.call("_show_fiscal_preview")
 	_check(int(first.tax_rates["income"]) != 17, "preview keeps the tax draft separate from authoritative settings")
 	_check(first._autosave_count == action_save_count, "preview does not autosave or commit the fiscal draft")
@@ -76,6 +86,8 @@ func _run() -> void:
 	_check(int(first.tax_rates["income"]) == 17, "execute commits the previewed tax draft before saving")
 	_check(first._autosave_count == action_save_count + 1 and first._last_autosave_reason == "action:fiscal_draft_applied", "execute autosaves the complete fiscal draft exactly once")
 	_check(FileAccess.file_exists(ProjectSettings.globalize_path(TEST_SAVE_PATH) + ".bak"), "autosave retains the immediately previous valid snapshot")
+	deferred_overlay.close_overlay()
+	await process_frame
 	first.call("_toggle_policy", true, "環保政策")
 	for _day in range(3):
 		first.call("_next_day")

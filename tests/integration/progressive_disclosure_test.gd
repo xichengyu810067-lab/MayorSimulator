@@ -33,7 +33,8 @@ func _run() -> void:
 			break
 	_check(main._game_started, "progressive-disclosure test enters the city")
 
-	main.municipal_overlay.open_hub()
+	var municipal_overlay = main.call("_ensure_municipal_overlay")
+	municipal_overlay.open_hub()
 	await _settle()
 	var hub_root := main.municipal_overlay.find_child("MunicipalHubRoot", true, false) as Control
 	var wide_debug: Dictionary = main.municipal_overlay.debug_hub_layout_state()

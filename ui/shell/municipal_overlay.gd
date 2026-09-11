@@ -167,7 +167,7 @@ func _show_hub() -> void:
 	_header_title.text = "市政服務中心"
 	_back_button.visible = false
 	_layout_hub()
-	L10n.localize_tree(self)
+	localize_current_surface()
 	show()
 	_close_button.grab_focus()
 	page_opened.emit(HUB_PAGE_ID)
@@ -195,13 +195,30 @@ func _show_page(page_id: String, page: Control) -> void:
 	_show_only(page)
 	_header_title.text = str(_page_titles.get(page_id, page_id))
 	_back_button.visible = not _page_history.is_empty()
-	L10n.localize_tree(self)
+	localize_current_surface()
 	show()
 	if _back_button.visible:
 		_back_button.grab_focus()
 	else:
 		_close_button.grab_focus()
 	page_opened.emit(page_id)
+
+
+func localize_current_surface() -> void:
+	# Registered page controls remain in the tree after the lazy overlay is first
+	# opened. Localizing the whole overlay here would synchronously traverse every
+	# hidden page on every navigation. The header plus active surface are the only
+	# controls that can be presented in this frame; hidden pages are localized
+	# when they become active.
+	if is_instance_valid(_header_panel):
+		L10n.localize_tree(_header_panel)
+	if _current_page_id == HUB_PAGE_ID:
+		if is_instance_valid(_hub_page):
+			L10n.localize_tree(_hub_page)
+		return
+	var page := _page_control(_current_page_id)
+	if is_instance_valid(page):
+		L10n.localize_tree(page)
 
 
 func close_overlay() -> void:

@@ -38,7 +38,8 @@ func _run() -> void:
 	_check(not main_source.contains("tax_rates = _fiscal_draft_tax_rates"), "draft projection never replaces authoritative tax values, even temporarily")
 	_check(not main_source.contains("utility_fees = _fiscal_draft_utility_fees"), "draft projection never replaces authoritative utility values, even temporarily")
 	_check(not main_source.contains("service_fees = _fiscal_draft_service_fees"), "draft projection never replaces authoritative service values, even temporarily")
-	main.municipal_overlay.open_page("finance")
+	var municipal_overlay = main.call("_ensure_municipal_overlay")
+	municipal_overlay.open_page("finance")
 	await process_frame
 
 	var initial: Dictionary = main.call("debug_fiscal_draft_state")
@@ -142,7 +143,7 @@ func _run() -> void:
 	_check(int(main._autosave_count) == autosaves_after_execute, "repeated execute fails closed")
 
 	main.call("_on_service_fee_changed", float(int(main.service_fees["stadium"]) + 4), "stadium")
-	main.municipal_overlay.open_hub()
+	municipal_overlay.open_hub()
 	await process_frame
 	var left_page: Dictionary = main.call("debug_fiscal_draft_state")
 	_check(int(left_page.get("dirty_count", -1)) == 0, "leaving finance discards an unapplied draft")

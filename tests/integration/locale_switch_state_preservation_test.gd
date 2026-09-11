@@ -41,6 +41,13 @@ func _run() -> void:
 	var main := packed.instantiate()
 	root.add_child(main)
 	await _settle(4)
+	var municipal_overlay: Control = main.call("_ensure_municipal_overlay") as Control
+	_check(municipal_overlay != null, "the lazy municipal overlay can be materialized for fiscal localization checks")
+	if municipal_overlay == null:
+		await _finish(main, original_locale)
+		return
+	municipal_overlay.call("open_page", "finance")
+	await _settle(2)
 	var baseline_caption := _new_game_caption(main)
 	var required_objects_ready := _check_required_objects(main)
 	_check(baseline_caption != null, "the start screen exposes its new-game caption")

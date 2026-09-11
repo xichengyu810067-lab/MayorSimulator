@@ -282,20 +282,23 @@ func _run() -> void:
 					)
 			if municipal_window != null:
 				_check_horizontal_layout(main.municipal_overlay, municipal_window.get_global_rect(), locale, "%s page" % page_id)
-			_audit_tree(main, locale, "city")
+			_audit_tree(main, locale, "city", true)
+		# Lazy municipal pages are localized and audited when they become active.
+		# Hidden siblings may be refreshed later in the source locale, then are
+		# localized again on their next activation, so do not re-audit them eagerly.
 		_check(_l10n.missing_sources.is_empty(), "%s city UI has no runtime translation misses: %s" % [locale, _l10n.missing_sources.keys()])
 		main.municipal_overlay.call("close_overlay")
 		main.settings_button.emit_signal("pressed")
 		await process_frame
 		for source in ["設定", "介面語言", "顯示模式", "淺色", "深色"]:
 			_check_visible_translation(main, locale, source, "settings")
-		_audit_tree(main, locale, "settings")
+		_audit_tree(main, locale, "settings", true)
 		main.settings_overlay.close()
 		main.exit_confirmation.call("open")
 		await process_frame
 		for source in ["要離開 Mayor Simulator 嗎？", "取消", "離開遊戲"]:
 			_check_visible_translation(main, locale, source, "exit confirmation")
-		_audit_tree(main, locale, "exit confirmation")
+		_audit_tree(main, locale, "exit confirmation", true)
 		main.exit_confirmation.call("close")
 
 	_l10n.set_locale("zh_TW", false)
@@ -306,7 +309,9 @@ func _run() -> void:
 	await TestCleanup.finish(self, [main], exit_code)
 
 
-func _audit_tree(node: Node, locale: String, context: String) -> void:
+func _audit_tree(node: Node, locale: String, context: String, visible_only: bool = false) -> void:
+	if visible_only and node is CanvasItem and not (node as CanvasItem).is_visible_in_tree():
+		return
 	if bool(node.get_meta("l10n_skip", false)):
 		return
 	var values: Array[String] = []
@@ -328,7 +333,7 @@ func _audit_tree(node: Node, locale: String, context: String) -> void:
 		if locale == "zh_CN" and _contains_any(value, TRADITIONAL_ONLY_CHARACTERS):
 			_fail("zh_CN %s contains Traditional-only text on %s: %s" % [context, node.get_path(), value])
 	for child in node.get_children():
-		_audit_tree(child, locale, context)
+		_audit_tree(child, locale, context, visible_only)
 
 
 func _check_visible_translation(root_node: Node, locale: String, source: String, context: String) -> void:

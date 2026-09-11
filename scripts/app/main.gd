@@ -4363,16 +4363,21 @@ func _refresh_fiscal_draft_preview() -> void:
 
 
 func _begin_fiscal_draft() -> void:
-	_fiscal_draft_active = true
-	_fiscal_draft_base_tax_rates = tax_rates.duplicate(true)
-	_fiscal_draft_base_utility_fees = utility_fees.duplicate(true)
-	_fiscal_draft_base_service_fees = service_fees.duplicate(true)
-	_fiscal_draft_tax_rates = tax_rates.duplicate(true)
-	_fiscal_draft_utility_fees = utility_fees.duplicate(true)
-	_fiscal_draft_service_fees = service_fees.duplicate(true)
-	_fiscal_flow_step = "edit"
-	_fiscal_draft_revision = 0
-	_fiscal_preview_revision = -1
+	# Input routes can create a draft before the lazy municipal overlay has built
+	# its finance controls. Materializing the page later must attach those controls
+	# to that draft, not silently replace the pending values with authoritative
+	# state.
+	if not _fiscal_draft_active:
+		_fiscal_draft_active = true
+		_fiscal_draft_base_tax_rates = tax_rates.duplicate(true)
+		_fiscal_draft_base_utility_fees = utility_fees.duplicate(true)
+		_fiscal_draft_base_service_fees = service_fees.duplicate(true)
+		_fiscal_draft_tax_rates = tax_rates.duplicate(true)
+		_fiscal_draft_utility_fees = utility_fees.duplicate(true)
+		_fiscal_draft_service_fees = service_fees.duplicate(true)
+		_fiscal_flow_step = "edit"
+		_fiscal_draft_revision = 0
+		_fiscal_preview_revision = -1
 	_sync_fiscal_controls_from_draft()
 	_show_fiscal_categories()
 	_update_ui()
@@ -4439,13 +4444,19 @@ func _set_fiscal_draft_value(kind: String, key: String, value: int, do_refresh: 
 		_fiscal_draft_revision += 1
 	match kind:
 		"tax":
-			tax_sliders[key].set_value_no_signal(normalized)
+			var tax_slider := _cached_fiscal_slider(tax_sliders, key)
+			if tax_slider != null:
+				tax_slider.set_value_no_signal(normalized)
 			_sync_number_input(tax_inputs, key, normalized, true)
 		"utility":
-			utility_sliders[key].set_value_no_signal(normalized)
+			var utility_slider := _cached_fiscal_slider(utility_sliders, key)
+			if utility_slider != null:
+				utility_slider.set_value_no_signal(normalized)
 			_sync_number_input(utility_inputs, key, normalized, true)
 		"service":
-			service_sliders[key].set_value_no_signal(normalized)
+			var service_slider := _cached_fiscal_slider(service_sliders, key)
+			if service_slider != null:
+				service_slider.set_value_no_signal(normalized)
 			_sync_number_input(service_inputs, key, normalized, true)
 	if do_refresh:
 		_update_ui()
@@ -4456,16 +4467,19 @@ func _sync_fiscal_controls_from_draft() -> void:
 	if not _fiscal_draft_active:
 		return
 	for key in _fiscal_draft_tax_rates.keys():
-		if tax_sliders.has(key):
-			tax_sliders[key].set_value_no_signal(int(_fiscal_draft_tax_rates[key]))
+		var tax_slider := _cached_fiscal_slider(tax_sliders, key)
+		if tax_slider != null:
+			tax_slider.set_value_no_signal(int(_fiscal_draft_tax_rates[key]))
 		_sync_number_input(tax_inputs, key, int(_fiscal_draft_tax_rates[key]), true)
 	for key in _fiscal_draft_utility_fees.keys():
-		if utility_sliders.has(key):
-			utility_sliders[key].set_value_no_signal(int(_fiscal_draft_utility_fees[key]))
+		var utility_slider := _cached_fiscal_slider(utility_sliders, key)
+		if utility_slider != null:
+			utility_slider.set_value_no_signal(int(_fiscal_draft_utility_fees[key]))
 		_sync_number_input(utility_inputs, key, int(_fiscal_draft_utility_fees[key]), true)
 	for key in _fiscal_draft_service_fees.keys():
-		if service_sliders.has(key):
-			service_sliders[key].set_value_no_signal(int(_fiscal_draft_service_fees[key]))
+		var service_slider := _cached_fiscal_slider(service_sliders, key)
+		if service_slider != null:
+			service_slider.set_value_no_signal(int(_fiscal_draft_service_fees[key]))
 		_sync_number_input(service_inputs, key, int(_fiscal_draft_service_fees[key]), true)
 
 
@@ -7440,22 +7454,34 @@ func _update_ui() -> void:
 	if municipal_overlay != null:
 		for tax_key in tax_rates.keys():
 			var tax_forecast := _fiscal_item_forecast("tax", tax_key)
-			labels["tax_value_%s" % tax_key].text = "%s  ● %s" % [_fiscal_display_value("tax", tax_key, "%"), tax_forecast["state_text"]]
-			labels["tax_value_%s" % tax_key].add_theme_color_override("font_color", tax_forecast["color"])
-			_apply_fee_slider_visual(tax_sliders[tax_key], str(tax_forecast["state"]))
-			tax_sliders[tax_key].tooltip_text = str(tax_forecast["summary"])
+			var tax_value_label := _cached_fiscal_label("tax_value_%s" % tax_key)
+			if tax_value_label != null:
+				tax_value_label.text = "%s  ● %s" % [_fiscal_display_value("tax", tax_key, "%"), tax_forecast["state_text"]]
+				tax_value_label.add_theme_color_override("font_color", tax_forecast["color"])
+			var tax_slider := _cached_fiscal_slider(tax_sliders, tax_key)
+			if tax_slider != null:
+				_apply_fee_slider_visual(tax_slider, str(tax_forecast["state"]))
+				tax_slider.tooltip_text = str(tax_forecast["summary"])
 		for fee_key in utility_fees.keys():
 			var utility_forecast := _fiscal_item_forecast("utility", fee_key)
-			labels["utility_%s" % fee_key].text = "%s  ● %s" % [_fiscal_display_value("utility", fee_key, " / %s" % UTILITY_DEFS[fee_key]["unit"]), utility_forecast["state_text"]]
-			labels["utility_%s" % fee_key].add_theme_color_override("font_color", utility_forecast["color"])
-			_apply_fee_slider_visual(utility_sliders[fee_key], str(utility_forecast["state"]))
-			utility_sliders[fee_key].tooltip_text = str(utility_forecast["summary"])
+			var utility_value_label := _cached_fiscal_label("utility_%s" % fee_key)
+			if utility_value_label != null:
+				utility_value_label.text = "%s  ● %s" % [_fiscal_display_value("utility", fee_key, " / %s" % UTILITY_DEFS[fee_key]["unit"]), utility_forecast["state_text"]]
+				utility_value_label.add_theme_color_override("font_color", utility_forecast["color"])
+			var utility_slider := _cached_fiscal_slider(utility_sliders, fee_key)
+			if utility_slider != null:
+				_apply_fee_slider_visual(utility_slider, str(utility_forecast["state"]))
+				utility_slider.tooltip_text = str(utility_forecast["summary"])
 		for service_key in service_fees.keys():
 			var service_forecast := _fiscal_item_forecast("service", service_key)
-			labels["service_%s" % service_key].text = "%s  ● %s" % [_fiscal_display_value("service", service_key, " / %s" % SERVICE_DEFS[service_key]["unit"]), service_forecast["state_text"]]
-			labels["service_%s" % service_key].add_theme_color_override("font_color", service_forecast["color"])
-			_apply_fee_slider_visual(service_sliders[service_key], str(service_forecast["state"]))
-			service_sliders[service_key].tooltip_text = str(service_forecast["summary"])
+			var service_value_label := _cached_fiscal_label("service_%s" % service_key)
+			if service_value_label != null:
+				service_value_label.text = "%s  ● %s" % [_fiscal_display_value("service", service_key, " / %s" % SERVICE_DEFS[service_key]["unit"]), service_forecast["state_text"]]
+				service_value_label.add_theme_color_override("font_color", service_forecast["color"])
+			var service_slider := _cached_fiscal_slider(service_sliders, service_key)
+			if service_slider != null:
+				_apply_fee_slider_visual(service_slider, str(service_forecast["state"]))
+				service_slider.tooltip_text = str(service_forecast["summary"])
 	if selected_label != null:
 		selected_label.text = L10n.text("%s　基礎造價 $%d\n%s") % [
 			L10n.text(selected_building),
@@ -7476,11 +7502,17 @@ func _update_ui() -> void:
 	var tax_revenues := _tax_revenues_for(fiscal_tax_values)
 	if municipal_overlay != null:
 		for tax_key in tax_rates.keys():
-			labels["tax_detail_%s" % tax_key].text = _tax_detail_text(tax_key, tax_revenues[tax_key])
+			var tax_detail_label := _cached_fiscal_label("tax_detail_%s" % tax_key)
+			if tax_detail_label != null:
+				tax_detail_label.text = _tax_detail_text(tax_key, tax_revenues[tax_key])
 		for fee_key in utility_fees.keys():
-			labels["utility_detail_%s" % fee_key].text = _utility_detail_text(fee_key, fiscal_utility_values)
+			var utility_detail_label := _cached_fiscal_label("utility_detail_%s" % fee_key)
+			if utility_detail_label != null:
+				utility_detail_label.text = _utility_detail_text(fee_key, fiscal_utility_values)
 		for service_key in service_fees.keys():
-			labels["service_detail_%s" % service_key].text = _service_detail_text(service_key, fiscal_service_values)
+			var service_detail_label := _cached_fiscal_label("service_detail_%s" % service_key)
+			if service_detail_label != null:
+				service_detail_label.text = _service_detail_text(service_key, fiscal_service_values)
 	var tax_income := _total_tax_income_for(fiscal_tax_values)
 	var business_income := _business_income_for(fiscal_tax_values)
 	var industrial_income := _industrial_income_for(fiscal_tax_values)
@@ -7570,11 +7602,24 @@ func _update_ui() -> void:
 		oversight_panel.refresh(vertical_slice.governance.justice_system)
 	_update_building_info_panel()
 	_refresh_fiscal_draft_actions()
-	L10n.localize_tree(self)
+	_localize_ui_without_hidden_municipal_pages()
 	_sync_placement_banner()
 	# Tile/NPC refreshes above restore their normal tooltip text. Re-apply the
 	# current UI blocking state last so a start screen or modal remains authoritative.
 	_sync_map_interaction_for_ui()
+
+
+func _localize_ui_without_hidden_municipal_pages() -> void:
+	# The municipal overlay is allocated lazily, but once allocated it owns all
+	# page trees. Rewalking those hidden siblings on every general UI refresh
+	# turns a single page transition into a long synchronous frame. Localize the
+	# ordinary top-level UI as before, then ask the overlay to localize only its
+	# shell and currently visible surface.
+	for child in get_children():
+		if child == municipal_overlay:
+			municipal_overlay.localize_current_surface()
+		else:
+			L10n.localize_tree(child)
 
 func _set_hint(message: String, warning: bool) -> void:
 	if hint_label == null or feedback_toast == null:
@@ -7844,9 +7889,26 @@ func _restore_number_input(kind: String, key: String) -> void:
 func _sync_number_input(inputs: Dictionary, key: String, value: int, force: bool = false) -> void:
 	if not inputs.has(key):
 		return
-	var input: LineEdit = inputs[key]
+	var input_variant: Variant = inputs[key]
+	if not input_variant is LineEdit:
+		return
+	var input := input_variant as LineEdit
 	if force or not input.has_focus():
 		input.text = str(value)
+
+
+func _cached_fiscal_slider(sliders: Dictionary, key: String) -> HSlider:
+	if not sliders.has(key):
+		return null
+	var slider_variant: Variant = sliders[key]
+	return slider_variant as HSlider if slider_variant is HSlider else null
+
+
+func _cached_fiscal_label(key: String) -> Label:
+	if not labels.has(key):
+		return null
+	var label_variant: Variant = labels[key]
+	return label_variant as Label if label_variant is Label else null
 
 
 func _panel(color: Color, radius: int, padding: int = 14) -> PanelContainer:
