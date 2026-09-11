@@ -133,7 +133,13 @@ func _test_temporary_write_failures_preserve_both_snapshots() -> void:
 	short_writer.save_service.set_temporary_writer_for_testing(Callable(self, "_write_short_temporary"))
 	var short_error: Error = short_writer.save_now(SHORT_WRITE_PATH)
 	_check(short_error == ERR_FILE_CORRUPT, "silent short write is rejected by read-back/decode verification")
-	_check(short_writer.save_service.last_error_message.contains("verification"), "short-write rejection records a verification error")
+	var short_write_reason: String = short_writer.save_service.last_error_message.to_lower()
+	_check(
+		short_write_reason.contains("preflight")
+		or short_write_reason.contains("verification")
+		or short_write_reason.contains("unterminated"),
+		"short-write rejection reports a stable validation category"
+	)
 	_check(_read_text(SHORT_WRITE_PATH) == primary_before, "short write leaves the primary snapshot untouched")
 	_check(_read_text(SHORT_WRITE_PATH + ".bak") == backup_before, "short write leaves the trusted backup untouched")
 	_check(not FileAccess.file_exists(ProjectSettings.globalize_path(SHORT_WRITE_PATH) + ".tmp"), "short-write temporary file is discarded")

@@ -16,6 +16,7 @@ const TEST_STAGE_PRIMARY_ROTATED := "primary_rotated"
 const TEST_STAGE_PRIMARY_INSTALLED := "primary_installed"
 const TEST_USE_SAVE_TEMP := "save_temp"
 const TEST_USE_BACKUP_RECOVERY := "backup_recovery"
+const TEST_USE_PRIMARY_ROTATION := "primary_rotation"
 
 const _PRIVATE_TEMP_ATTEMPTS := 16
 const _PRIVATE_TEMP_PAYLOAD := "payload.tmp"
@@ -612,38 +613,130 @@ func _restore_trusted_path_after_drift(path: String, trusted_snapshot: Dictionar
 	return true
 
 
+func _capture_verified_primary_authority(absolute_path: String) -> Dictionary:
+	if not FileAccess.file_exists(absolute_path):
+		return {"ok": true, "exists": false}
+	var source_snapshot := _read_validated_file_snapshot(absolute_path, "Previous primary save")
+	if not bool(source_snapshot.get("ok", false)):
+		return source_snapshot
+	var reservation := _reserve_private_temporary(absolute_path, "primary-snapshot")
+	if not bool(reservation.get("ok", false)):
+		return {"ok": false, "error": int(reservation.get("error", ERR_CANT_CREATE))}
+	var snapshot_path := str(reservation["path"])
+	var write_error := _write_bytes_to_temporary(snapshot_path, source_snapshot.get("bytes", PackedByteArray()))
+	if write_error != OK:
+		_discard_owned_temporary(snapshot_path)
+		return {"ok": false, "error": write_error}
+	var snapshot := _read_validated_file_snapshot(
+		snapshot_path,
+		"Previous primary snapshot",
+		str(source_snapshot.get("sha256", ""))
+	)
+	if not bool(snapshot.get("ok", false)):
+		_discard_owned_temporary(snapshot_path)
+		return snapshot
+	snapshot.erase("envelope")
+	_remember_owned_fingerprint(snapshot_path, snapshot)
+	return {
+		"ok": true,
+		"exists": true,
+		"path": snapshot_path,
+		"length": int(snapshot.get("length", -1)),
+		"sha256": str(snapshot.get("sha256", "")),
+	}
+
+
+func _release_primary_authority(authority: Dictionary) -> void:
+	if not bool(authority.get("exists", false)):
+		return
+	var snapshot_path := str(authority.get("path", ""))
+	if not snapshot_path.is_empty():
+		_discard_owned_temporary(snapshot_path, authority)
+
+
+func _primary_matches_authority(path: String, authority: Dictionary) -> bool:
+	if not bool(authority.get("exists", false)):
+		return not FileAccess.file_exists(path)
+	return _path_matches_snapshot(path, authority)
+
+
+func _restore_primary_authority_after_drift(path: String, authority: Dictionary) -> bool:
+	if not bool(authority.get("exists", false)):
+		var quarantine := _quarantine_existing_path(path, path)
+		return bool(quarantine.get("ok", false))
+	var snapshot_path := str(authority.get("path", ""))
+	if snapshot_path.is_empty():
+		return false
+	var trusted_snapshot := _read_validated_file_snapshot(
+		snapshot_path,
+		"Previous primary snapshot",
+		str(authority.get("sha256", ""))
+	)
+	if not bool(trusted_snapshot.get("ok", false)) or not _path_matches_snapshot(snapshot_path, authority):
+		return false
+	return _restore_trusted_path_after_drift(path, trusted_snapshot)
+
+
+func _discard_verified_path_or_quarantine(path: String, expected_snapshot: Dictionary, base_path: String) -> bool:
+	if not FileAccess.file_exists(path):
+		return true
+	if _path_matches_snapshot(path, expected_snapshot):
+		return DirAccess.remove_absolute(path) == OK
+	var quarantine := _quarantine_existing_path(path, base_path)
+	return bool(quarantine.get("ok", false))
+
+
 func _install_rotating_save(absolute_path: String, backup_path: String, temporary_path: String, verified_snapshot: Dictionary) -> Error:
 	if not _path_matches_snapshot(temporary_path, verified_snapshot):
 		last_error_message = "Temporary save changed before rotation; installation was refused."
 		_abandon_owned_temporary(temporary_path)
 		return ERR_FILE_CORRUPT
-	var primary_before := _fingerprint_path(absolute_path)
+	var primary_authority := _capture_verified_primary_authority(absolute_path)
+	if not bool(primary_authority.get("ok", false)):
+		last_error_message = "Previous primary save could not be fully verified before rotation."
+		_discard_owned_temporary(temporary_path, verified_snapshot)
+		return int(primary_authority.get("error", ERR_FILE_CORRUPT))
+	_notify_verified_use_for_testing(TEST_USE_PRIMARY_ROTATION, absolute_path, temporary_path, backup_path)
+	if not _primary_matches_authority(absolute_path, primary_authority):
+		var restored_before_rotation := _restore_primary_authority_after_drift(absolute_path, primary_authority)
+		_release_primary_authority(primary_authority)
+		_discard_owned_temporary(temporary_path, verified_snapshot)
+		last_error_message = (
+			"Previous primary changed after verification; installation was refused and the verified primary was restored."
+			if restored_before_rotation
+			else "Previous primary changed after verification; installation was refused, and the verified primary could not be restored."
+		)
+		return ERR_FILE_CORRUPT
 	var parked_backup := _park_existing_path(backup_path, absolute_path, "previous-backup")
 	if not bool(parked_backup.get("ok", false)):
 		last_error_message = "Unable to preserve the previous backup save."
+		_release_primary_authority(primary_authority)
 		_discard_owned_temporary(temporary_path, verified_snapshot)
 		var park_error: Error = int(parked_backup.get("error", ERR_CANT_CREATE))
 		return park_error
 	var parked_backup_path := str(parked_backup.get("path", ""))
 	if not parked_backup_path.is_empty():
 		_notify_atomic_stage_for_testing(TEST_STAGE_BACKUP_REMOVED, absolute_path, temporary_path, backup_path)
-	var had_previous := bool(primary_before.get("ok", false)) and bool(primary_before.get("exists", false))
+	var had_previous := bool(primary_authority.get("exists", false))
 	if had_previous:
 		var backup_error := DirAccess.rename_absolute(absolute_path, backup_path)
 		if backup_error != OK:
 			last_error_message = "Unable to rotate previous save."
 			_restore_parked_path(parked_backup_path, backup_path, absolute_path)
+			_release_primary_authority(primary_authority)
 			_discard_owned_temporary(temporary_path, verified_snapshot)
 			return backup_error
-		if not _path_matches_snapshot(backup_path, primary_before):
+		if not _path_matches_snapshot(backup_path, primary_authority):
 			last_error_message = "Previous primary changed during rotation; installation was refused."
-			_restore_rotating_save(absolute_path, backup_path, parked_backup_path, true)
+			_restore_rotating_save(absolute_path, backup_path, parked_backup_path, primary_authority)
+			_release_primary_authority(primary_authority)
 			_discard_owned_temporary(temporary_path, verified_snapshot)
 			return ERR_FILE_CORRUPT
 		_notify_atomic_stage_for_testing(TEST_STAGE_PRIMARY_ROTATED, absolute_path, temporary_path, backup_path)
 	if not _path_matches_snapshot(temporary_path, verified_snapshot):
 		last_error_message = "Temporary save changed during rotation; installation was refused."
-		_restore_rotating_save(absolute_path, backup_path, parked_backup_path, had_previous)
+		_restore_rotating_save(absolute_path, backup_path, parked_backup_path, primary_authority)
+		_release_primary_authority(primary_authority)
 		_abandon_owned_temporary(temporary_path)
 		return ERR_FILE_CORRUPT
 	# Godot has no rename-by-handle API. The random private path plus immediate
@@ -652,30 +745,33 @@ func _install_rotating_save(absolute_path: String, backup_path: String, temporar
 	var replace_error := DirAccess.rename_absolute(temporary_path, absolute_path)
 	if replace_error != OK:
 		last_error_message = "Unable to install new save."
-		_restore_rotating_save(absolute_path, backup_path, parked_backup_path, had_previous)
+		_restore_rotating_save(absolute_path, backup_path, parked_backup_path, primary_authority)
+		_release_primary_authority(primary_authority)
 		_discard_owned_temporary(temporary_path, verified_snapshot)
 		return replace_error
 	_consume_owned_temporary(temporary_path)
 	if not _path_matches_snapshot(absolute_path, verified_snapshot):
 		last_error_message = "Installed primary failed the postcondition; the previous save was restored."
-		_restore_rotating_save(absolute_path, backup_path, parked_backup_path, had_previous)
+		_restore_rotating_save(absolute_path, backup_path, parked_backup_path, primary_authority)
+		_release_primary_authority(primary_authority)
 		return ERR_FILE_CORRUPT
 	_notify_atomic_stage_for_testing(TEST_STAGE_PRIMARY_INSTALLED, absolute_path, temporary_path, backup_path)
 	if not parked_backup_path.is_empty():
 		_discard_owned_temporary(parked_backup_path)
+	_release_primary_authority(primary_authority)
 	# Keep the immediately previous valid snapshot. Frequent autosaves make a
 	# one-generation fallback essential if the newest file is later corrupted.
 	return OK
 
 
-func _restore_rotating_save(absolute_path: String, backup_path: String, parked_backup_path: String, had_previous: bool) -> bool:
-	var restored := true
-	if FileAccess.file_exists(absolute_path):
-		var quarantine := _quarantine_existing_path(absolute_path, absolute_path)
-		restored = restored and bool(quarantine.get("ok", false))
-	if had_previous and FileAccess.file_exists(backup_path):
-		if DirAccess.rename_absolute(backup_path, absolute_path) != OK:
-			restored = false
+func _restore_rotating_save(absolute_path: String, backup_path: String, parked_backup_path: String, primary_authority: Dictionary) -> bool:
+	var restored := _restore_primary_authority_after_drift(absolute_path, primary_authority)
+	if FileAccess.file_exists(backup_path):
+		if bool(primary_authority.get("exists", false)):
+			restored = _discard_verified_path_or_quarantine(backup_path, primary_authority, absolute_path) and restored
+		else:
+			var quarantine := _quarantine_existing_path(backup_path, absolute_path)
+			restored = bool(quarantine.get("ok", false)) and restored
 	if not parked_backup_path.is_empty():
 		restored = _restore_parked_path(parked_backup_path, backup_path, absolute_path) and restored
 	return restored

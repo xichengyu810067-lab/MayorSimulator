@@ -20,6 +20,7 @@ func _initialize() -> void:
 	_test_oversized_backup_cannot_replace_valid_primary()
 	_test_oversized_temporary_preserves_valid_files()
 	_test_verified_temporary_replacement_is_refused()
+	_test_verified_primary_replacement_restores_authoritative_snapshot()
 	_test_validated_backup_replacement_is_refused()
 	_test_file_size_boundary()
 	_test_json_scanner_boundaries()
@@ -124,6 +125,27 @@ func _test_verified_temporary_replacement_is_refused() -> void:
 	_check(not _race_replaced_path.is_empty() and _read_text(_race_replaced_path) == _race_replacement, "replacement temp is preserved as unknown data")
 	_check(_read_text(foreign_path) == "foreign-owner-data", "save-temp race never deletes an unrelated file")
 	_check(_read_text(unknown_legacy_temp) == "unknown-legacy-temp", "save-temp race never deletes an unowned fixed temp")
+	_cleanup()
+
+
+func _test_verified_primary_replacement_restores_authoritative_snapshot() -> void:
+	var service = _write_valid_pair("backup-valid", "primary-valid")
+	var absolute_path := ProjectSettings.globalize_path(TEST_PATH)
+	var backup_path := absolute_path + ".bak"
+	var primary_before := _read_bytes(absolute_path)
+	var backup_before := _read_bytes(backup_path)
+	_race_action = SaveServiceScript.TEST_USE_PRIMARY_ROTATION
+	_race_replacement = service.encode(_make_envelope("primary-evil!"))
+	_race_replaced_path = ""
+	service.set_verified_use_hook_for_testing(Callable(self, "_replace_verified_candidate"))
+	var save_error: Error = service.save_atomic(TEST_PATH, _make_envelope("replacement"))
+	service.set_verified_use_hook_for_testing(Callable())
+	_check(save_error == ERR_FILE_CORRUPT, "replacing the verified public primary before rotation is refused")
+	_check(service.last_error_message.contains("changed after verification"), "primary race reports the verification/use drift")
+	_check(_read_bytes(absolute_path) == primary_before, "primary race restores the verified original primary byte-for-byte")
+	_check(_read_bytes(backup_path) == backup_before, "primary race preserves the existing backup byte-for-byte")
+	_check(_find_private_payload_with_text_for_base(absolute_path, "untrusted", _race_replacement), "primary replacement is quarantined rather than adopted or deleted")
+	_check(_read_bytes(absolute_path) != _race_replacement.to_utf8_buffer(), "unverified replacement candidate is never installed as primary")
 	_cleanup()
 
 
@@ -269,6 +291,8 @@ func _replace_verified_candidate(action: String, paths: Dictionary) -> void:
 	_race_replaced_path = (
 		str(paths.get("temporary_path", ""))
 		if action == SaveServiceScript.TEST_USE_SAVE_TEMP
+		else str(paths.get("primary_path", ""))
+		if action == SaveServiceScript.TEST_USE_PRIMARY_ROTATION
 		else str(paths.get("backup_path", ""))
 	)
 	_write_text(_race_replaced_path, _race_replacement)
@@ -276,8 +300,13 @@ func _replace_verified_candidate(action: String, paths: Dictionary) -> void:
 
 func _find_private_payload_with_text(purpose: String, expected_text: String) -> bool:
 	var absolute_path := ProjectSettings.globalize_path(TEST_PATH)
+	return _find_private_payload_with_text_for_base(absolute_path + ".bak", purpose, expected_text)
+
+
+func _find_private_payload_with_text_for_base(base_path: String, purpose: String, expected_text: String) -> bool:
+	var absolute_path := ProjectSettings.globalize_path(TEST_PATH)
 	var base_directory := absolute_path.get_base_dir()
-	var prefix := ".%s.bak.%s." % [absolute_path.get_file(), purpose]
+	var prefix := ".%s.%s." % [base_path.get_file(), purpose]
 	var directory := DirAccess.open(base_directory)
 	if directory == null:
 		return false
