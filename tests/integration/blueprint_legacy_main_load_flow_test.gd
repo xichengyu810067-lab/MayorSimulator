@@ -58,7 +58,7 @@ func _run() -> void:
 		main.tutorial_overlay.close_as_completed(false)
 		await _settle(3)
 
-	main.call("_select_building", "公園")
+	main.call("_select_building_from_catalog", "公園")
 	main.call("_update_scoped_municipal_pages", main.vertical_slice.get_view_model(main.selected_cell_index))
 	await process_frame
 	var panel = main.vertical_slice_panel
