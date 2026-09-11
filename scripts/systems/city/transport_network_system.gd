@@ -1712,6 +1712,8 @@ func _completed_segment_kinds_by_tile() -> Dictionary:
 	var result: Dictionary = {}
 	for record_variant: Variant in segments.values():
 		var segment: Dictionary = record_variant
+		if str(segment.get("status", "")) != "completed":
+			continue
 		var kind := str(segment.get("kind", ""))
 		for tile_variant: Variant in Array(segment.get("tile_path", [])):
 			var tile_id := int(tile_variant)

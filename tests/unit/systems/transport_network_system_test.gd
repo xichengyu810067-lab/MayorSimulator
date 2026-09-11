@@ -151,6 +151,41 @@ func _validate_completed_corridor_classification() -> void:
 	var split_refs: Array = split.get("reused_segment_refs", [])
 	_check(split_refs.size() == 2 and str(Dictionary(split_refs[0]).get("id", "")) == "reuse_left" and str(Dictionary(split_refs[1]).get("id", "")) == "reuse_right", "multiple reused segment references must sort by ID")
 
+	var mode_corridor_cases = [
+		["bus", "road", _horizontal_path(9, 0, 2)],
+		["metro", "metro_track", _horizontal_path(6, 3, 5)],
+		["train", "rail_track", _horizontal_path(6, 6, 8)],
+		["air", "runway", _horizontal_path(6, 1, 3)],
+	]
+	for case in mode_corridor_cases:
+		var mode_name := str(case[0])
+		var expected_kind := str(case[1])
+		var corridor_path: Array = case[2]
+		var mapping_network = TransportNetworkSystemScript.new()
+		_check(_build_and_complete(mapping_network, {
+			"segments": [{"id": "mapping_%s" % mode_name, "kind": expected_kind, "tile_path": corridor_path}],
+		}), "mapping fixture must support completed %s corridor" % mode_name)
+		var mapped: Dictionary = mapping_network.classify_completed_corridor(mode_name, corridor_path, terrain)
+		_check(bool(mapped.get("ok", false)), "completed segment must classify under mode %s" % mode_name)
+		_check(str(mapped.get("segment_kind", "")) == expected_kind, "%s corridor classification must map to %s" % [mode_name, expected_kind])
+		_check(str(mapped.get("classification", "")) == "all_reuse", "%s corridor classification must reuse completed %s segment" % [mode_name, expected_kind])
+
+	var non_completed_network = TransportNetworkSystemScript.new()
+	var non_completed_path := _horizontal_path(8, 0, 2)
+	_check(_build_and_complete(non_completed_network, {"segments": [{"id": "non_completed_road", "kind": "road", "tile_path": non_completed_path}]}), "non-completed fixture should be buildable")
+	var non_completed_snapshot := non_completed_network.to_dict()
+	var non_completed_segments: Dictionary = non_completed_snapshot.get("segments", {})
+	var non_completed_segment: Dictionary = non_completed_segments.get("non_completed_road", {})
+	non_completed_segment["status"] = "under_construction"
+	non_completed_segments["non_completed_road"] = non_completed_segment
+	non_completed_snapshot["segments"] = non_completed_segments
+	var downgraded_network: TransportNetworkSystemScript = TransportNetworkSystemScript.create_from_dict(non_completed_snapshot)
+	var downgraded_status = str(downgraded_network.to_dict().get("segments", {}).get("non_completed_road", {}).get("status", ""))
+	_check(downgraded_status == "under_construction", "non-completed fixture status must be downgraded in loaded network")
+	var non_completed_classification: Dictionary = downgraded_network.classify_completed_corridor("bus", non_completed_path, terrain)
+	_check(not bool(non_completed_classification.get("ok", true)), "non-completed fixture status must fail classification")
+	_check(str(non_completed_classification.get("error", "")) == "invalid_transport_network_snapshot", "non-completed fixture status failure must be snapshot validation failure")
+
 	_check(not bool(network.classify_completed_corridor("ferry", reused_path, terrain).get("ok", true)), "unknown route mode must fail closed")
 	_check(not bool(network.classify_completed_corridor("bus", [_tile(0, 9), _tile(1, 10)], terrain).get("ok", true)), "diagonal corridor must fail closed")
 	_check(not bool(network.classify_completed_corridor("bus", [_tile(0, 9), _tile(0, 9)], terrain).get("ok", true)), "duplicate corridor tile must fail closed")
@@ -164,6 +199,9 @@ func _validate_completed_corridor_classification() -> void:
 	var crossing_tile := _tile(8, 9)
 	_check(_build_and_complete(crossing_network, {"segments": [{"kind": "rail_track", "tile_path": [crossing_tile]}]}), "crossing rail fixture must complete")
 	_check(_build_and_complete(crossing_network, {"segments": [{"kind": "road", "tile_path": [crossing_tile]}]}), "crossing road fixture must complete")
+	_check(crossing_network.crossings.has("level_crossing_%03d" % crossing_tile), "crossing fixture must create authoritative level crossing")
+	var legal_crossing_classification: Dictionary = crossing_network.classify_completed_corridor("bus", [crossing_tile], terrain)
+	_check(bool(legal_crossing_classification.get("ok", false)) and str(legal_crossing_classification.get("classification", "")) == "all_reuse", "legal road-track crossing should classify as reuse")
 	crossing_network.crossings.clear()
 	_check(not bool(crossing_network.classify_completed_corridor("bus", [crossing_tile], terrain).get("ok", true)), "malformed crossing snapshot must fail closed")
 
