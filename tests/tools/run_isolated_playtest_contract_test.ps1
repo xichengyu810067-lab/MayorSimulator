@@ -116,4 +116,4 @@ Assert-True -Condition ($beforeReuseHash -eq $afterReuseHash) -Message 'reused p
 $invalidRendererExit = [int]$LASTEXITCODE
 Assert-True -Condition ($invalidRendererExit -ne 0) -Message 'renderer argument injection unexpectedly passed validation'
 
-Write-Output 'ISOLATED_PLAYTEST_RUNNER_CONTRACT_PASSED: checks=17'
+Write-Output 'ISOLATED_PLAYTEST_RUNNER_CONTRACT_PASSED: checks=15'
