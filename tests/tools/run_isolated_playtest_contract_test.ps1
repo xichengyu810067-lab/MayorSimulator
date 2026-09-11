@@ -17,7 +17,7 @@ function Invoke-IsolatedRunner {
         [Parameter(Mandatory)][string]$ProfileName,
         [Parameter(Mandatory)][int]$MinimumRuntimeSeconds
     )
-    & $PSHOME\powershell.exe -NoProfile -ExecutionPolicy Bypass -File $Runner -GodotExe $Child -ProfileName $ProfileName -RendererMode Mobile -MinimumRuntimeSeconds $MinimumRuntimeSeconds
+    & $script:WindowsPowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Runner -GodotExe $Child -ProfileName $ProfileName -RendererMode Mobile -MinimumRuntimeSeconds $MinimumRuntimeSeconds
     return [int]$LASTEXITCODE
 }
 
@@ -48,6 +48,8 @@ exit /b $ExitCode
 }
 
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..') -ErrorAction Stop).Path
+$WindowsPowerShellExe = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+if (-not (Test-Path -LiteralPath $WindowsPowerShellExe -PathType Leaf)) { throw "Windows PowerShell 5.1 is unavailable: $WindowsPowerShellExe" }
 $runner = Join-Path $projectRoot 'tools\run_isolated_playtest.ps1'
 if (-not (Test-Path -LiteralPath $runner -PathType Leaf)) { throw "Runner not found: $runner" }
 $testRoot = Join-Path $projectRoot ('.tmp\isolated-playtest-contract-' + [Guid]::NewGuid().ToString('N'))
@@ -97,7 +99,7 @@ Assert-True -Condition ($reuseExit -ne 0) -Message 'reused profile unexpectedly 
 $afterReuseHash = (Get-FileHash -LiteralPath $successSummaryPath -Algorithm SHA256).Hash
 Assert-True -Condition ($beforeReuseHash -eq $afterReuseHash) -Message 'reused profile changed prior result evidence'
 
-& $PSHOME\powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runner -GodotExe $successChild -ProfileName 'synthetic-invalid-renderer' -RendererMode 'Mobile;--path=C:\escape'
+& $WindowsPowerShellExe -NoProfile -ExecutionPolicy Bypass -File $runner -GodotExe $successChild -ProfileName 'synthetic-invalid-renderer' -RendererMode 'Mobile;--path=C:\escape'
 $invalidRendererExit = [int]$LASTEXITCODE
 Assert-True -Condition ($invalidRendererExit -ne 0) -Message 'renderer argument injection unexpectedly passed validation'
 
