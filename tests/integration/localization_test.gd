@@ -10,6 +10,7 @@ const PAGE_TITLES := {
 	"governance": "政策與法案",
 	"judicial": "法院審判與辯護",
 	"oversight": "監察質詢與彈劾辯護",
+	"transport_planning": "城市交通規劃",
 	"blueprint": "設計藍圖",
 	"finance": "稅率與公共事業費",
 	"public_affairs": "民情中心",
