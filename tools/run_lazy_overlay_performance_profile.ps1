@@ -4,7 +4,7 @@
 param(
     [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$GodotExe,
     [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$OutputRoot,
-    [ValidateRange(50, 100)][int]$SampleIntervalMilliseconds = 75,
+    [ValidateRange(50, 100)][int]$SampleIntervalMilliseconds = 60,
     [ValidateRange(50, 2000)][int]$HoldMilliseconds = 500,
     [ValidateRange(30, 300)][int]$WatchdogSeconds = 120,
     [ValidateRange(1, 30)][int]$MarkerTimeoutSeconds = 5
@@ -226,6 +226,25 @@ function Get-ProcessSample {
     }
 }
 
+function Get-SamplingCadence {
+    param([Parameter(Mandatory)][object[]]$Samples)
+    if ($Samples.Count -lt 3) { throw 'Too few samples for a profile.' }
+    $actualIntervals = [Collections.Generic.List[int64]]::new()
+    for ($index = 1; $index -lt $Samples.Count; $index++) {
+        $interval = [int64]$Samples[$index].monotonic_milliseconds - [int64]$Samples[$index - 1].monotonic_milliseconds
+        if ($interval -lt 50 -or $interval -gt 100) {
+            throw "Sampling cadence violated 50-100ms contract between samples $($index - 1) and $($index): ${interval}ms."
+        }
+        $actualIntervals.Add($interval)
+    }
+    return [ordered]@{
+        contract = '50-100ms actual interval'
+        actual_intervals_milliseconds = @($actualIntervals)
+        minimum_milliseconds = ($actualIntervals | Measure-Object -Minimum).Minimum
+        maximum_milliseconds = ($actualIntervals | Measure-Object -Maximum).Maximum
+    }
+}
+
 function Wait-ProcessExecutablePath {
     param(
         [Parameter(Mandatory)][Diagnostics.Process]$Process,
@@ -273,7 +292,7 @@ for ($runNumber = 1; $runNumber -le 3; $runNumber++) {
     $markerPath = Join-Path $userData 'mayor_simulator\tests\performance_profile_lazy_overlay_phases.jsonl'
     $stdoutPath = Join-Path $runRoot 'stdout.log'; $stderrPath = Join-Path $runRoot 'stderr.log'; $godotLogPath = Join-Path $runRoot 'godot.log'
     $samples = [Collections.Generic.List[object]]::new(); $process = $null; $clock = [Diagnostics.Stopwatch]::StartNew()
-    $launchedExecutablePath = $null; $assessment = $null
+    $launchedExecutablePath = $null; $assessment = $null; $cadence = $null
     $gpuReason = 'GPU counter unavailable: stable per-process GPU attribution would add counter work that could violate the required 50-100ms sampling cadence.'
     try {
         $info = [Diagnostics.ProcessStartInfo]::new()
@@ -298,11 +317,11 @@ for ($runNumber = 1; $runNumber -le 3; $runNumber++) {
         $assessment = Get-LogAssessment -LogPaths @($stdoutPath, $stderrPath, $godotLogPath)
         if ($process.ExitCode -ne 0) { throw "Godot exited with $($process.ExitCode)." }
         if ($assessment.product_diagnostics.Count -gt 0) { throw "Godot emitted product diagnostics: $($assessment.product_diagnostics -join '; ')" }
-        if ($samples.Count -lt 3) { throw 'Too few samples for a profile.' }
-        $runs.Add([ordered]@{ run = $runNumber; status = if ($assessment.environment_warning_count -gt 0) { 'PASS_WITH_ENVIRONMENT_WARNING' } else { 'PASS' }; engine_pid = $process.Id; launched_executable_path = $launchedExecutablePath; engine = $engine; samples = @($samples); phases = @($markers); diagnostics = $assessment; gpu_counter = [ordered]@{ status = 'UNAVAILABLE'; reason = $gpuReason }; exit_code = $process.ExitCode })
+        $cadence = Get-SamplingCadence -Samples @($samples)
+        $runs.Add([ordered]@{ run = $runNumber; status = if ($assessment.environment_warning_count -gt 0) { 'PASS_WITH_ENVIRONMENT_WARNING' } else { 'PASS' }; engine_pid = $process.Id; launched_executable_path = $launchedExecutablePath; engine = $engine; samples = @($samples); sampling_cadence = $cadence; phases = @($markers); diagnostics = $assessment; gpu_counter = [ordered]@{ status = 'UNAVAILABLE'; reason = $gpuReason }; exit_code = $process.ExitCode })
     } catch {
         $failures.Add("run-${runNumber}: $($_.Exception.Message)")
-        $runs.Add([ordered]@{ run = $runNumber; status = 'FAIL'; engine_pid = if ($null -eq $process) { $null } else { $process.Id }; launched_executable_path = $launchedExecutablePath; engine = $engine; samples = @($samples); diagnostics = $assessment; gpu_counter = [ordered]@{ status = 'UNAVAILABLE'; reason = $gpuReason }; error = $_.Exception.Message })
+        $runs.Add([ordered]@{ run = $runNumber; status = 'FAIL'; engine_pid = if ($null -eq $process) { $null } else { $process.Id }; launched_executable_path = $launchedExecutablePath; engine = $engine; samples = @($samples); sampling_cadence = $cadence; diagnostics = $assessment; gpu_counter = [ordered]@{ status = 'UNAVAILABLE'; reason = $gpuReason }; error = $_.Exception.Message })
     } finally {
         if ($null -ne $process) {
             try {
@@ -319,7 +338,7 @@ $sourceAfter = Get-SourceIdentity
 if ($sourceBefore.head -cne $sourceAfter.head -or $sourceBefore.tree -cne $sourceAfter.tree -or $sourceBefore.source_fingerprint.fingerprint_sha256 -cne $sourceAfter.source_fingerprint.fingerprint_sha256) { $failures.Add('Project source identity changed during profiling.') }
 $summary = [ordered]@{
     schema_version = 1; suite = 'lazy-overlay-performance-profile'; status = if ($failures.Count -eq 0) { 'PASS' } else { 'FAIL' }
-    output_root = $OutputRoot; sampling = [ordered]@{ interval_milliseconds = $SampleIntervalMilliseconds; run_count = 3; cadence_contract = '50-100ms' }
+    output_root = $OutputRoot; sampling = [ordered]@{ target_interval_milliseconds = $SampleIntervalMilliseconds; run_count = 3; cadence_contract = '50-100ms actual interval' }
     source_before = $sourceBefore; source_after = $sourceAfter; runs = @($runs); failures = @($failures)
     memory_claim_boundary = 'Deferred allocation is not represented as a RAM-total decrease; raw per-process working-set and private-byte samples are retained.'
 }

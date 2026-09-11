@@ -26,6 +26,10 @@ $pathComparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else
 $outputsRootIsAlias = $outputsRootAlias.TrimEnd($trimChars).Equals($outputsRoot.TrimEnd($trimChars), $pathComparison)
 
 Assert-Contains $runner 'ValidateRange\(50, 100\)' 'Sampling interval is not constrained to 50-100ms.'
+Assert-Contains $runner 'SampleIntervalMilliseconds = 60' 'Default sampling target does not leave Windows scheduling headroom.'
+Assert-Contains $runner 'function Get-SamplingCadence' 'Runner does not calculate actual sampling intervals.'
+Assert-Contains $runner 'Sampling cadence violated 50-100ms contract' 'Runner does not fail closed when an actual sampling interval is outside 50-100ms.'
+Assert-Contains $runner 'actual_intervals_milliseconds' 'Runner does not retain actual sampling intervals in its evidence.'
 Assert-Contains $runner 'performance-profile-lazy-overlay' 'Runner does not use a canonical .tmp profile root.'
 Assert-Contains $runner 'Test-MayorPathInside -Candidate \$Candidate -Parent \$outputsRoot' 'Runner lacks output-root containment validation.'
 Assert-Contains $runner 'OutputRoot must be a child directory, not the canonical profile root itself.' 'Runner allows the fixed profile root to be reused as evidence output.'
@@ -51,4 +55,4 @@ Assert-Contains $integration '--performance-profile-hold-ms=' 'Profile hold is n
 Assert-Contains $integration 'await TestCleanup\.finish\(self, \[main\], 1 if _failed else 0\)' 'Profile mode bypasses the leak-clean fixture teardown.'
 Assert-NotContains $integration 'RAM_MUNICIPAL_PROFILE_PHASE|ram-municipal-profile' 'Integration test retains a legacy RAM profile marker or switch.'
 
-Write-Output 'LAZY_OVERLAY_PERFORMANCE_PROFILE_CONTRACT_PASSED: checks=18'
+Write-Output 'LAZY_OVERLAY_PERFORMANCE_PROFILE_CONTRACT_PASSED: checks=22'
