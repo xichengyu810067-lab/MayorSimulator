@@ -1,0 +1,15 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tests/qa/native_exit_objectdb_probe.gd" id="1_probe"]
+
+[node name="NativeExitObjectDbProbe" type="Node"]
+script = ExtResource("1_probe")
+
+[node name="ProbeCanvas" type="CanvasLayer" parent="."]
+
+[node name="ProbeStatus" type="Label" parent="ProbeCanvas"]
+offset_left = 24.0
+offset_top = 24.0
+offset_right = 520.0
+offset_bottom = 56.0
+text = "Native ObjectDB normal-exit probe"
