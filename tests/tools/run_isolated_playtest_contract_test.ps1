@@ -54,6 +54,7 @@ $runner = Join-Path $projectRoot 'tools\run_isolated_playtest.ps1'
 if (-not (Test-Path -LiteralPath $runner -PathType Leaf)) { throw "Runner not found: $runner" }
 $testRoot = Join-Path $projectRoot ('.tmp\isolated-playtest-contract-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $testRoot -ErrorAction Stop | Out-Null
+$profileSuffix = [Guid]::NewGuid().ToString('N').Substring(0, 12)
 
 $successChild = Join-Path $testRoot 'success-child.cmd'
 $crashChild = Join-Path $testRoot 'crash-child.cmd'
@@ -66,7 +67,7 @@ $expectedHead = (& git -c "safe.directory=$projectRoot" -C $projectRoot rev-pars
 $expectedTree = (& git -c "safe.directory=$projectRoot" -C $projectRoot rev-parse 'HEAD^{tree}').Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Could not resolve test source identity.' }
 
-$successProfile = 'synthetic-success'
+$successProfile = 'synthetic-success-' + $profileSuffix
 $successExit = Invoke-IsolatedRunner -Runner $runner -Child $successChild -ProfileName $successProfile -MinimumRuntimeSeconds 1
 Assert-True -Condition ($successExit -eq 0) -Message "success child runner exit was $successExit, expected 0"
 $successSummaryPath = Join-Path $projectRoot ('.tmp\isolated-playtest\' + $successProfile + '\playtest-result.json')
@@ -77,7 +78,7 @@ Assert-True -Condition ([int]$successSummary.process.child_exit_code -eq 0) -Mes
 Assert-True -Condition ($successSummary.source.head -eq $expectedHead -and $successSummary.source.tree -eq $expectedTree) -Message 'success source identity was not recorded'
 Assert-True -Condition (-not [string]::IsNullOrWhiteSpace([string]$successSummary.isolation.godot_log_sha256)) -Message 'success log SHA-256 was not recorded'
 
-$crashProfile = 'synthetic-crash'
+$crashProfile = 'synthetic-crash-' + $profileSuffix
 $crashExit = Invoke-IsolatedRunner -Runner $runner -Child $crashChild -ProfileName $crashProfile -MinimumRuntimeSeconds 0
 Assert-True -Condition ($crashExit -ne 0) -Message 'synthetic crash child unexpectedly passed'
 $crashSummaryPath = Join-Path $projectRoot ('.tmp\isolated-playtest\' + $crashProfile + '\playtest-result.json')
@@ -85,7 +86,7 @@ $crashSummary = Get-Content -LiteralPath $crashSummaryPath -Raw | ConvertFrom-Js
 Assert-True -Condition ($crashSummary.status -eq 'child_failed') -Message 'synthetic crash child was not recorded as child_failed'
 Assert-True -Condition ([int]$crashSummary.process.child_exit_code -eq 23) -Message 'synthetic crash child exit code was not preserved'
 
-$shortProfile = 'synthetic-short'
+$shortProfile = 'synthetic-short-' + $profileSuffix
 $shortExit = Invoke-IsolatedRunner -Runner $runner -Child $shortChild -ProfileName $shortProfile -MinimumRuntimeSeconds 2
 Assert-True -Condition ($shortExit -eq 3) -Message "short child runner exit was $shortExit, expected 3"
 $shortSummaryPath = Join-Path $projectRoot ('.tmp\isolated-playtest\' + $shortProfile + '\playtest-result.json')
@@ -99,7 +100,7 @@ Assert-True -Condition ($reuseExit -ne 0) -Message 'reused profile unexpectedly 
 $afterReuseHash = (Get-FileHash -LiteralPath $successSummaryPath -Algorithm SHA256).Hash
 Assert-True -Condition ($beforeReuseHash -eq $afterReuseHash) -Message 'reused profile changed prior result evidence'
 
-& $WindowsPowerShellExe -NoProfile -ExecutionPolicy Bypass -File $runner -GodotExe $successChild -ProfileName 'synthetic-invalid-renderer' -RendererMode 'Mobile;--path=C:\escape'
+& $WindowsPowerShellExe -NoProfile -ExecutionPolicy Bypass -File $runner -GodotExe $successChild -ProfileName ('synthetic-invalid-' + $profileSuffix) -RendererMode 'Mobile;--path=C:\escape'
 $invalidRendererExit = [int]$LASTEXITCODE
 Assert-True -Condition ($invalidRendererExit -ne 0) -Message 'renderer argument injection unexpectedly passed validation'
 
