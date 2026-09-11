@@ -55,6 +55,8 @@ Desktop.ini
 venv/
 credentials.json
 secrets.json
+id_rsa
+id_ed25519
 *.pem
 *.key
 *.pfx
