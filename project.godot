@@ -12,6 +12,7 @@ config_version=5
 
 config/name="CivicTale: Voice of Promise"
 run/main_scene="res://scenes/Main.tscn"
+run/max_fps=60
 config/features=PackedStringArray("4.7")
 
 [autoload]
