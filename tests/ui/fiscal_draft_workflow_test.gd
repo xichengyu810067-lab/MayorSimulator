@@ -26,7 +26,6 @@ func _run() -> void:
 		if not main.start_screen.is_loading():
 			break
 	main.tutorial_overlay.close_as_completed(false)
-	main.tutorial_overlay._transition.custom_step(1.0)
 	await process_frame
 
 	main.tax_rates["income"] = int(main.TAX_DEFS["income"]["reasonable"]) + 3

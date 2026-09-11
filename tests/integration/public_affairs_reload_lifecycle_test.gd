@@ -34,7 +34,6 @@ func _run() -> void:
 	_check(first._game_started and not first.start_screen.visible, "New enters the live Main scene")
 	if first.tutorial_overlay != null and first.tutorial_overlay.is_open():
 		first.tutorial_overlay.close_as_completed(false)
-		first.tutorial_overlay._transition.custom_step(1.0)
 	await _settle(2)
 	_check(first.tutorial_completed, "the first instance records tutorial completion before saving")
 

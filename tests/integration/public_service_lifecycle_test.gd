@@ -1,6 +1,7 @@
 extends SceneTree
 
 const CoordinatorScript = preload("res://scripts/app/vertical_slice_coordinator.gd")
+const OnboardingProgressScript = preload("res://scripts/app/onboarding_progress.gd")
 const MAIN_SCRIPT_PATH := "res://scripts/app/main.gd"
 
 const MID_BROKEN_SAVE_PATH := "user://goal_2026_08_01/public_service_mid_broken.json"
@@ -105,7 +106,7 @@ func _test_healthcare_lifecycle_and_round_trip() -> void:
 	_check(main._service_fee_income("medical") == 0, "maintenance failure must stop medical revenue")
 	var broken_healthcare := int(main.healthcare)
 	var broken_shell: Dictionary = main._capture_player_shell_state()
-	_check(int(broken_shell.get("schema_version", 0)) == 8, "player shell must persist schema 8")
+	_check(int(broken_shell.get("schema_version", 0)) == OnboardingProgressScript.SHELL_SCHEMA_VERSION, "player shell must persist the current schema")
 	_check(int(broken_shell.get("healthcare_applied_bonus", -1)) == 0, "mid-broken shell must persist the zero applied-bonus latch")
 	coordinator.set_player_shell_state(broken_shell)
 	_check(coordinator.save_game(MID_BROKEN_SAVE_PATH) == OK, "mid-broken service state must save")

@@ -37,7 +37,6 @@ func _run() -> void:
 	_check(main._game_started and not main.start_screen.visible, "New reaches the interactive Main map")
 	if main.tutorial_overlay != null and main.tutorial_overlay.is_open():
 		main.tutorial_overlay.close_as_completed(false)
-		main.tutorial_overlay._transition.custom_step(1.0)
 	await _settle(2)
 	main.call("_sync_map_interaction_for_ui")
 	main.call("_layout_map_stage")

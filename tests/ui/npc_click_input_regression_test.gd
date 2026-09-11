@@ -29,7 +29,6 @@ func _run() -> void:
 			break
 	_check(main._game_started and not main.start_screen.visible, "new game did not reach the clickable map")
 	main.tutorial_overlay.close_as_completed(false)
-	main.tutorial_overlay._transition.custom_step(1.0)
 	await process_frame
 	# This test owns raw map pointer routing, not the mandatory onboarding layer.
 	# Put that independent product flow into its validated legacy-complete state so
