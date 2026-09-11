@@ -201,9 +201,9 @@ Initialize-WritableDirectory -Path $localAppData -Label 'LOCALAPPDATA isolation 
 Initialize-WritableDirectory -Path $userData -Label 'Godot user:// isolation directory'
 
 $renderer = if ($RendererMode -eq 'Mobile') {
-    @{ method = 'mobile'; driver = 'vulkan'; renderer_pattern = '(?im)^.*Vulkan.*Forward Mobile.*$' }
+    @{ method = 'mobile'; driver = 'vulkan'; renderer_pattern = '(?m)^Vulkan [0-9]+(?:\.[0-9]+){1,3} - Forward Mobile - Using Device #[0-9]+: [^\r\n]+\r?$' }
 } else {
-    @{ method = 'gl_compatibility'; driver = 'opengl3'; renderer_pattern = '(?im)^.*OpenGL.*Compatibility.*$' }
+    @{ method = 'gl_compatibility'; driver = 'opengl3'; renderer_pattern = '(?m)^OpenGL API [0-9]+(?:\.[0-9]+){1,3} - Build [A-Za-z0-9][A-Za-z0-9._+-]* - Compatibility - Using Device: [^\r\n]+\r?$' }
 }
 $stdoutPath = Join-Path $OutputRoot 'stdout.log'
 $stderrPath = Join-Path $OutputRoot 'stderr.log'
@@ -362,10 +362,12 @@ $readyCount = [regex]::Matches($stdoutText, "(?m)^$([regex]::Escape($readyMarker
 $completionCount = [regex]::Matches($stdoutText, "(?m)^$([regex]::Escape($completionMarker))\s*$").Count
 if ($readyCount -ne 1) { $failures.Add("Expected intro ready marker exactly once; found $readyCount.") }
 if ($completionCount -ne 1) { $failures.Add("Expected intro completion marker exactly once; found $completionCount.") }
-$rendererMatches = @([regex]::Matches($plainLog, $renderer.renderer_pattern) | ForEach-Object { $_.Value.Trim() } | Sort-Object -Unique)
-if ($rendererMatches.Count -lt 1) {
-    $failures.Add("Renderer log did not prove $RendererMode via $($renderer.method)/$($renderer.driver).")
+$rendererProofLog = $stdoutText -replace "`e\[[0-?]*[ -/]*[@-~]", ''
+$rendererMatches = @([regex]::Matches($rendererProofLog, $renderer.renderer_pattern) | ForEach-Object { $_.Value.TrimEnd("`r", "`n") })
+if ($rendererMatches.Count -ne 1) {
+    $failures.Add("Renderer stdout did not contain exactly one canonical $RendererMode engine header; found $($rendererMatches.Count).")
 }
+$matchedRendererHeader = if ($rendererMatches.Count -eq 1) { $rendererMatches[0] } else { $null }
 
 $post = $null
 $postStatusText = ''
@@ -391,6 +393,9 @@ $summary = [ordered]@{
         requested_mode = $RendererMode
         rendering_method = $renderer.method
         rendering_driver = $renderer.driver
+        proof_stream = 'stdout'
+        raw_match_count = $rendererMatches.Count
+        matched_header = $matchedRendererHeader
         log_matches = $rendererMatches
     }
     fixture = $fixtureScript
