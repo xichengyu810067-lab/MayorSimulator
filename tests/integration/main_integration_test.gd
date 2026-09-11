@@ -13,7 +13,10 @@ func _initialize() -> void:
 
 
 func _run() -> void:
-	var ram_profile_only := "--ram-municipal-profile-only" in OS.get_cmdline_user_args()
+	# Profiling instrumentation is inert in a normal integration run. The
+	# performance runner has to opt in before it can emit markers or hold frames.
+	var performance_profile_only := "--performance-profile-lazy-overlay" in OS.get_cmdline_user_args()
+	var performance_profile_hold_ms := _performance_profile_hold_ms(performance_profile_only)
 	# Headless tests need a deterministic desktop-sized layout reference. This is
 	# deliberately not the visual acceptance test; the capture suite validates the
 	# real fullscreen window separately.
@@ -216,9 +219,13 @@ func _run() -> void:
 	_check(main.municipal_overlay == null, "municipal overlay is not instantiated during startup")
 	_check(main.grid_buttons.all(func(button: Button) -> bool: return button.focus_mode == Control.FOCUS_ALL), "every map tile is keyboard focusable")
 	_check(main.get_visible_npc_actors().all(func(button: Button) -> bool: return button.focus_mode == Control.FOCUS_ALL), "every visible resident is keyboard focusable")
-	_emit_ram_municipal_profile_phase("startup_ready", ram_profile_only)
+	if performance_profile_only:
+		_emit_performance_profile_phase("startup_ready")
+		_performance_profile_hold(performance_profile_hold_ms)
 	main.municipal_button.emit_signal("pressed")
-	_emit_ram_municipal_profile_phase("first_open_completed", ram_profile_only)
+	if performance_profile_only:
+		_emit_performance_profile_phase("first_open_completed")
+		_performance_profile_hold(performance_profile_hold_ms)
 	_check(main.municipal_overlay.is_open() and main.municipal_overlay.current_page() == "hub", "municipal button opens the hub")
 	var fiscal_state: Dictionary = main.call("debug_fiscal_draft_state")
 	var fiscal_ui: Dictionary = fiscal_state.get("ui", {})
@@ -232,11 +239,13 @@ func _run() -> void:
 	_check(city_state_after_municipal_open == city_state_before_municipal_open, "first municipal open does not mutate CityState")
 	_check(report_history_after_municipal_open == report_history_before_municipal_open, "first municipal open does not append a governance event")
 	main.vertical_slice.governance.grievance = original_grievance
-	if ram_profile_only:
+	if performance_profile_only:
 		# The profile ends after the state-preservation assertions. Write its
-		# completion evidence synchronously instead of awaiting a paused-tree frame.
-		_emit_ram_municipal_profile_phase("validation_completed", true)
-		quit()
+		# completion evidence synchronously, then use the same leak-clean teardown
+		# as the full integration path before the SceneTree exits.
+		_emit_performance_profile_phase("validation_completed")
+		_performance_profile_hold(performance_profile_hold_ms)
+		await TestCleanup.finish(self, [main], 1 if _failed else 0)
 		return
 	await process_frame
 	await process_frame
@@ -921,17 +930,41 @@ func _check(condition: bool, message: String) -> void:
 	push_error("Main integration check failed: %s" % message)
 
 
-func _emit_ram_municipal_profile_phase(phase: String, persist_marker: bool) -> void:
-	print("RAM_MUNICIPAL_PROFILE_PHASE %s" % phase)
-	if not persist_marker:
-		return
-	var marker := FileAccess.open("user://mayor_simulator/tests/ram_municipal_profile_phase.txt", FileAccess.WRITE)
+func _emit_performance_profile_phase(phase: String) -> void:
+	var monotonic_usec := Time.get_ticks_usec()
+	print("PERFORMANCE_PROFILE_LAZY_OVERLAY_PHASE phase=%s monotonic_usec=%d" % [phase, monotonic_usec])
+	var marker_path := "user://mayor_simulator/tests/performance_profile_lazy_overlay_phases.jsonl"
+	var marker := FileAccess.open(
+		marker_path,
+		FileAccess.READ_WRITE if FileAccess.file_exists(marker_path) else FileAccess.WRITE_READ
+	)
 	if marker == null:
-		push_error("Unable to write RAM profile phase marker: %s" % phase)
+		push_error("Unable to write lazy-overlay performance profile phase marker: %s" % phase)
 		return
-	marker.store_string(phase)
+	marker.seek_end()
+	marker.store_line(JSON.stringify({
+		"schema_version": 1,
+		"phase": phase,
+		"monotonic_usec": monotonic_usec,
+	}))
 	marker.flush()
 	marker.close()
+
+
+func _performance_profile_hold_ms(profile_enabled: bool) -> int:
+	if not profile_enabled:
+		return 0
+	for argument in OS.get_cmdline_user_args():
+		if argument.begins_with("--performance-profile-hold-ms="):
+			var raw_value := argument.trim_prefix("--performance-profile-hold-ms=")
+			if raw_value.is_valid_int():
+				return clampi(raw_value.to_int(), 50, 2_000)
+	return 500
+
+
+func _performance_profile_hold(hold_ms: int) -> void:
+	if hold_ms > 0:
+		OS.delay_msec(hold_ms)
 
 
 func _expected_building_rows(visible_count: int) -> Array:
