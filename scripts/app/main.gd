@@ -604,10 +604,6 @@ func _build_ui() -> void:
 	building_context_panel.action_requested.connect(Callable(self, "_on_building_context_action"))
 	add_child(building_context_panel)
 
-	municipal_overlay = _build_management_overlay()
-	municipal_overlay.page_opened.connect(Callable(self, "_on_municipal_page_opened"))
-	municipal_overlay.overlay_closed.connect(Callable(self, "_on_municipal_overlay_closed"))
-	add_child(municipal_overlay)
 	settings_overlay = SettingsOverlayScript.new()
 	settings_overlay.set_dark_mode(is_dark_mode)
 	settings_overlay.set_audio_enabled(music_enabled, sfx_enabled, music_volume, sfx_volume)
@@ -666,7 +662,7 @@ func _notification(what: int) -> void:
 		_sync_time_pause_for_ui()
 
 
-func _sync_time_pause_for_ui() -> void:
+func _sync_time_pause_for_ui(skip_terminal_failure_sync: bool = false) -> void:
 	if vertical_slice == null:
 		return
 	var should_pause := not _game_started
@@ -680,7 +676,13 @@ func _sync_time_pause_for_ui() -> void:
 		and onboarding_guide.is_open()
 		and not onboarding_guide.is_product_mode()
 	)
-	vertical_slice.set_time_paused(should_pause)
+	# A lazily added municipal overlay can emit visibility_changed while it is
+	# merely being attached.  Keep that presentation-only transition from using
+	# the coordinator's terminal-failure sealing method, which writes CityState.
+	if skip_terminal_failure_sync:
+		vertical_slice.session.clock.paused = should_pause
+	else:
+		vertical_slice.set_time_paused(should_pause)
 	_refresh_time_hud()
 
 
@@ -1483,6 +1485,23 @@ func _build_management_overlay() -> Control:
 	return overlay
 
 
+func _ensure_municipal_overlay() -> Control:
+	if municipal_overlay != null and is_instance_valid(municipal_overlay):
+		return municipal_overlay
+	# The municipal hub owns several large, page-specific control trees.  Do not
+	# build them during startup, and do not use _update_ui() here: its authority
+	# synchronization path can record governance state while the player only
+	# asked to present the hub.
+	municipal_overlay = _build_management_overlay()
+	municipal_overlay.page_opened.connect(Callable(self, "_on_municipal_page_opened"))
+	municipal_overlay.overlay_closed.connect(Callable(self, "_on_municipal_overlay_closed"))
+	municipal_overlay.visibility_changed.connect(Callable(self, "_sync_time_pause_for_ui").bind(true))
+	municipal_overlay.visibility_changed.connect(Callable(self, "_sync_map_interaction_for_ui"))
+	add_child(municipal_overlay)
+	_wire_ui_sounds()
+	return municipal_overlay
+
+
 func _build_judicial_tab() -> Control:
 	judicial_panel = JusticeOversightPanelScript.new("judicial")
 	judicial_panel.set_dark_mode(is_dark_mode)
@@ -1526,19 +1545,22 @@ func _build_transport_planning_tab() -> ScrollContainer:
 func _open_municipal_center() -> void:
 	_close_building_context()
 	_hide_npc_dialogue()
-	if municipal_overlay != null:
-		_set_map_interaction_enabled(false)
-		municipal_overlay.open_hub()
+	var overlay := _ensure_municipal_overlay()
+	if overlay == null:
+		return
+	_set_map_interaction_enabled(false)
+	overlay.open_hub()
 
 
 func _open_transport_planning() -> void:
 	_close_building_context()
 	_hide_npc_dialogue()
-	if municipal_overlay == null:
+	var overlay := _ensure_municipal_overlay()
+	if overlay == null:
 		return
 	_refresh_transport_planning_panel()
 	_set_map_interaction_enabled(false)
-	municipal_overlay.open_page("transport_planning")
+	overlay.open_page("transport_planning")
 
 
 func _set_map_npc_tooltips_enabled(enabled: bool) -> void:
@@ -1951,18 +1973,22 @@ func _preferred_governance_status() -> String:
 func _open_city_data() -> void:
 	_close_building_context()
 	_hide_npc_dialogue()
-	if municipal_overlay != null:
-		_set_map_interaction_enabled(false)
-		municipal_overlay.open_page("city_data")
-		if city_data_dashboard != null:
-			city_data_dashboard.restart_animations()
+	var overlay := _ensure_municipal_overlay()
+	if overlay == null:
+		return
+	_set_map_interaction_enabled(false)
+	overlay.open_page("city_data")
+	if city_data_dashboard != null:
+		city_data_dashboard.restart_animations()
 
 func _open_monthly_report() -> void:
 	_close_building_context()
 	_hide_npc_dialogue()
-	if municipal_overlay != null:
-		_set_map_interaction_enabled(false)
-		municipal_overlay.open_page("report")
+	var overlay := _ensure_municipal_overlay()
+	if overlay == null:
+		return
+	_set_map_interaction_enabled(false)
+	overlay.open_page("report")
 
 
 func _open_settings() -> void:
@@ -3500,8 +3526,9 @@ func _open_selected_npc_request() -> void:
 		return
 	_hide_npc_dialogue()
 	_close_building_context()
-	if municipal_overlay != null:
-		municipal_overlay.open_page("public_affairs")
+	var overlay := _ensure_municipal_overlay()
+	if overlay != null:
+		overlay.open_page("public_affairs")
 
 func _npc_dialogue(npc_type: String) -> String:
 	if total_satisfaction >= 82:
@@ -4818,8 +4845,9 @@ func _select_building(building_name: String) -> void:
 
 func _select_building_from_catalog(building_name: String) -> void:
 	_select_building(building_name)
-	if municipal_overlay != null:
-		municipal_overlay.open_page("blueprint")
+	var overlay := _ensure_municipal_overlay()
+	if overlay != null:
+		overlay.open_page("blueprint")
 	_set_hint("已進入「%s」設計；調整規格後，總價、工期與占地會立即更新。" % building_name, false)
 	call_deferred("_refresh_onboarding_guide")
 
@@ -5141,8 +5169,9 @@ func _on_transport_station_requested(building_name: String) -> void:
 		_enter_building_placement(building_name)
 		_set_hint("已開始連續放置「%s」；完成一站後可直接選擇下一站。" % building_name, false)
 		return
-	if municipal_overlay != null:
-		municipal_overlay.open_page("blueprint")
+	var overlay := _ensure_municipal_overlay()
+	if overlay != null:
+		overlay.open_page("blueprint")
 	_set_hint("請先送審「%s」藍圖；核准並完成站點施工後才能建立路線。" % building_name, false)
 
 
@@ -7408,30 +7437,33 @@ func _update_ui() -> void:
 	_set_bar_visual(header_bars["trust"], float(trust), _score_color(trust))
 	_set_bar_visual(header_bars["score"], float(ranking_score), COLOR_GOLD)
 	_set_bar_visual(header_bars["rating"], float(ranking_score), COLOR_GOLD)
-	for tax_key in tax_rates.keys():
-		var tax_forecast := _fiscal_item_forecast("tax", tax_key)
-		labels["tax_value_%s" % tax_key].text = "%s  ● %s" % [_fiscal_display_value("tax", tax_key, "%"), tax_forecast["state_text"]]
-		labels["tax_value_%s" % tax_key].add_theme_color_override("font_color", tax_forecast["color"])
-		_apply_fee_slider_visual(tax_sliders[tax_key], str(tax_forecast["state"]))
-		tax_sliders[tax_key].tooltip_text = str(tax_forecast["summary"])
-	for fee_key in utility_fees.keys():
-		var utility_forecast := _fiscal_item_forecast("utility", fee_key)
-		labels["utility_%s" % fee_key].text = "%s  ● %s" % [_fiscal_display_value("utility", fee_key, " / %s" % UTILITY_DEFS[fee_key]["unit"]), utility_forecast["state_text"]]
-		labels["utility_%s" % fee_key].add_theme_color_override("font_color", utility_forecast["color"])
-		_apply_fee_slider_visual(utility_sliders[fee_key], str(utility_forecast["state"]))
-		utility_sliders[fee_key].tooltip_text = str(utility_forecast["summary"])
-	for service_key in service_fees.keys():
-		var service_forecast := _fiscal_item_forecast("service", service_key)
-		labels["service_%s" % service_key].text = "%s  ● %s" % [_fiscal_display_value("service", service_key, " / %s" % SERVICE_DEFS[service_key]["unit"]), service_forecast["state_text"]]
-		labels["service_%s" % service_key].add_theme_color_override("font_color", service_forecast["color"])
-		_apply_fee_slider_visual(service_sliders[service_key], str(service_forecast["state"]))
-		service_sliders[service_key].tooltip_text = str(service_forecast["summary"])
-	selected_label.text = L10n.text("%s　基礎造價 $%d\n%s") % [
-		L10n.text(selected_building),
-		buildings[selected_building]["cost"],
-		_visual_effects(buildings[selected_building], 3)
-	]
-	report_label.text = _current_month_major_event_summary()
+	if municipal_overlay != null:
+		for tax_key in tax_rates.keys():
+			var tax_forecast := _fiscal_item_forecast("tax", tax_key)
+			labels["tax_value_%s" % tax_key].text = "%s  ● %s" % [_fiscal_display_value("tax", tax_key, "%"), tax_forecast["state_text"]]
+			labels["tax_value_%s" % tax_key].add_theme_color_override("font_color", tax_forecast["color"])
+			_apply_fee_slider_visual(tax_sliders[tax_key], str(tax_forecast["state"]))
+			tax_sliders[tax_key].tooltip_text = str(tax_forecast["summary"])
+		for fee_key in utility_fees.keys():
+			var utility_forecast := _fiscal_item_forecast("utility", fee_key)
+			labels["utility_%s" % fee_key].text = "%s  ● %s" % [_fiscal_display_value("utility", fee_key, " / %s" % UTILITY_DEFS[fee_key]["unit"]), utility_forecast["state_text"]]
+			labels["utility_%s" % fee_key].add_theme_color_override("font_color", utility_forecast["color"])
+			_apply_fee_slider_visual(utility_sliders[fee_key], str(utility_forecast["state"]))
+			utility_sliders[fee_key].tooltip_text = str(utility_forecast["summary"])
+		for service_key in service_fees.keys():
+			var service_forecast := _fiscal_item_forecast("service", service_key)
+			labels["service_%s" % service_key].text = "%s  ● %s" % [_fiscal_display_value("service", service_key, " / %s" % SERVICE_DEFS[service_key]["unit"]), service_forecast["state_text"]]
+			labels["service_%s" % service_key].add_theme_color_override("font_color", service_forecast["color"])
+			_apply_fee_slider_visual(service_sliders[service_key], str(service_forecast["state"]))
+			service_sliders[service_key].tooltip_text = str(service_forecast["summary"])
+	if selected_label != null:
+		selected_label.text = L10n.text("%s　基礎造價 $%d\n%s") % [
+			L10n.text(selected_building),
+			buildings[selected_building]["cost"],
+			_visual_effects(buildings[selected_building], 3)
+		]
+	if report_label != null:
+		report_label.text = _current_month_major_event_summary()
 	if report_details_label != null:
 		report_details_label.text = last_report_details
 	_update_metric_visual("治安", security)
@@ -7442,12 +7474,13 @@ func _update_ui() -> void:
 	_update_city_metric_cards()
 
 	var tax_revenues := _tax_revenues_for(fiscal_tax_values)
-	for tax_key in tax_rates.keys():
-		labels["tax_detail_%s" % tax_key].text = _tax_detail_text(tax_key, tax_revenues[tax_key])
-	for fee_key in utility_fees.keys():
-		labels["utility_detail_%s" % fee_key].text = _utility_detail_text(fee_key, fiscal_utility_values)
-	for service_key in service_fees.keys():
-		labels["service_detail_%s" % service_key].text = _service_detail_text(service_key, fiscal_service_values)
+	if municipal_overlay != null:
+		for tax_key in tax_rates.keys():
+			labels["tax_detail_%s" % tax_key].text = _tax_detail_text(tax_key, tax_revenues[tax_key])
+		for fee_key in utility_fees.keys():
+			labels["utility_detail_%s" % fee_key].text = _utility_detail_text(fee_key, fiscal_utility_values)
+		for service_key in service_fees.keys():
+			labels["service_detail_%s" % service_key].text = _service_detail_text(service_key, fiscal_service_values)
 	var tax_income := _total_tax_income_for(fiscal_tax_values)
 	var business_income := _business_income_for(fiscal_tax_values)
 	var industrial_income := _industrial_income_for(fiscal_tax_values)

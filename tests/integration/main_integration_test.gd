@@ -13,6 +13,7 @@ func _initialize() -> void:
 
 
 func _run() -> void:
+	var ram_profile_only := "--ram-municipal-profile-only" in OS.get_cmdline_user_args()
 	# Headless tests need a deterministic desktop-sized layout reference. This is
 	# deliberately not the visual acceptance test; the capture suite validates the
 	# real fullscreen window separately.
@@ -99,13 +100,7 @@ func _run() -> void:
 			visible_persistent_tabs.append(tab)
 	_check(visible_persistent_tabs.is_empty(), "no persistent TabContainer navigation is visible over the map")
 	_check(main.find_child("FiscalCategoryTabs", true, false) == null, "finance removes the legacy nested fiscal TabContainer")
-	var fiscal_state: Dictionary = main.call("debug_fiscal_draft_state")
-	var fiscal_ui: Dictionary = fiscal_state.get("ui", {})
-	_check(Array(fiscal_ui.get("category_ids", [])).size() == 6, "finance exposes six focused category choices")
-	_check(Array(fiscal_ui.get("plan_ids", [])).size() == 3, "each fiscal category exposes three plan choices")
-	for category_id in ["resident_tax", "industry_tax", "utilities", "environment_energy", "city_services", "education_leisure"]:
-		var fiscal_card := main.find_child("FiscalCategoryCard_%s" % category_id, true, false) as Button
-		_check(fiscal_card != null and fiscal_card.custom_minimum_size.y >= 44.0, "fiscal category '%s' remains a reachable 44px card" % category_id)
+	_check(main.municipal_overlay == null, "finance controls are deferred with the municipal overlay")
 	_check(main.find_child("RightPanel", true, false) == null, "legacy fixed side rail does not exist")
 	_check(main.find_child("ReportPanel", true, false) == null, "legacy fixed report rail does not exist")
 	_check(main.find_child("TopBar", true, false) == null, "legacy fixed TopBar is not instantiated")
@@ -210,15 +205,41 @@ func _run() -> void:
 	for key in ["month", "funds", "population", "satisfaction", "grievance", "trust", "score", "rating"]:
 		var status_rect: Rect2 = main.labels[key].get_global_rect()
 		_check(_rect_inside_viewport(status_rect, viewport_size), "top status '%s' stays inside the viewport" % key)
-	# Modal navigation starts out of the way, then exposes every municipal
-	# destinations through the hub's actual clickable buttons.
-	_check(main.municipal_overlay != null and not main.municipal_overlay.is_open(), "municipal overlay starts closed")
+	# Modal navigation defers the municipal control trees until the player asks
+	# for them. Opening the hub must not run the global UI sync path, because a
+	# pending governance failure would otherwise append a durable report event.
+	var original_grievance: int = main.vertical_slice.governance.grievance
+	main.vertical_slice.governance.grievance = 81
+	_check(main.vertical_slice.governance.failure_reason() == "grievance_above_80", "municipal lazy-open fixture exposes the governance-failure sync hazard")
+	var city_state_before_municipal_open: Dictionary = main.vertical_slice.session.state.to_dict()
+	var report_history_before_municipal_open: Dictionary = main.city_report_history_service.snapshot()
+	_check(main.municipal_overlay == null, "municipal overlay is not instantiated during startup")
 	_check(main.grid_buttons.all(func(button: Button) -> bool: return button.focus_mode == Control.FOCUS_ALL), "every map tile is keyboard focusable")
 	_check(main.get_visible_npc_actors().all(func(button: Button) -> bool: return button.focus_mode == Control.FOCUS_ALL), "every visible resident is keyboard focusable")
+	_emit_ram_municipal_profile_phase("startup_ready", ram_profile_only)
 	main.municipal_button.emit_signal("pressed")
-	await process_frame
-	await process_frame
+	_emit_ram_municipal_profile_phase("first_open_completed", ram_profile_only)
 	_check(main.municipal_overlay.is_open() and main.municipal_overlay.current_page() == "hub", "municipal button opens the hub")
+	var fiscal_state: Dictionary = main.call("debug_fiscal_draft_state")
+	var fiscal_ui: Dictionary = fiscal_state.get("ui", {})
+	_check(Array(fiscal_ui.get("category_ids", [])).size() == 6, "finance exposes six focused category choices")
+	_check(Array(fiscal_ui.get("plan_ids", [])).size() == 3, "each fiscal category exposes three plan choices")
+	for category_id in ["resident_tax", "industry_tax", "utilities", "environment_energy", "city_services", "education_leisure"]:
+		var fiscal_card := main.find_child("FiscalCategoryCard_%s" % category_id, true, false) as Button
+		_check(fiscal_card != null and fiscal_card.custom_minimum_size.y >= 44.0, "fiscal category '%s' remains a reachable 44px card" % category_id)
+	var city_state_after_municipal_open: Dictionary = main.vertical_slice.session.state.to_dict()
+	var report_history_after_municipal_open: Dictionary = main.city_report_history_service.snapshot()
+	_check(city_state_after_municipal_open == city_state_before_municipal_open, "first municipal open does not mutate CityState")
+	_check(report_history_after_municipal_open == report_history_before_municipal_open, "first municipal open does not append a governance event")
+	main.vertical_slice.governance.grievance = original_grievance
+	if ram_profile_only:
+		# The profile ends after the state-preservation assertions. Write its
+		# completion evidence synchronously instead of awaiting a paused-tree frame.
+		_emit_ram_municipal_profile_phase("validation_completed", true)
+		quit()
+		return
+	await process_frame
+	await process_frame
 	_check(main.vertical_slice.is_time_paused() and main.labels["month"].text.ends_with("· 暫停"), "municipal management pauses simulation while the player reads")
 	_check(main.get_visible_npc_actors().all(func(button: Button) -> bool: return button.tooltip_text.is_empty() and button.mouse_filter == Control.MOUSE_FILTER_IGNORE), "modal opening disables resident hover tooltips and pointer input")
 	_check(main.grid_buttons.all(func(button: Button) -> bool: return button.tooltip_text.is_empty() and button.mouse_filter == Control.MOUSE_FILTER_IGNORE), "modal opening disables tile hover tooltips and pointer input")
@@ -887,6 +908,19 @@ func _check(condition: bool, message: String) -> void:
 		return
 	_failed = true
 	push_error("Main integration check failed: %s" % message)
+
+
+func _emit_ram_municipal_profile_phase(phase: String, persist_marker: bool) -> void:
+	print("RAM_MUNICIPAL_PROFILE_PHASE %s" % phase)
+	if not persist_marker:
+		return
+	var marker := FileAccess.open("user://mayor_simulator/tests/ram_municipal_profile_phase.txt", FileAccess.WRITE)
+	if marker == null:
+		push_error("Unable to write RAM profile phase marker: %s" % phase)
+		return
+	marker.store_string(phase)
+	marker.flush()
+	marker.close()
 
 
 func _expected_building_rows(visible_count: int) -> Array:
