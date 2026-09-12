@@ -67,6 +67,32 @@ func _run() -> void:
 	await _settle(2)
 	_check(_draws_after(first.exit_confirmation, first.onboarding_guide), "Exit confirmation opened after the guide retains terminal modal priority")
 	first.exit_confirmation.close()
+	await _click_at(buildings_target.get_global_rect().get_center())
+	await _settle(3)
+	var residence_target := first.onboarding_guide.target_control() as Control
+	if residence_target != null and residence_target.name == "BuildingGroup_housing":
+		await _click_at(residence_target.get_global_rect().get_center())
+		await _settle(3)
+		residence_target = first.onboarding_guide.target_control() as Control
+	_check(residence_target != null and residence_target.name == "BuildingCard_住宅", "guided housing group click advances through the real Residence card")
+	await _click_at(residence_target.get_global_rect().get_center())
+	await _settle(4)
+	var blueprint_target := first.onboarding_guide.target_control() as Control
+	var blueprint_scroll := _scroll_ancestor(blueprint_target)
+	var blueprint_viewport := Rect2(Vector2.ZERO, root.get_visible_rect().size)
+	var target_rect := blueprint_target.get_global_rect() if blueprint_target != null else Rect2()
+	var effective_rect := target_rect.intersection(blueprint_viewport)
+	if blueprint_scroll != null:
+		effective_rect = effective_rect.intersection(blueprint_scroll.get_global_rect())
+	_check(blueprint_target != null and blueprint_target.name == "SubmitBlueprintButton", "Residence selection binds the guide to the real SubmitBlueprintButton")
+	_check(blueprint_scroll != null and blueprint_scroll.scroll_vertical > 0, "product guide scrolls the blueprint ScrollContainer to reveal SubmitBlueprintButton")
+	_check(effective_rect.has_area() and effective_rect.encloses(target_rect), "SubmitBlueprintButton has a complete clickable rect inside its clip viewport")
+	var blueprint_authority_before := _presentation_authority_snapshot(first)
+	await _click_at(blueprint_target.get_global_rect().get_center())
+	await _settle(4)
+	_check(first.placement_mode_active, "real SubmitBlueprintButton click enters placement mode")
+	_check(first.onboarding_progress.receipts().is_empty(), "entering placement from SubmitBlueprintButton creates no build receipt")
+	_check(_presentation_authority_snapshot(first) == blueprint_authority_before, "SubmitBlueprintButton click changes neither date, funds, report history, nor authoritative receipts")
 
 	await TestCleanup.release_fixtures(self, [first])
 	var resumed = _new_main()
@@ -185,6 +211,15 @@ func _presentation_authority_snapshot(main) -> Dictionary:
 		"report_history": main.city_report_history_service.snapshot(),
 		"receipts": main.onboarding_progress.receipts(),
 	}
+
+
+func _scroll_ancestor(control: Control) -> ScrollContainer:
+	var ancestor := control.get_parent() if control != null else null
+	while ancestor != null:
+		if ancestor is ScrollContainer:
+			return ancestor as ScrollContainer
+		ancestor = ancestor.get_parent()
+	return null
 
 
 func _cleanup_save() -> void:

@@ -1686,6 +1686,7 @@ func _refresh_onboarding_guide() -> void:
 		onboarding_guide.invalidate_target()
 		_sync_map_interaction_for_ui()
 		return
+	_ensure_onboarding_target_visible(target)
 	if target is BaseButton and (target as BaseButton).disabled:
 		onboarding_guide.invalidate_target()
 		_sync_map_interaction_for_ui()
@@ -1944,6 +1945,14 @@ func _building_picker_target(building_name: String, group_id: String, family_tab
 func _visible_control_named(control_name: String) -> Control:
 	var node := find_child(control_name, true, false)
 	return node as Control if node is Control and (node as Control).is_visible_in_tree() else null
+
+
+func _ensure_onboarding_target_visible(target: Control) -> void:
+	var ancestor := target.get_parent()
+	while ancestor != null and ancestor != self:
+		if ancestor is ScrollContainer:
+			(ancestor as ScrollContainer).ensure_control_visible(target)
+		ancestor = ancestor.get_parent()
 
 
 func _first_onboarding_grid_target() -> Control:
