@@ -1644,6 +1644,21 @@ func _on_municipal_page_opened(page_id: String) -> void:
 		return
 	if _fiscal_draft_active:
 		_discard_fiscal_draft(false, true)
+	if page_id == "city_data":
+		var fiscal_tax_values: Dictionary = _fiscal_draft_tax_rates if _fiscal_draft_active else tax_rates
+		var fiscal_utility_values: Dictionary = _fiscal_draft_utility_fees if _fiscal_draft_active else utility_fees
+		var fiscal_service_values: Dictionary = _fiscal_draft_service_fees if _fiscal_draft_active else service_fees
+		_refresh_city_data_dashboard(_city_data_finance_snapshot_for(
+			fiscal_tax_values,
+			fiscal_utility_values,
+			fiscal_service_values,
+			_maintenance_cost(),
+			_policy_expense(),
+			_active_law_expense()
+		))
+		if city_data_dashboard != null:
+			city_data_dashboard.restart_animations()
+		return
 	if page_id == "transport_planning":
 		_refresh_transport_planning_panel()
 		return
@@ -1980,8 +1995,6 @@ func _open_city_data() -> void:
 		return
 	_set_map_interaction_enabled(false)
 	overlay.open_page("city_data")
-	if city_data_dashboard != null:
-		city_data_dashboard.restart_animations()
 
 func _open_monthly_report() -> void:
 	_close_building_context()
@@ -3839,6 +3852,34 @@ func _refresh_city_data_dashboard(finance_snapshot: Dictionary) -> void:
 		"resident_groups": group_satisfaction.duplicate(true),
 		"finance": finance_snapshot.duplicate(true),
 	})
+
+
+func _city_data_finance_snapshot_for(
+		fiscal_tax_values: Dictionary,
+		fiscal_utility_values: Dictionary,
+		fiscal_service_values: Dictionary,
+		maintenance: int,
+		policy_expense: int,
+		law_expense: int
+) -> Dictionary:
+	var tax_income := _total_tax_income_for(fiscal_tax_values)
+	var business_income := _business_income_for(fiscal_tax_values)
+	var industrial_income := _industrial_income_for(fiscal_tax_values)
+	var utility_income := _utility_income_for(fiscal_utility_values)
+	var service_income := _service_income_for(fiscal_service_values)
+	var total_income := tax_income + business_income + industrial_income + utility_income + service_income
+	var total_expense := maintenance + policy_expense + law_expense
+	var net_income := tax_income + business_income + industrial_income + utility_income + service_income - maintenance - policy_expense - law_expense
+	return {
+		"tax_income": tax_income,
+		"business_income": business_income,
+		"industrial_income": industrial_income,
+		"utility_income": utility_income,
+		"service_income": service_income,
+		"total_income": total_income,
+		"total_expense": total_expense,
+		"net_income": net_income,
+	}
 
 
 func _update_city_metric_cards() -> void:
@@ -7514,15 +7555,25 @@ func _update_ui() -> void:
 			var service_detail_label := _cached_fiscal_label("service_detail_%s" % service_key)
 			if service_detail_label != null:
 				service_detail_label.text = _service_detail_text(service_key, fiscal_service_values)
-	var tax_income := _total_tax_income_for(fiscal_tax_values)
-	var business_income := _business_income_for(fiscal_tax_values)
-	var industrial_income := _industrial_income_for(fiscal_tax_values)
-	var utility_income := _utility_income_for(fiscal_utility_values)
-	var service_income := _service_income_for(fiscal_service_values)
 	var maintenance := _maintenance_cost()
 	var policy_expense := _policy_expense()
 	var law_expense := _active_law_expense()
-	var net_income := tax_income + business_income + industrial_income + utility_income + service_income - maintenance - policy_expense - law_expense
+	var city_data_finance := _city_data_finance_snapshot_for(
+		fiscal_tax_values,
+		fiscal_utility_values,
+		fiscal_service_values,
+		maintenance,
+		policy_expense,
+		law_expense
+	)
+	var tax_income := int(city_data_finance["tax_income"])
+	var business_income := int(city_data_finance["business_income"])
+	var industrial_income := int(city_data_finance["industrial_income"])
+	var utility_income := int(city_data_finance["utility_income"])
+	var service_income := int(city_data_finance["service_income"])
+	var total_income := int(city_data_finance["total_income"])
+	var total_expense := int(city_data_finance["total_expense"])
+	var net_income := int(city_data_finance["net_income"])
 	if labels.has("income_tax"):
 		labels["income_tax"].text = _tax_detail_text("income", tax_revenues["income"])
 	if labels.has("consumption_tax"):
@@ -7531,18 +7582,7 @@ func _update_ui() -> void:
 		labels["business_tax"].text = _tax_detail_text("business", tax_revenues["business"])
 	if labels.has("industry_tax"):
 		labels["industry_tax"].text = _tax_detail_text("industry", tax_revenues["industry"])
-	var total_income := tax_income + business_income + industrial_income + utility_income + service_income
-	var total_expense := maintenance + policy_expense + law_expense
-	_refresh_city_data_dashboard({
-		"tax_income": tax_income,
-		"business_income": business_income,
-		"industrial_income": industrial_income,
-		"utility_income": utility_income,
-		"service_income": service_income,
-		"total_income": total_income,
-		"total_expense": total_expense,
-		"net_income": net_income,
-	})
+	_refresh_city_data_dashboard(city_data_finance)
 	var income_scale := maxi(1, total_income)
 	var expense_scale := maxi(1, maxi(total_income, total_expense))
 	var safety_buffer := _fiscal_safety_buffer()

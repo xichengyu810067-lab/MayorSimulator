@@ -53,15 +53,63 @@ func _run() -> void:
 			_check(is_equal_approx(chart.baseline_value(), float(previous.get("security", 60))), "period %d compares against period %d" % [expected_period, expected_period - 1])
 			_check(chart.difference_label.text.contains("上月"), "period %d explicitly names the prior-month comparison" % expected_period)
 
+	await TestCleanup.release_fixtures(self, [main])
+	var hub_main = packed.instantiate()
+	root.add_child(hub_main)
+	await _settle(3)
+	hub_main.security = 45
+	hub_main.call("_settle_month", false)
+	await _settle(2)
+	_check(hub_main.municipal_overlay == null, "municipal overlay remains lazy before its first hub visit")
+	_check(hub_main.city_data_dashboard == null, "city data dashboard remains lazy after settlement")
+	var authority_before := _authority_snapshot(hub_main)
+	hub_main.municipal_button.pressed.emit()
+	_check(
+		hub_main.municipal_overlay != null and hub_main.municipal_overlay.current_page() == "hub",
+		"municipal button opens the fresh hub before direct city-data navigation"
+	)
+	var city_data_button: Button = null
+	if hub_main.municipal_overlay != null:
+		city_data_button = hub_main.municipal_overlay.find_child(
+			"%sButton" % "city_data".capitalize(),
+			true,
+			false
+		) as Button
+	_check(city_data_button != null and not city_data_button.disabled, "fresh hub exposes its enabled city-data destination")
+	if city_data_button != null:
+		city_data_button.pressed.emit()
+	_check(
+		hub_main.municipal_overlay != null and hub_main.municipal_overlay.current_page() == "city_data",
+		"fresh hub card reaches city data through page_opened"
+	)
+	var hub_chart = hub_main.monthly_data_service_charts.get("security")
+	_check(hub_chart != null, "fresh hub navigation builds the security donut")
+	if hub_chart != null:
+		_check(hub_chart.safety_warning_label.text.contains("連續 1 月"), "fresh hub navigation refreshes the first unsafe month")
+		_check(str(hub_chart.get_meta("safety_warning_severity", "")) == "caution", "fresh hub navigation refreshes first-period severity")
+		_check(is_equal_approx(hub_chart.baseline_value(), 60.0), "fresh hub navigation keeps the first-period safety baseline")
+		_check(hub_chart.difference_label.text.contains("低於安全線"), "fresh hub navigation reports the first-period safety gap")
+	await _settle(1)
+	_check(_authority_snapshot(hub_main) == authority_before, "opening city data preserves simulation, history, and governance authority")
+
 	var exit_code := 1 if _failed else 0
 	if not _failed:
 		print("%s Checks=%d" % [SUCCESS_MARKER, _checks])
-	await TestCleanup.finish(self, [main], exit_code)
+	await TestCleanup.finish(self, [hub_main], exit_code)
 
 
 func _settle(frames: int) -> void:
 	for _frame in range(frames):
 		await process_frame
+
+
+func _authority_snapshot(main) -> Dictionary:
+	return {
+		"funds": int(main.funds),
+		"game_day": int(main.vertical_slice.game_day()),
+		"monthly_report_history": main.monthly_report_history.duplicate(true),
+		"governance": main.vertical_slice.governance.to_dict(),
+	}
 
 
 func _check(condition: bool, message: String) -> void:
