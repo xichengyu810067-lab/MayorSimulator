@@ -94,7 +94,7 @@ func _run() -> void:
 	_check(first.onboarding_progress.receipts().is_empty(), "entering placement from SubmitBlueprintButton creates no build receipt")
 	_check(_presentation_authority_snapshot(first) == blueprint_authority_before, "SubmitBlueprintButton click changes neither date, funds, report history, nor authoritative receipts")
 	var placement_target := first.onboarding_guide.target_control() as Button
-	var placement_index := first.grid_buttons.find(placement_target)
+	var placement_index: int = first.grid_buttons.find(placement_target)
 	var placement_workers: int = int(first.vertical_slice_panel.selected_worker_count()) if first.vertical_slice_panel != null else 5
 	var placement_quote: Dictionary = first.vertical_slice.placement_footprint_quote(first.placement_building_name, placement_index, placement_workers)
 	var placement_viewport := Rect2(Vector2.ZERO, root.get_visible_rect().size)
