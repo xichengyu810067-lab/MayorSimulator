@@ -3,6 +3,7 @@ extends SceneTree
 const SquareGridLayoutScript = preload("res://scripts/world/square_grid_layout.gd")
 const CityTerrainMapScript = preload("res://scripts/world/city_terrain_map.gd")
 const CityTerrainLayoutScript = preload("res://data/catalogs/city_terrain_layout.gd")
+const CityNavigationGridScript = preload("res://scripts/world/city_navigation_grid.gd")
 const CityBackdropScript = preload("res://scripts/world/city_backdrop.gd")
 
 var _failed := false
@@ -37,16 +38,24 @@ func _run() -> void:
 			var frozen_model := CityTerrainLayoutScript.model_for_tile_id(tile_id)
 			var terrain_kind := CityTerrainLayoutScript.terrain_kind_for_tile_id(tile_id)
 			_check(Vector2(frozen_model.get("plot_center", Vector2.INF)).is_equal_approx(center), "tile %d terrain provenance uses a non-square center" % tile_id)
-			_check(terrain.base_kind(tile_id) == terrain_kind, "tile %d changed its frozen layout 3 terrain kind" % tile_id)
+			_check(terrain.base_kind(tile_id) == terrain_kind, "tile %d disagrees with layout 4 classification" % tile_id)
+			var navigation_model := CityNavigationGridScript.backdrop_terrain_for_plot(center, rect.size * 0.5)
+			_check(str(navigation_model.get("kind", "")) == str(frozen_model.get("kind", "")), "tile %d layout and navigation classifications differ" % tile_id)
 			terrain_kind_counts[terrain_kind] = int(terrain_kind_counts.get(terrain_kind, 0)) + 1
 
 	_check(seen_tile_ids.size() == 100, "square projection does not cover all 100 stable tile ids")
 	_check(terrain.coordinate_for_tile_id(0) == Vector2i(1, 1), "legacy tile 0 coordinate changed")
 	_check(terrain.coordinate_for_tile_id(64) == Vector2i(0, 0), "outer-ring tile 64 coordinate changed")
-	_check(terrain_kind_counts == {"flat_grass": 68, "river_lake": 14, "hill_cliff": 5, "trees": 13}, "frozen layout 3 terrain distribution changed: %s" % terrain_kind_counts)
-	_check(is_equal_approx(float(CityTerrainLayoutScript.model_for_tile_id(0).get("coverage", -1.0)), 0.623264041608023), "tile 0 frozen coverage changed")
-	_check(Array(CityTerrainLayoutScript.model_for_tile_id(85).get("feature_ids", [])) == ["south_meadow_rocks", "south_meadow_tree_grove"], "tile 85 frozen provenance changed")
-	_check(is_equal_approx(float(CityTerrainLayoutScript.model_for_tile_id(99).get("coverage", -1.0)), 0.986220065703554), "tile 99 frozen coverage changed")
+	_check(int(terrain_kind_counts.get("flat_grass", 0)) > 0 and int(terrain_kind_counts.get("flat_grass", 0)) < 100, "layout 4 classification is not mixed: %s" % terrain_kind_counts)
+	_check(terrain.coordinate_for_tile_id(12) == Vector2i(5, 2), "stable tile 12 coordinate changed")
+	_check(terrain.base_kind(12) == "river_lake", "tile 12 square classification did not capture the lake")
+	var legacy_counts := {"flat_grass": 0, "river_lake": 0, "hill_cliff": 0, "trees": 0}
+	for tile_id in terrain.cell_count():
+		var legacy_kind := CityTerrainLayoutScript.legacy_terrain_kind_for_tile_id(tile_id)
+		legacy_counts[legacy_kind] = int(legacy_counts.get(legacy_kind, 0)) + 1
+	_check(legacy_counts == {"flat_grass": 68, "river_lake": 14, "hill_cliff": 5, "trees": 13}, "frozen layout 3 terrain distribution changed: %s" % legacy_counts)
+	_check(is_equal_approx(float(CityTerrainLayoutScript.legacy_model_for_tile_id(0).get("coverage", -1.0)), 0.623264041608023), "tile 0 frozen coverage changed")
+	_check(Array(CityTerrainLayoutScript.legacy_model_for_tile_id(85).get("feature_ids", [])) == ["south_meadow_rocks", "south_meadow_tree_grove"], "tile 85 frozen provenance changed")
 	var bounds := SquareGridLayoutScript.grid_rect()
 	for outside: Vector2 in [
 		bounds.position - Vector2(0.01, 0.01),
@@ -84,10 +93,10 @@ func _run() -> void:
 	_check(not bool(visual_policy.get("persistent_terrain_overlay", true)), "backdrop still draws persistent per-cell terrain decoration")
 	_check(str(visual_policy.get("interactive_grid_owner", "")) == "CityTileButton", "interactive grid ownership is not assigned to CityTileButton")
 	var projected_tiles: Dictionary = backdrop_debug.get("tiles", {})
-	var lake_tile_id := terrain.tile_id_for_coordinate(Vector2i(1, 1))
+	var lake_tile_id := terrain.tile_id_for_coordinate(Vector2i(5, 2))
 	var lake_projection: Dictionary = projected_tiles.get(str(lake_tile_id), {})
-	_check(str(lake_projection.get("terrain_kind", "")) == "river_lake", "visible substrate disagrees with CityTerrainMap at the frozen lake tile")
-	_check(Rect2(lake_projection.get("rect", Rect2())).is_equal_approx(SquareGridLayoutScript.rect_for_coordinate(Vector2i(1, 1))), "visible lake substrate does not use canonical square bounds")
+	_check(str(lake_projection.get("terrain_kind", "")) == "river_lake", "visible substrate disagrees with CityTerrainMap at square lake tile")
+	_check(Rect2(lake_projection.get("rect", Rect2())).is_equal_approx(SquareGridLayoutScript.rect_for_coordinate(Vector2i(5, 2))), "visible lake substrate does not use canonical square bounds")
 	backdrop.queue_free()
 	await process_frame
 

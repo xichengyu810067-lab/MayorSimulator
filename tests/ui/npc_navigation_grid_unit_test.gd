@@ -73,15 +73,16 @@ func _validate_square_layout_terrain(navigation) -> void:
 		var model := CityTerrainLayoutScript.model_for_tile_id(tile_id)
 		var center := Vector2(model.get("plot_center", Vector2.INF))
 		var blocked := CityTerrainLayoutScript.is_blocked_tile_id(tile_id)
-		_check(center != Vector2.INF, "layout 3 tile %d lacks a square center" % tile_id)
-		_check(navigation.is_position_walkable(center) != blocked, "layout 3 tile %d walkability disagrees with its frozen terrain kind" % tile_id)
+		_check(center != Vector2.INF, "layout 4 tile %d lacks a square center" % tile_id)
+		_check(navigation.is_position_walkable(center) != blocked, "layout 4 tile %d walkability disagrees with its terrain kind" % tile_id)
 		var classifications: PackedStringArray = navigation.static_classification_at(center)
 		if blocked:
 			blocked_count += 1
-			_check(classifications.has(str(model.get("kind", ""))), "layout 3 tile %d lacks its frozen static classification" % tile_id)
+			_check(classifications.has(str(model.get("kind", ""))), "layout 4 tile %d lacks its static classification" % tile_id)
 		else:
-			_check(classifications.is_empty(), "flat layout 3 tile %d inherited non-square scenery" % tile_id)
-	_check(blocked_count == 32, "frozen layout 3 static blocker count changed")
+			_check(classifications.is_empty(), "flat layout 4 tile %d inherited natural scenery" % tile_id)
+	_check(blocked_count > 0 and blocked_count < CityTerrainLayoutScript.CELL_COUNT, "layout 4 static blocker count is not mixed")
+	_check(CityTerrainLayoutScript.terrain_kind_for_tile_id(12) == "river_lake", "layout 4 tile 12 is not river/lake")
 
 
 func _validate_landmarks(navigation) -> void:
@@ -262,7 +263,7 @@ func _validate_corner_safety(navigation) -> void:
 
 
 func _validate_nearest_and_no_route(navigation) -> void:
-	var unsafe_lake_point := SquareGridLayoutScript.center_for_coordinate(Vector2i(1, 1))
+	var unsafe_lake_point := SquareGridLayoutScript.center_for_coordinate(Vector2i(5, 2))
 	var nearest_variant: Variant = navigation.nearest_safe_position(unsafe_lake_point, 160.0)
 	_check(nearest_variant != null, "nearest-safe lookup failed near the lake")
 	if nearest_variant != null:

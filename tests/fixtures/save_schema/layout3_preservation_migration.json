@@ -59,7 +59,7 @@
 		},
 		"metadata": {
 			"vertical_slice": {
-				"schema_version": 12,
+				"schema_version": 11,
 				"construction": {
 					"schema_version": 1,
 					"seed": 8024611,
@@ -164,8 +164,7 @@
 				},
 				"terrain": {
 					"schema_version": 1,
-					"layout_version": 4,
-					"classification_provenance": "preserved_layout_3",
+					"layout_version": 3,
 					"grid_columns": 10,
 					"grid_rows": 10,
 					"tiles": [

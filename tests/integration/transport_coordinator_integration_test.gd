@@ -2,6 +2,7 @@ extends SceneTree
 
 const CoordinatorScript = preload("res://scripts/app/vertical_slice_coordinator.gd")
 const CityTerrainMapScript = preload("res://scripts/world/city_terrain_map.gd")
+const SaveSchemaAuthorityScript = preload("res://scripts/core/save_schema_authority.gd")
 
 const CURRENT_SAVE_PATH := "user://goal_2026_08_01/transport_coordinator_round_trip.json"
 const LEGACY_SAVE_PATH := "user://goal_2026_08_01/transport_coordinator_schema5.json"
@@ -89,8 +90,8 @@ func _validate_project_route_and_current_round_trip() -> void:
 	_check(bool(enabled.get("ok", false)) and str(enabled.get("route", {}).get("status", "")) == "operational", "valid route must resume operation")
 
 	var save_error: Error = coordinator.save_game(CURRENT_SAVE_PATH)
-	_check(save_error == OK, "schema 11 transport save must succeed: %s" % coordinator.session.save_service.last_error_message)
-	_check(int(coordinator.session.state.metadata.get("vertical_slice", {}).get("schema_version", 0)) == 11, "current save must use vertical-slice schema 11")
+	_check(save_error == OK, "current-schema transport save must succeed: %s" % coordinator.session.save_service.last_error_message)
+	_check(int(coordinator.session.state.metadata.get("vertical_slice", {}).get("schema_version", 0)) == SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION, "current save must use the authority vertical-slice schema")
 	var restored = CoordinatorScript.new(1, 1)
 	_check(restored.load_game(CURRENT_SAVE_PATH), "schema 11 transport save must load")
 	_check(restored.transport.segments.size() == 1 and restored.transport.facilities.size() == 1, "transport infrastructure must survive save/load")
@@ -124,6 +125,7 @@ func _validate_schema_five_station_migration() -> void:
 	legacy.call("_stash_subsystems")
 	var vertical: Dictionary = legacy.session.state.metadata.get("vertical_slice", {}).duplicate(true)
 	vertical["schema_version"] = 5
+	vertical.erase("terrain")
 	legacy.session.state.metadata["vertical_slice"] = vertical
 	_check(legacy.session.save_now(LEGACY_SAVE_PATH) == OK, "schema 5 save with an untrusted future transport field must remain loadable as legacy data")
 	var migrated = CoordinatorScript.new(2, 2)
@@ -140,6 +142,7 @@ func _validate_schema_six_rejects_malformed_transport() -> void:
 	malformed["segments"] = []
 	vertical["transport"] = malformed
 	vertical["schema_version"] = 6
+	vertical.erase("terrain")
 	coordinator.session.state.metadata["vertical_slice"] = vertical
 	_check(
 		coordinator.session.save_now(INVALID_SAVE_PATH) == ERR_INVALID_DATA,

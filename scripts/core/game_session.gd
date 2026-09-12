@@ -221,10 +221,9 @@ func _migrate_state_snapshot_to_current_pair(state_snapshot: Dictionary) -> Dict
 	metadata["vertical_slice"] = vertical
 	migrated_state["metadata"] = metadata
 	var footprints_migrated := bool(footprint_migration.get("migrated", false))
-	# Schemas four through six remain direct-read compatible because they do not
-	# contain enough current subsystem state to synthesize schema eleven safely.
-	# Their building records are normalized now and the coordinator writes schema
-	# eleven on the next save without guessing any historical footprint size.
+	# Schemas four through six keep their source schema because they lack enough
+	# subsystem state to claim the current writer contract. Terrain is attached
+	# below as a validated compatibility snapshot without changing that schema.
 	if schema_version >= 6 and schema_version < SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION:
 		var transport_value: Variant = vertical.get("transport", null)
 		if not transport_value is Dictionary:
@@ -235,13 +234,44 @@ func _migrate_state_snapshot_to_current_pair(state_snapshot: Dictionary) -> Dict
 		vertical["transport"] = migrated_transport
 		metadata["vertical_slice"] = vertical
 		migrated_state["metadata"] = metadata
+	var terrain_value: Variant = vertical.get("terrain", null)
 	if schema_version < SaveSchemaAuthorityScript.LEGACY_MIGRATION_VERTICAL_SCHEMA_VERSION:
+		var compat_terrain: Dictionary = {}
+		if terrain_value == null:
+			compat_terrain = CityTerrainMapScript.synthesized_layout3_compat_snapshot()
+		elif terrain_value is Dictionary:
+			var direct_terrain: Dictionary = terrain_value
+			var direct_layout_value: Variant = direct_terrain.get("layout_version", null)
+			if not _is_integer_value(direct_layout_value):
+				return {"ok": false, "migrated": false, "state": {}}
+			var direct_layout := int(direct_layout_value)
+			if direct_layout == SaveSchemaAuthorityScript.FROZEN_TERRAIN_LAYOUT_VERSION:
+				compat_terrain = CityTerrainMapScript.migrate_snapshot_to_current(direct_terrain)
+			elif direct_layout == SaveSchemaAuthorityScript.CURRENT_TERRAIN_LAYOUT_VERSION:
+				var direct_validation := CityTerrainMapScript.validate_snapshot(direct_terrain)
+				var direct_provenance := str(direct_terrain.get("classification_provenance", ""))
+				if (
+					bool(direct_validation.get("valid", false))
+					and direct_provenance in [
+						CityTerrainMapScript.PROVENANCE_PRESERVED_LAYOUT_3,
+						CityTerrainMapScript.PROVENANCE_SYNTHESIZED_LAYOUT_3_COMPAT,
+					]
+				):
+					compat_terrain = direct_terrain.duplicate(true)
+			else:
+				return {"ok": false, "migrated": false, "state": {}}
+		else:
+			return {"ok": false, "migrated": false, "state": {}}
+		if compat_terrain.is_empty():
+			return {"ok": false, "migrated": false, "state": {}}
+		vertical["terrain"] = compat_terrain
+		metadata["vertical_slice"] = vertical
+		migrated_state["metadata"] = metadata
 		return {
 			"ok": true,
-			"migrated": footprints_migrated or schema_version >= 6,
+			"migrated": true,
 			"state": migrated_state,
 		}
-	var terrain_value: Variant = vertical.get("terrain", null)
 	if not terrain_value is Dictionary:
 		return {"ok": false, "migrated": false, "state": {}}
 	var terrain: Dictionary = terrain_value
@@ -251,6 +281,24 @@ func _migrate_state_snapshot_to_current_pair(state_snapshot: Dictionary) -> Dict
 	var layout_version := int(layout_value)
 	if SaveSchemaAuthorityScript.validate_vertical_terrain_pair(schema_version, layout_version):
 		return {"ok": true, "migrated": footprints_migrated, "state": migrated_state}
+	var accepted_migration_pair := (
+		SaveSchemaAuthorityScript.is_legacy_migration_pair(schema_version, layout_version)
+		or SaveSchemaAuthorityScript.is_footprint_migration_pair(schema_version, layout_version)
+		or SaveSchemaAuthorityScript.is_transport_session_migration_pair(schema_version, layout_version)
+		or SaveSchemaAuthorityScript.is_transport_reuse_migration_pair(schema_version, layout_version)
+		or SaveSchemaAuthorityScript.is_layout3_preservation_migration_pair(schema_version, layout_version)
+	)
+	if not accepted_migration_pair:
+		return {"ok": false, "migrated": false, "state": {}}
+	var migrated_terrain := CityTerrainMapScript.migrate_snapshot_to_current(terrain)
+	if migrated_terrain.is_empty():
+		return {"ok": false, "migrated": false, "state": {}}
+	vertical["terrain"] = migrated_terrain
+	if SaveSchemaAuthorityScript.is_layout3_preservation_migration_pair(schema_version, layout_version):
+		vertical["schema_version"] = SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION
+		metadata["vertical_slice"] = vertical
+		migrated_state["metadata"] = metadata
+		return {"ok": true, "migrated": true, "state": migrated_state}
 	if SaveSchemaAuthorityScript.is_transport_reuse_migration_pair(schema_version, layout_version):
 		var planning_value: Variant = vertical.get("transport_planning_session", null)
 		if not planning_value is Dictionary:
@@ -275,13 +323,7 @@ func _migrate_state_snapshot_to_current_pair(state_snapshot: Dictionary) -> Dict
 		metadata["vertical_slice"] = vertical
 		migrated_state["metadata"] = metadata
 		return {"ok": true, "migrated": true, "state": migrated_state}
-	if not SaveSchemaAuthorityScript.is_legacy_migration_pair(schema_version, layout_version):
-		return {"ok": false, "migrated": false, "state": {}}
-	var migrated_terrain := CityTerrainMapScript.migrate_snapshot_to_current(terrain)
-	if migrated_terrain.is_empty():
-		return {"ok": false, "migrated": false, "state": {}}
 	vertical["schema_version"] = SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION
-	vertical["terrain"] = migrated_terrain
 	vertical["transport_planning_session"] = TransportPlanningSessionScript.inactive_snapshot()
 	metadata["vertical_slice"] = vertical
 	migrated_state["metadata"] = metadata

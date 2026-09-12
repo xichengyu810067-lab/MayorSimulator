@@ -38,6 +38,10 @@ func _run() -> void:
 	_check(main.GRID_CELL_SIZE == Vector2(70, 70), "visible map does not use the canonical square cell size")
 	_check(main.vertical_slice.terrain_map.coordinate_for_tile_id(0) == Vector2i(1, 1), "legacy tile 0 did not keep its stable central coordinate")
 	_check(main.vertical_slice.terrain_map.coordinate_for_tile_id(64) == Vector2i(0, 0), "new outer-ring tile 64 is not mapped to the expanded edge")
+	_check(main.vertical_slice.terrain_map.coordinate_for_tile_id(12) == Vector2i(5, 2), "stable tile 12 coordinate changed")
+	_check(main.vertical_slice.terrain_map.base_kind(12) == "river_lake", "new city tile 12 did not use square backdrop classification")
+	_check(not main.vertical_slice.terrain_map.is_buildable(12) and not main.vertical_slice.terrain_map.is_walkable(12), "new city tile 12 is not blocked")
+	_check(str(main.vertical_slice.terrain_snapshot().get("classification_provenance", "")) == "backdrop_square_layout_4", "new city terrain lacks square-layout provenance")
 	for kind: String in ["trees", "hill_cliff", "river_lake"]:
 		var found := false
 		for state_variant: Variant in main.vertical_slice.terrain_map.all_tile_states():

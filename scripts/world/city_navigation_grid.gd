@@ -113,10 +113,11 @@ static func backdrop_tile_center(coordinate: Vector2i) -> Vector2:
 
 
 static func backdrop_terrain_for_plot(center: Vector2, half_extents: Vector2) -> Dictionary:
-	var plot := _diamond_points(center, half_extents)
+	var plot := _rect_points(center, half_extents)
 	var plot_area := maxf(1.0, _polygon_area(plot))
 	var coverage_by_kind: Dictionary = {}
 	var feature_ids_by_kind: Dictionary = {}
+	var kind_order := PackedStringArray()
 	for polygon_data: Dictionary in _create_static_polygons():
 		var overlap_area := 0.0
 		for intersection: PackedVector2Array in Geometry2D.intersect_polygons(
@@ -127,15 +128,16 @@ static func backdrop_terrain_for_plot(center: Vector2, half_extents: Vector2) ->
 		if coverage < BACKDROP_MIN_PLOT_COVERAGE:
 			continue
 		var kind := str(polygon_data.get("kind", ""))
+		if not coverage_by_kind.has(kind):
+			kind_order.append(kind)
 		coverage_by_kind[kind] = float(coverage_by_kind.get(kind, 0.0)) + coverage
 		var ids: Array = Array(feature_ids_by_kind.get(kind, [])).duplicate()
 		ids.append(str(polygon_data.get("id", "")))
 		feature_ids_by_kind[kind] = ids
 	var winning_kind := "flat_grass"
 	var winning_coverage := 0.0
-	for kind_variant: Variant in coverage_by_kind.keys():
-		var kind := str(kind_variant)
-		var coverage := float(coverage_by_kind[kind_variant])
+	for kind: String in kind_order:
+		var coverage := float(coverage_by_kind[kind])
 		if coverage > winning_coverage:
 			winning_kind = kind
 			winning_coverage = coverage
@@ -353,6 +355,12 @@ func sync_map_tile_blockers(
 ) -> void:
 	# Replace the complete map-owned blocker set in one A* refresh. Custom
 	# diagnostic/gameplay blockers remain untouched.
+	# Once an authoritative terrain snapshot is loaded, its tile blockers own
+	# natural navigation. The startup backdrop polygons must not leak layout 4
+	# classification into preserved legacy terrain.
+	if not _static_polygons.is_empty():
+		_static_polygons.clear()
+		_rebuild_static_solidity()
 	var retained: Dictionary = {}
 	for blocker_id_variant: Variant in _dynamic_blockers.keys():
 		var blocker_id := str(blocker_id_variant)
@@ -870,7 +878,7 @@ static func _create_layout_terrain_polygons() -> Array[Dictionary]:
 			continue
 		var half_extents := SquareGridLayoutScript.CELL_SIZE * 0.5
 		polygons.append({
-			"id": "terrain_layout3:%d" % tile_id,
+			"id": "terrain_layout4:%d" % tile_id,
 			"kind": str(model.get("kind", "terrain")),
 			"tile_index": tile_id,
 			"center": center,

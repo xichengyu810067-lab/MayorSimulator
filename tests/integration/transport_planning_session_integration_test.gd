@@ -5,6 +5,7 @@ const TransportModesScript = preload("res://data/catalogs/transport_modes.gd")
 const CityTerrainMapScript = preload("res://scripts/world/city_terrain_map.gd")
 const SaveSchemaAuthorityScript = preload("res://scripts/core/save_schema_authority.gd")
 const TransportPlanningSessionScript = preload("res://scripts/systems/city/transport_planning_session.gd")
+const LAYOUT3_PRESERVATION_FIXTURE_PATH := "res://tests/fixtures/save_schema/layout3_preservation_migration.json"
 
 const SAVE_PATH := "user://w4_transport_planning_session_round_trip.json"
 
@@ -397,13 +398,21 @@ func _test_schema_nine_migrates_inactive_and_schema_eleven_fails_closed() -> voi
 	source.call("_stash_subsystems")
 	var legacy_envelope = source.session.make_envelope()
 	var legacy_vertical: Dictionary = legacy_envelope.state.get("metadata", {}).get("vertical_slice", {}).duplicate(true)
+	var layout3_fixture: Variant = JSON.parse_string(FileAccess.get_file_as_string(LAYOUT3_PRESERVATION_FIXTURE_PATH))
+	var layout3_terrain: Dictionary = layout3_fixture.get("state", {}).get("metadata", {}).get("vertical_slice", {}).get("terrain", {}) if layout3_fixture is Dictionary else {}
+	_check(not layout3_terrain.is_empty(), "schema 9 candidate has immutable layout 3 terrain")
+	if layout3_terrain.is_empty():
+		return
 	legacy_vertical["schema_version"] = 9
+	legacy_vertical["terrain"] = layout3_terrain.duplicate(true)
 	legacy_vertical.erase("transport_planning_session")
 	legacy_envelope.state["metadata"]["vertical_slice"] = legacy_vertical
 	var migrated = CoordinatorScript.new(2, 2)
 	_check(migrated.session.restore_envelope(legacy_envelope), "schema 9 migrates through the explicit session boundary")
 	var migrated_vertical: Dictionary = migrated.session.state.metadata.get("vertical_slice", {})
-	_check(int(migrated_vertical.get("schema_version", -1)) == 11, "schema 9 migrates to schema 11")
+	_check(int(migrated_vertical.get("schema_version", -1)) == SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION, "schema 9 migrates to the current authority schema")
+	_check(int(migrated_vertical.get("terrain", {}).get("layout_version", -1)) == SaveSchemaAuthorityScript.CURRENT_TERRAIN_LAYOUT_VERSION, "schema 9 migrates to the current authority terrain layout")
+	_check(str(migrated_vertical.get("terrain", {}).get("classification_provenance", "")) == CityTerrainMapScript.PROVENANCE_PRESERVED_LAYOUT_3, "schema 9 migration preserves layout 3 provenance")
 	_check(str(migrated_vertical.get("transport_planning_session", {}).get("session", {}).get("state", "")) == "inactive", "schema 9 migration creates no active session")
 
 	var corrupt = CoordinatorScript.new(20_260_904, 500_000)
@@ -411,12 +420,12 @@ func _test_schema_nine_migrates_inactive_and_schema_eleven_fails_closed() -> voi
 	var corrupt_vertical: Dictionary = corrupt.session.state.metadata.get("vertical_slice", {}).duplicate(true)
 	corrupt_vertical.erase("transport_planning_session")
 	corrupt.session.state.metadata["vertical_slice"] = corrupt_vertical
-	_check(corrupt.session.save_now("user://w4_corrupt_missing_session.json") == ERR_INVALID_DATA, "schema 11 missing session fails closed")
+	_check(corrupt.session.save_now("user://w4_corrupt_missing_session.json") == ERR_INVALID_DATA, "current schema missing session fails closed")
 	corrupt.call("_stash_subsystems")
 	corrupt_vertical = corrupt.session.state.metadata.get("vertical_slice", {}).duplicate(true)
 	corrupt_vertical["transport_planning_session"]["session"] = {"state": "invented"}
 	corrupt.session.state.metadata["vertical_slice"] = corrupt_vertical
-	_check(corrupt.session.save_now("user://w4_corrupt_bad_session.json") == ERR_INVALID_DATA, "schema 11 malformed session fails closed")
+	_check(corrupt.session.save_now("user://w4_corrupt_bad_session.json") == ERR_INVALID_DATA, "current schema malformed session fails closed")
 	var corrupt_reference = CoordinatorScript.new(20_260_906, 500_000)
 	corrupt_reference.terrain_map = CityTerrainMapScript.new()
 	_check(bool(corrupt_reference.begin_transport_planning_session("公車站").get("ok", false)), "corrupt reference fixture begins session")
@@ -425,8 +434,8 @@ func _test_schema_nine_migrates_inactive_and_schema_eleven_fails_closed() -> voi
 	var reference_vertical: Dictionary = corrupt_reference.session.state.metadata.get("vertical_slice", {}).duplicate(true)
 	reference_vertical["transport_planning_session"]["session"]["station_refs"][0]["job_id"] = "missing_job"
 	corrupt_reference.session.state.metadata["vertical_slice"] = reference_vertical
-	_check(corrupt_reference.session.save_now("user://w4_corrupt_missing_job_ref.json") == ERR_INVALID_DATA, "schema 11 dangling session job reference fails closed")
-	_check(SaveSchemaAuthorityScript.validate_vertical_terrain_pair(11, 3), "schema 11 remains paired with terrain layout 3")
+	_check(corrupt_reference.session.save_now("user://w4_corrupt_missing_job_ref.json") == ERR_INVALID_DATA, "current schema dangling session job reference fails closed")
+	_check(SaveSchemaAuthorityScript.validate_vertical_terrain_pair(SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION, SaveSchemaAuthorityScript.CURRENT_TERRAIN_LAYOUT_VERSION), "current authority schema remains paired with current terrain layout")
 
 
 func _test_close_does_not_cancel_authoritative_construction() -> void:

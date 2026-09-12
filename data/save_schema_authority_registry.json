@@ -6,8 +6,8 @@
     "writer_allowed": true,
     "save_envelope_schema_version": 1,
     "city_state_schema_version": 2,
-    "vertical_slice_schema_version": 11,
-    "terrain_layout_version": 3,
+    "vertical_slice_schema_version": 12,
+    "terrain_layout_version": 4,
     "population_schema_version": 2,
     "npc_record_schema_version": 2,
     "transport_network_schema_version": 2,
@@ -16,8 +16,8 @@
   "version_ceiling": {
     "save_envelope_schema_version": 1,
     "city_state_schema_version": 2,
-    "vertical_slice_schema_version": 11,
-    "terrain_layout_version": 3,
+    "vertical_slice_schema_version": 12,
+    "terrain_layout_version": 4,
     "population_schema_version": 2,
     "npc_record_schema_version": 2,
     "transport_network_schema_version": 2,
@@ -40,17 +40,17 @@
     },
     {
       "component": "vertical_slice",
-      "current_version": 11,
-      "max_supported_version": 11,
-      "supported_read_versions": [4, 5, 6, 7, 8, 9, 10, 11],
-      "compatibility": "unsupported_0_to_3_direct_read_then_write_11_for_4_to_6_migration_7_2_8_3_9_3_and_10_3_current_11_3"
+      "current_version": 12,
+      "max_supported_version": 12,
+      "supported_read_versions": [4, 5, 6, 7, 8, 9, 10, 11, 12],
+      "compatibility": "unsupported_0_to_3_direct_read_4_to_6_migration_7_2_and_8_to_11_layout_3_current_12_4"
     },
     {
       "component": "terrain_layout",
-      "current_version": 3,
-      "max_supported_version": 3,
-      "supported_read_versions": [2, 3],
-      "compatibility": "migration_pair_2_current_3"
+      "current_version": 4,
+      "max_supported_version": 4,
+      "supported_read_versions": [2, 3, 4],
+      "compatibility": "migration_pairs_2_and_3_current_4_with_provenance"
     },
     {
       "component": "population",
@@ -121,6 +121,12 @@
     {
       "vertical_slice_schema_versions": [11],
       "terrain_layout_version": 3,
+      "status": "layout3_preservation_migration_input",
+      "writer_allowed": false
+    },
+    {
+      "vertical_slice_schema_versions": [12],
+      "terrain_layout_version": 4,
       "status": "current",
       "writer_allowed": true
     }
@@ -129,12 +135,22 @@
     {
       "id": "current_round_trip",
       "path": "res://tests/fixtures/save_schema/current_round_trip.json",
-      "behavior": "current_11_round_trip_population_building_footprints_and_transport_reuse_contracts"
+      "behavior": "current_12_layout_4_round_trip_with_classification_provenance"
+    },
+    {
+      "id": "layout3_preservation_migration",
+      "path": "res://tests/fixtures/save_schema/layout3_preservation_migration.json",
+      "behavior": "frozen_current_11_layout_3_migrates_without_reclassification"
+    },
+    {
+      "id": "legacy_terrain_characterization",
+      "path": "res://tests/fixtures/save_schema/legacy_terrain_characterization.json",
+      "behavior": "immutable_phase_a_legacy_domain_golden_with_lineage_hashes"
     },
     {
       "id": "supported_legacy_migration",
       "path": "res://tests/fixtures/save_schema/supported_legacy_migration.json",
-      "behavior": "city_state_1_mirror_match_to_2_and_vertical_7_layout_2_to_11_layout_3_single_footprints_inactive_transport_session"
+      "behavior": "city_state_1_mirror_match_to_2_and_vertical_7_layout_2_to_12_layout_4_preserved_single_footprints"
     },
     {
       "id": "future_reject",
@@ -149,7 +165,7 @@
     {
       "id": "oldest_supported_vertical_4",
       "path": "res://tests/fixtures/save_schema/oldest_supported_vertical_4.json",
-      "behavior": "oldest_supported_vertical_4_direct_read_then_write_11_single_footprints_inactive_transport_session"
+      "behavior": "oldest_supported_vertical_4_direct_read_with_synthesized_layout_3_compat"
     },
     {
       "id": "unsupported_vertical_3",
@@ -159,7 +175,7 @@
     {
       "id": "route_package_v1_transport",
       "path": "res://tests/fixtures/save_schema/route_package_v1_transport.json",
-      "behavior": "vertical_10_transport_1_planning_1_to_11_2_2_preserve_v1_quote"
+      "behavior": "vertical_10_layout_3_transport_1_planning_1_to_12_layout_4_preserve_v1_quote"
     }
   ],
   "migration_registry": [
@@ -180,14 +196,14 @@
       "status": "active"
     },
     {
-      "id": "vertical_7_layout_2_to_11_layout_3",
+      "id": "vertical_7_layout_2_to_12_layout_4",
       "source": {
         "vertical_slice_schema_version": 7,
         "terrain_layout_version": 2
       },
       "target": {
-        "vertical_slice_schema_version": 11,
-        "terrain_layout_version": 3
+        "vertical_slice_schema_version": 12,
+        "terrain_layout_version": 4
       },
       "implementation": [
         "scripts/core/game_session.gd:_migrate_state_snapshot_to_current_pair",
@@ -199,41 +215,43 @@
       "status": "active"
     },
     {
-      "id": "vertical_8_layout_3_to_11_layout_3",
+      "id": "vertical_8_layout_3_to_12_layout_4",
       "source": {
         "vertical_slice_schema_version": 8,
         "terrain_layout_version": 3
       },
       "target": {
-        "vertical_slice_schema_version": 11,
-        "terrain_layout_version": 3
+        "vertical_slice_schema_version": 12,
+        "terrain_layout_version": 4
       },
       "implementation": [
         "scripts/core/game_session.gd:_migrate_state_snapshot_to_current_pair",
+        "scripts/world/city_terrain_map.gd:migrate_snapshot_to_current",
         "data/catalogs/building_footprints.gd:legacy_single_fields"
       ],
       "test": "res://tests/unit/core/save_recovery_self_test.gd",
       "status": "active"
     },
     {
-      "id": "vertical_9_layout_3_to_11_layout_3",
+      "id": "vertical_9_layout_3_to_12_layout_4",
       "source": {
         "vertical_slice_schema_version": 9,
         "terrain_layout_version": 3
       },
       "target": {
-        "vertical_slice_schema_version": 11,
-        "terrain_layout_version": 3
+        "vertical_slice_schema_version": 12,
+        "terrain_layout_version": 4
       },
       "implementation": [
         "scripts/core/game_session.gd:_migrate_state_snapshot_to_current_pair",
+        "scripts/world/city_terrain_map.gd:migrate_snapshot_to_current",
         "scripts/systems/city/transport_planning_session.gd:to_dict"
       ],
       "test": "res://tests/unit/core/save_recovery_self_test.gd",
       "status": "active"
     },
     {
-      "id": "vertical_10_transport_1_planning_1_to_11_2_2",
+      "id": "vertical_10_layout_3_transport_1_planning_1_to_12_layout_4",
       "source": {
         "vertical_slice_schema_version": 10,
         "terrain_layout_version": 3,
@@ -241,18 +259,37 @@
         "transport_planning_session_schema_version": 1
       },
       "target": {
-        "vertical_slice_schema_version": 11,
-        "terrain_layout_version": 3,
+        "vertical_slice_schema_version": 12,
+        "terrain_layout_version": 4,
         "transport_network_schema_version": 2,
         "transport_planning_session_schema_version": 2
       },
       "implementation": [
         "scripts/core/game_session.gd:_migrate_state_snapshot_to_current_pair",
+        "scripts/world/city_terrain_map.gd:migrate_snapshot_to_current",
         "scripts/systems/city/transport_network_system.gd:migrate_snapshot",
         "scripts/systems/city/transport_planning_session.gd:migrate_snapshot"
       ],
       "test": "res://tests/unit/core/save_recovery_self_test.gd",
       "fixture": "res://tests/fixtures/save_schema/route_package_v1_transport.json",
+      "status": "active"
+    },
+    {
+      "id": "vertical_11_layout_3_to_12_layout_4",
+      "source": {
+        "vertical_slice_schema_version": 11,
+        "terrain_layout_version": 3
+      },
+      "target": {
+        "vertical_slice_schema_version": 12,
+        "terrain_layout_version": 4
+      },
+      "implementation": [
+        "scripts/core/game_session.gd:_migrate_state_snapshot_to_current_pair",
+        "scripts/world/city_terrain_map.gd:migrate_snapshot_to_current"
+      ],
+      "test": "res://tests/unit/core/save_recovery_self_test.gd",
+      "fixture": "res://tests/fixtures/save_schema/layout3_preservation_migration.json",
       "status": "active"
     }
   ],

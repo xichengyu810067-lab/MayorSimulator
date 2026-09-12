@@ -2,12 +2,14 @@ class_name CityTerrainLayout
 extends RefCounted
 
 const SquareGridLayoutScript = preload("res://scripts/world/square_grid_layout.gd")
+const CityBackdropTerrainCatalog = preload("res://data/catalogs/city_backdrop_terrain.gd")
 
 ## Frozen terrain classification produced by terrain layout 3 before the
 ## presentation projection changed from diamonds to squares. Missing tile ids
 ## are deliberately flat grass with zero backdrop coverage.
 
-const LAYOUT_VERSION := 3
+const LEGACY_LAYOUT_VERSION := 3
+const LAYOUT_VERSION := 4
 const GRID_COLUMNS := 10
 const GRID_ROWS := 10
 const CELL_COUNT := GRID_COLUMNS * GRID_ROWS
@@ -16,6 +18,7 @@ const LEGACY_CELL_COUNT := LEGACY_GRID_SIZE * LEGACY_GRID_SIZE
 const LEGACY_OFFSET := Vector2i(1, 1)
 const SOURCE_ASSET := "res://assets/images/world/backgrounds/city-map-background.png"
 const INVALID_COORDINATE := Vector2i(-1, -1)
+const MIN_FEATURE_COVERAGE := 0.035
 
 const FROZEN_NON_FLAT_RECORDS := {
 	0: {"kind": "river_lake", "coverage": 0.623264041608023, "feature_ids": ["lake_north_central"]},
@@ -98,6 +101,10 @@ static func tile_id_for_coordinate(coordinate: Vector2i) -> int:
 
 
 static func model_for_tile_id(tile_id: int) -> Dictionary:
+	return _square_model_for_tile_id(tile_id)
+
+
+static func legacy_model_for_tile_id(tile_id: int) -> Dictionary:
 	if not is_valid_tile_id(tile_id):
 		return {}
 	var coordinate := coordinate_for_tile_id(tile_id)
@@ -118,13 +125,85 @@ static func model_for_coordinate(coordinate: Vector2i) -> Dictionary:
 	return model_for_tile_id(tile_id_for_coordinate(coordinate))
 
 
+static func legacy_model_for_coordinate(coordinate: Vector2i) -> Dictionary:
+	return legacy_model_for_tile_id(tile_id_for_coordinate(coordinate))
+
+
 static func terrain_kind_for_tile_id(tile_id: int) -> String:
 	var kind := str(model_for_tile_id(tile_id).get("kind", ""))
 	return "trees" if kind == "trees_scenery" else kind
 
 
+static func legacy_terrain_kind_for_tile_id(tile_id: int) -> String:
+	var kind := str(legacy_model_for_tile_id(tile_id).get("kind", ""))
+	return "trees" if kind == "trees_scenery" else kind
+
+
 static func is_blocked_tile_id(tile_id: int) -> bool:
 	return terrain_kind_for_tile_id(tile_id) != "flat_grass"
+
+
+static func _square_model_for_tile_id(tile_id: int) -> Dictionary:
+	if not is_valid_tile_id(tile_id):
+		return {}
+	var coordinate := coordinate_for_tile_id(tile_id)
+	var plot_rect := SquareGridLayoutScript.rect_for_coordinate(coordinate)
+	var plot := PackedVector2Array([
+		plot_rect.position,
+		plot_rect.position + Vector2(plot_rect.size.x, 0.0),
+		plot_rect.end,
+		plot_rect.position + Vector2(0.0, plot_rect.size.y),
+	])
+	var plot_area := plot_rect.size.x * plot_rect.size.y
+	var coverage_by_kind: Dictionary = {}
+	var feature_ids_by_kind: Dictionary = {}
+	var kind_order := PackedStringArray()
+	for polygon_data: Dictionary in CityBackdropTerrainCatalog.static_polygons():
+		var overlap_area := 0.0
+		for intersection: PackedVector2Array in Geometry2D.intersect_polygons(
+			plot, PackedVector2Array(polygon_data["points"])
+		):
+			overlap_area += _polygon_area(intersection)
+		var feature_coverage := overlap_area / plot_area
+		if feature_coverage < MIN_FEATURE_COVERAGE:
+			continue
+		var kind := str(polygon_data.get("kind", ""))
+		if not coverage_by_kind.has(kind):
+			kind_order.append(kind)
+			coverage_by_kind[kind] = 0.0
+			feature_ids_by_kind[kind] = []
+		coverage_by_kind[kind] = float(coverage_by_kind[kind]) + feature_coverage
+		var ids: Array = feature_ids_by_kind[kind]
+		ids.append(str(polygon_data.get("id", "")))
+		feature_ids_by_kind[kind] = ids
+	var winning_kind := "flat_grass"
+	var winning_coverage := 0.0
+	for kind: String in kind_order:
+		var coverage := float(coverage_by_kind[kind])
+		if coverage > winning_coverage:
+			winning_kind = kind
+			winning_coverage = coverage
+	return {
+		"tile_id": tile_id,
+		"coordinate": coordinate,
+		"kind": winning_kind,
+		"coverage": winning_coverage,
+		"feature_ids": Array(feature_ids_by_kind.get(winning_kind, [])).duplicate(),
+		"source_asset": SOURCE_ASSET,
+		"plot_center": plot_rect.get_center(),
+		"plot_half_extents": plot_rect.size * 0.5,
+	}
+
+
+static func _polygon_area(points: PackedVector2Array) -> float:
+	if points.size() < 3:
+		return 0.0
+	var doubled_area := 0.0
+	for point_index in points.size():
+		var current := points[point_index]
+		var next := points[(point_index + 1) % points.size()]
+		doubled_area += current.x * next.y - next.x * current.y
+	return absf(doubled_area) * 0.5
 
 
 static func _is_legacy_coordinate(coordinate: Vector2i) -> bool:

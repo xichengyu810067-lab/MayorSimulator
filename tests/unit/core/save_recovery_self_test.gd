@@ -28,6 +28,8 @@ const SCHEMA_PAIR_MIGRATION_PATH := TEST_ROOT + "/schema_pair_migration.json"
 const RUNTIME_POPULATION_GATE_PATH := TEST_ROOT + "/runtime_population_gate.json"
 const SCHEMA_AUTHORITY_REGISTRY_PATH := "res://data/save_schema_authority_registry.json"
 const CURRENT_ROUND_TRIP_FIXTURE_PATH := "res://tests/fixtures/save_schema/current_round_trip.json"
+const LAYOUT3_PRESERVATION_FIXTURE_PATH := "res://tests/fixtures/save_schema/layout3_preservation_migration.json"
+const LEGACY_TERRAIN_CHARACTERIZATION_PATH := "res://tests/fixtures/save_schema/legacy_terrain_characterization.json"
 const SUPPORTED_LEGACY_FIXTURE_PATH := "res://tests/fixtures/save_schema/supported_legacy_migration.json"
 const FUTURE_REJECT_FIXTURE_PATH := "res://tests/fixtures/save_schema/future_reject.json"
 const CORRUPT_MINIMAL_FIXTURE_PATH := "res://tests/fixtures/save_schema/corrupt_minimal.json"
@@ -58,6 +60,7 @@ func _initialize() -> void:
 	_test_strict_population_restore_boundary()
 	_test_schema_authority_runtime_constants()
 	_test_schema_authority_registry_contract()
+	_test_direct_read_terrain_compatibility()
 	_test_tracked_schema_fixtures()
 	_test_schema_one_minimal_runtime_remains_compatible()
 	_cleanup_all()
@@ -211,6 +214,7 @@ func _test_vertical_metadata_schema_boundary() -> void:
 	var current_vertical: Dictionary = source.state.metadata["vertical_slice"].duplicate(true)
 	var legacy_vertical := current_vertical.duplicate(true)
 	legacy_vertical["schema_version"] = 5
+	legacy_vertical.erase("terrain")
 	for current_only_field: String in ["construction", "next_blueprint_sequence", "blueprint_library", "active_blueprint_by_building", "transport"]:
 		legacy_vertical.erase(current_only_field)
 	source.state.metadata["vertical_slice"] = legacy_vertical
@@ -252,8 +256,9 @@ func _test_vertical_terrain_pairing_boundary() -> void:
 		return
 	var current_vertical: Dictionary = current_envelope.state.get("metadata", {}).get("vertical_slice", {})
 	var terrain_snapshot: Dictionary = current_vertical.get("terrain", {})
-	_check(int(current_vertical.get("schema_version", -1)) == 11, "fresh save does not write vertical schema 11")
-	_check(int(terrain_snapshot.get("layout_version", -1)) == 3, "fresh save does not write terrain layout 3")
+	_check(int(current_vertical.get("schema_version", -1)) == SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION, "fresh save does not write current vertical schema")
+	_check(int(terrain_snapshot.get("layout_version", -1)) == SaveSchemaAuthorityScript.CURRENT_TERRAIN_LAYOUT_VERSION, "fresh save does not write current terrain layout")
+	_check(str(terrain_snapshot.get("classification_provenance", "")) == CityTerrainMapScript.PROVENANCE_BACKDROP_SQUARE_LAYOUT_4, "fresh save lacks square-layout provenance")
 	_check(
 		SaveSchemaAuthorityScript.validate_vertical_terrain_pair(
 			int(current_vertical.get("schema_version", -1)),
@@ -264,36 +269,46 @@ func _test_vertical_terrain_pairing_boundary() -> void:
 	_check(SaveSchemaAuthorityScript.is_legacy_migration_pair(7, 2), "registry authority does not expose 7/2 as the migration input")
 	_check(SaveSchemaAuthorityScript.is_transport_session_migration_pair(9, 3), "registry authority does not expose 9/3 as the session migration input")
 	_check(SaveSchemaAuthorityScript.is_transport_reuse_migration_pair(10, 3), "registry authority does not expose 10/3 as the transport reuse migration input")
-	var schema_nine_envelope = _copy_envelope_with_pair(current_envelope, 9, 3)
+	var layout3_data := _read_fixture_dictionary(LAYOUT3_PRESERVATION_FIXTURE_PATH)
+	var layout3_terrain: Dictionary = layout3_data.get("state", {}).get("metadata", {}).get("vertical_slice", {}).get("terrain", {})
+	var layout2_data := _read_fixture_dictionary(SUPPORTED_LEGACY_FIXTURE_PATH)
+	var layout2_terrain: Dictionary = layout2_data.get("state", {}).get("metadata", {}).get("vertical_slice", {}).get("terrain", {})
+	_check(not layout3_terrain.is_empty(), "schema pairing has no frozen layout 3 terrain source")
+	_check(not layout2_terrain.is_empty(), "schema pairing has no frozen layout 2 terrain source")
+	if layout3_terrain.is_empty() or layout2_terrain.is_empty():
+		return
+	var schema_nine_envelope = _copy_envelope_with_pair(current_envelope, 9, layout3_terrain)
 	(schema_nine_envelope.state["metadata"]["vertical_slice"] as Dictionary).erase("transport_planning_session")
 	var schema_nine_probe = GameSessionScript.new(191, 191)
 	_check(schema_nine_probe.restore_envelope(schema_nine_envelope), "schema 9 did not migrate to the session-aware current schema")
 	var schema_nine_migrated: Dictionary = schema_nine_probe.state.metadata.get("vertical_slice", {})
-	_check(int(schema_nine_migrated.get("schema_version", -1)) == 11, "schema 9 migration did not write schema 11")
+	_check(int(schema_nine_migrated.get("schema_version", -1)) == SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION, "schema 9 migration did not write current schema")
+	_check(str(schema_nine_migrated.get("terrain", {}).get("classification_provenance", "")) == CityTerrainMapScript.PROVENANCE_PRESERVED_LAYOUT_3, "schema 9 terrain was reclassified")
 	_check(
 		str(schema_nine_migrated.get("transport_planning_session", {}).get("session", {}).get("state", "")) == "inactive",
 		"schema 9 migration invented an active transport session"
 	)
-	var schema_ten_envelope = _copy_envelope_with_pair(current_envelope, 10, 3)
+	var schema_ten_envelope = _copy_envelope_with_pair(current_envelope, 10, layout3_terrain)
 	var schema_ten_vertical: Dictionary = schema_ten_envelope.state["metadata"]["vertical_slice"]
 	(schema_ten_vertical["transport"] as Dictionary)["schema_version"] = 1
 	(schema_ten_vertical["transport_planning_session"] as Dictionary)["schema_version"] = 1
 	var schema_ten_probe = GameSessionScript.new(192, 192)
 	_check(schema_ten_probe.restore_envelope(schema_ten_envelope), "schema 10 transport contracts migrate to the current writer")
 	var schema_ten_migrated: Dictionary = schema_ten_probe.state.metadata.get("vertical_slice", {})
-	_check(int(schema_ten_migrated.get("schema_version", -1)) == 11, "schema 10 migration writes vertical schema 11")
+	_check(int(schema_ten_migrated.get("schema_version", -1)) == SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION, "schema 10 migration does not write current schema")
 	_check(int(schema_ten_migrated.get("transport", {}).get("schema_version", -1)) == 2, "schema 10 migration writes transport network schema 2")
 	_check(int(schema_ten_migrated.get("transport_planning_session", {}).get("schema_version", -1)) == 2, "schema 10 migration writes planning session schema 2")
 
-	var legacy_envelope = _copy_envelope_with_pair(current_envelope, 7, 2)
+	var legacy_envelope = _copy_envelope_with_pair(current_envelope, 7, layout2_terrain)
 	var legacy_tiles_json := JSON.stringify(
 		legacy_envelope.state.get("metadata", {}).get("vertical_slice", {}).get("terrain", {}).get("tiles", [])
 	)
 	var migrated_probe = GameSessionScript.new(20, 20)
 	_check(migrated_probe.restore_envelope(legacy_envelope), "legacy 7/2 envelope did not migrate")
 	var migrated_vertical: Dictionary = migrated_probe.state.metadata.get("vertical_slice", {})
-	_check(int(migrated_vertical.get("schema_version", -1)) == 11, "legacy migration did not set vertical schema 11")
-	_check(int(migrated_vertical.get("terrain", {}).get("layout_version", -1)) == 3, "legacy migration did not set terrain layout 3")
+	_check(int(migrated_vertical.get("schema_version", -1)) == SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION, "legacy migration did not set current vertical schema")
+	_check(int(migrated_vertical.get("terrain", {}).get("layout_version", -1)) == SaveSchemaAuthorityScript.CURRENT_TERRAIN_LAYOUT_VERSION, "legacy migration did not set current terrain layout")
+	_check(str(migrated_vertical.get("terrain", {}).get("classification_provenance", "")) == CityTerrainMapScript.PROVENANCE_PRESERVED_LAYOUT_2, "layout 2 migration lost provenance")
 	_check(
 		JSON.stringify(migrated_vertical.get("terrain", {}).get("tiles", [])) == legacy_tiles_json,
 		"legacy migration changed one or more of the 100 tile records"
@@ -307,20 +322,33 @@ func _test_vertical_terrain_pairing_boundary() -> void:
 	)
 
 	for invalid_pair: Dictionary in [
-		{"schema": 8, "layout": 2, "label": "8/2 mismatch"},
-		{"schema": 7, "layout": 3, "label": "7/3 mismatch"},
-		{"schema": 12, "layout": 3, "label": "future vertical schema"},
-		{"schema": 9, "layout": 4, "label": "future terrain layout"},
+		{"schema": 8, "terrain": layout2_terrain, "label": "8/2 mismatch"},
+		{"schema": 7, "terrain": layout3_terrain, "label": "7/3 mismatch"},
+		{"schema": 12, "terrain": layout3_terrain, "label": "12/3 mismatch"},
+		{"schema": 11, "terrain": terrain_snapshot, "label": "11/4 mismatch"},
+		{"schema": 9, "terrain": terrain_snapshot, "label": "9/4 mismatch"},
+		{"schema": 13, "terrain": terrain_snapshot, "label": "future 13/4 pair"},
 	]:
 		var invalid_envelope = _copy_envelope_with_pair(
 			current_envelope,
 			int(invalid_pair["schema"]),
-			int(invalid_pair["layout"])
+			invalid_pair["terrain"]
 		)
 		var rejection_probe = GameSessionScript.new(22, 22)
 		var rejection_hash_before := rejection_probe.deterministic_hash()
 		_check(not rejection_probe.restore_envelope(invalid_envelope), "%s was not rejected" % invalid_pair["label"])
 		_check(rejection_probe.deterministic_hash() == rejection_hash_before, "%s partially applied state" % invalid_pair["label"])
+	for invalid_provenance: Variant in [null, "unknown_layout"]:
+		var invalid_provenance_envelope = SaveEnvelopeScript.from_dict(current_envelope.to_dict())
+		var invalid_terrain: Dictionary = invalid_provenance_envelope.state["metadata"]["vertical_slice"]["terrain"]
+		if invalid_provenance == null:
+			invalid_terrain.erase("classification_provenance")
+		else:
+			invalid_terrain["classification_provenance"] = invalid_provenance
+		var provenance_probe = GameSessionScript.new(221, 221)
+		var provenance_hash_before := provenance_probe.deterministic_hash()
+		_check(not provenance_probe.restore_envelope(invalid_provenance_envelope), "invalid current provenance was accepted")
+		_check(provenance_probe.deterministic_hash() == provenance_hash_before, "invalid provenance partially applied state")
 	_check(
 		not SaveSchemaAuthorityScript.validate_vertical_terrain_pair(8, 2),
 		"schema eight with terrain layout two is rejected"
@@ -331,19 +359,40 @@ func _test_vertical_terrain_pairing_boundary() -> void:
 	)
 
 
-func _copy_envelope_with_pair(envelope, schema_version: int, layout_version: int):
+func _copy_envelope_with_pair(envelope, schema_version: int, terrain_snapshot: Dictionary):
 	var copied = SaveEnvelopeScript.from_dict(envelope.to_dict())
 	var state_snapshot: Dictionary = copied.state.duplicate(true)
 	var metadata: Dictionary = state_snapshot.get("metadata", {}).duplicate(true)
 	var vertical: Dictionary = metadata.get("vertical_slice", {}).duplicate(true)
-	var terrain: Dictionary = vertical.get("terrain", {}).duplicate(true)
 	vertical["schema_version"] = schema_version
-	terrain["layout_version"] = layout_version
-	vertical["terrain"] = terrain
+	vertical["terrain"] = terrain_snapshot.duplicate(true)
 	metadata["vertical_slice"] = vertical
 	state_snapshot["metadata"] = metadata
 	copied.state = state_snapshot
 	return copied
+
+
+func _terrain_with_historical_building_anchor(terrain_snapshot: Dictionary, anchor_tile_id: int) -> Dictionary:
+	var candidate: Dictionary = terrain_snapshot.duplicate(true)
+	var matched := 0
+	for record_value: Variant in Array(candidate.get("tiles", [])):
+		if not record_value is Dictionary:
+			return {}
+		var record: Dictionary = record_value
+		if int(record.get("tile_id", -1)) != anchor_tile_id:
+			continue
+		matched += 1
+		if matched != 1:
+			return {}
+		var base_kind := str(record.get("base_kind", ""))
+		if base_kind == "flat_grass":
+			if bool(record.get("flattened", false)):
+				return {}
+		elif base_kind in ["river_lake", "trees", "hill_cliff"]:
+			record["flattened"] = true
+		else:
+			return {}
+	return candidate if matched == 1 else {}
 
 
 func _test_building_footprint_schema_boundary() -> void:
@@ -358,8 +407,16 @@ func _test_building_footprint_schema_boundary() -> void:
 	coordinator.call("_stash_subsystems")
 	var current_envelope = coordinator.session.make_envelope()
 	var current_vertical: Dictionary = current_envelope.state.get("metadata", {}).get("vertical_slice", {})
+	var layout3_data := _read_fixture_dictionary(LAYOUT3_PRESERVATION_FIXTURE_PATH)
+	var layout3_terrain: Dictionary = layout3_data.get("state", {}).get("metadata", {}).get("vertical_slice", {}).get("terrain", {})
+	var layout2_data := _read_fixture_dictionary(SUPPORTED_LEGACY_FIXTURE_PATH)
+	var layout2_terrain: Dictionary = layout2_data.get("state", {}).get("metadata", {}).get("vertical_slice", {}).get("terrain", {})
+	_check(not layout3_terrain.is_empty(), "footprint schema fixture has no frozen layout 3 terrain source")
+	_check(not layout2_terrain.is_empty(), "footprint schema fixture has no frozen layout 2 terrain source")
+	if layout3_terrain.is_empty() or layout2_terrain.is_empty():
+		return
 	var current_record: Dictionary = current_envelope.state.get("buildings", {}).get(str(seeded.get("building_id", "")), {})
-	_check(int(current_vertical.get("schema_version", -1)) == 11, "current footprint writer uses vertical schema eleven")
+	_check(int(current_vertical.get("schema_version", -1)) == SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION, "current footprint writer uses current vertical schema")
 	_check(int(current_record.get("anchor_tile_id", -1)) == anchor_tile_id, "current record persists its anchor tile id")
 	_check(str(current_record.get("footprint_id", "")) == BuildingFootprintsScript.SINGLE_V1, "current record persists single_v1")
 	_check(Array(current_record.get("occupied_tile_ids", [])) == [anchor_tile_id], "current record persists its occupied tile ids")
@@ -376,6 +433,11 @@ func _test_building_footprint_schema_boundary() -> void:
 	var legacy_data: Dictionary = current_envelope.to_dict()
 	var legacy_vertical: Dictionary = legacy_data.get("state", {}).get("metadata", {}).get("vertical_slice", {})
 	legacy_vertical["schema_version"] = SaveSchemaAuthorityScript.FOOTPRINT_MIGRATION_VERTICAL_SCHEMA_VERSION
+	var schema_eight_terrain := _terrain_with_historical_building_anchor(layout3_terrain, anchor_tile_id)
+	_check(not schema_eight_terrain.is_empty(), "schema-eight building candidate has one legal reconciled terrain anchor")
+	if schema_eight_terrain.is_empty():
+		return
+	legacy_vertical["terrain"] = schema_eight_terrain
 	var legacy_buildings: Dictionary = legacy_data.get("state", {}).get("buildings", {})
 	for record_value: Variant in legacy_buildings.values():
 		var legacy_record: Dictionary = record_value
@@ -388,7 +450,7 @@ func _test_building_footprint_schema_boundary() -> void:
 	if legacy_probe.state != null:
 		var migrated_vertical: Dictionary = legacy_probe.state.metadata.get("vertical_slice", {})
 		var migrated_record: Dictionary = legacy_probe.state.buildings.get(str(seeded.get("building_id", "")), {})
-		_check(int(migrated_vertical.get("schema_version", -1)) == 11, "schema-eight building migrates to schema eleven")
+		_check(int(migrated_vertical.get("schema_version", -1)) == SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION, "schema-eight building migrates to current schema")
 		_check(str(migrated_record.get("footprint_id", "")) == BuildingFootprintsScript.SINGLE_V1, "schema-eight building never guesses a larger legacy footprint")
 		_check(Array(migrated_record.get("occupied_tile_ids", [])) == [anchor_tile_id], "schema-eight migration occupies only its anchor")
 		_check(str(migrated_record.get(BuildingFootprintsScript.LEGACY_SINGLE_PROVENANCE_FIELD, "")) == BuildingFootprintsScript.LEGACY_SINGLE_PROVENANCE, "schema-eight migration marks its narrowed single-tile provenance")
@@ -399,7 +461,13 @@ func _test_building_footprint_schema_boundary() -> void:
 		var older_vertical: Dictionary = older_data.get("state", {}).get("metadata", {}).get("vertical_slice", {})
 		older_vertical["schema_version"] = legacy_schema
 		if legacy_schema == SaveSchemaAuthorityScript.LEGACY_MIGRATION_VERTICAL_SCHEMA_VERSION:
-			(older_vertical.get("terrain", {}) as Dictionary)["layout_version"] = SaveSchemaAuthorityScript.LEGACY_MIGRATION_TERRAIN_LAYOUT_VERSION
+			var schema_seven_terrain := _terrain_with_historical_building_anchor(layout2_terrain, anchor_tile_id)
+			_check(not schema_seven_terrain.is_empty(), "schema-seven building candidate has one legal reconciled terrain anchor")
+			if schema_seven_terrain.is_empty():
+				continue
+			older_vertical["terrain"] = schema_seven_terrain
+		else:
+			older_vertical.erase("terrain")
 		for record_value: Variant in (older_data.get("state", {}).get("buildings", {}) as Dictionary).values():
 			var older_record: Dictionary = record_value
 			older_record.erase("anchor_tile_id")
@@ -417,7 +485,7 @@ func _test_building_footprint_schema_boundary() -> void:
 		older_coordinator.session = older_probe
 		older_coordinator.call("_restore_subsystems")
 		older_coordinator.call("_stash_subsystems")
-		_check(int(older_coordinator.session.make_envelope().state.get("metadata", {}).get("vertical_slice", {}).get("schema_version", -1)) == 11, "schema %d legacy building writes schema eleven after coordinator restore" % legacy_schema)
+		_check(int(older_coordinator.session.make_envelope().state.get("metadata", {}).get("vertical_slice", {}).get("schema_version", -1)) == SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION, "schema %d legacy building writes current schema after coordinator restore" % legacy_schema)
 
 	var live_probe = GameSessionScript.new(26, 26)
 	for corruption: String in ["missing", "duplicate", "offset_mismatch", "size_mismatch", "null_provenance", "invalid_provenance", "legacy_marker_shape", "out_of_bounds", "overlap", "future"]:
@@ -453,6 +521,7 @@ func _test_building_footprint_schema_boundary() -> void:
 			var legacy_job_state: Dictionary = legacy_job_data.get("state", {})
 			var legacy_job_vertical: Dictionary = legacy_job_state.get("metadata", {}).get("vertical_slice", {})
 			legacy_job_vertical["schema_version"] = SaveSchemaAuthorityScript.FOOTPRINT_MIGRATION_VERTICAL_SCHEMA_VERSION
+			legacy_job_vertical["terrain"] = layout3_terrain.duplicate(true)
 			for legacy_job_record: Dictionary in [
 				legacy_job_vertical.get("construction", {}).get("jobs", {}).get(job_id, {}),
 				legacy_job_state.get("construction_jobs", {}).get(job_id, {}),
@@ -571,7 +640,7 @@ func _test_schema_authority_runtime_constants() -> void:
 	_check(CityStateScript.MAX_SUPPORTED_SNAPSHOT_SCHEMA_VERSION == SaveSchemaAuthorityScript.CITY_STATE_MAX_SUPPORTED_SCHEMA_VERSION, "CityState ceiling uses the shared authority")
 	_check(GameSessionScript.MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA == SaveSchemaAuthorityScript.MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA, "vertical schema ceiling uses the shared authority")
 	_check(GameSessionScript.MIN_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA == SaveSchemaAuthorityScript.MIN_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA, "vertical schema floor uses the shared authority")
-	_check(SaveSchemaAuthorityScript.SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMAS == [4, 5, 6, 7, 8, 9, 10, 11], "vertical support is limited to proven schema shapes")
+	_check(SaveSchemaAuthorityScript.SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMAS == [4, 5, 6, 7, 8, 9, 10, 11, 12], "vertical support is limited to proven schema shapes")
 	for unsupported_schema: int in [0, 1, 2, 3]:
 		_check(not SaveSchemaAuthorityScript.is_supported_vertical_schema(unsupported_schema), "unproven vertical schema %d is explicitly unsupported" % unsupported_schema)
 	_check(CityTerrainMapScript.LAYOUT_VERSION == SaveSchemaAuthorityScript.CURRENT_TERRAIN_LAYOUT_VERSION, "terrain current layout agrees with the shared authority")
@@ -773,6 +842,42 @@ func _apply_strict_population_corruption(data: Dictionary, case_name: String) ->
 			})
 
 
+func _test_direct_read_terrain_compatibility() -> void:
+	var current_data := _read_fixture_dictionary(CURRENT_ROUND_TRIP_FIXTURE_PATH)
+	var oldest_data := _read_fixture_dictionary(OLDEST_SUPPORTED_FIXTURE_PATH)
+	var layout3_data := _read_fixture_dictionary(LAYOUT3_PRESERVATION_FIXTURE_PATH)
+	var layout3_terrain: Dictionary = layout3_data.get("state", {}).get("metadata", {}).get("vertical_slice", {}).get("terrain", {})
+	_check(not layout3_terrain.is_empty(), "direct-read compatibility has no immutable layout 3 source")
+	for schema_version: int in [4, 5, 6]:
+		for terrain_mode: String in ["absent", "present_layout3"]:
+			var candidate_data: Dictionary = (
+				current_data.duplicate(true) if schema_version == 6 else oldest_data.duplicate(true)
+			)
+			var vertical: Dictionary = candidate_data["state"]["metadata"]["vertical_slice"]
+			vertical["schema_version"] = schema_version
+			if terrain_mode == "absent":
+				vertical.erase("terrain")
+			else:
+				vertical["terrain"] = layout3_terrain.duplicate(true)
+			var candidate = SaveEnvelopeScript.from_dict(candidate_data)
+			var probe = GameSessionScript.new(4000 + schema_version, 4000 + schema_version)
+			_check(candidate != null and probe.restore_envelope(candidate), "schema %d %s compatibility restore failed" % [schema_version, terrain_mode])
+			if probe.state == null:
+				continue
+			var restored_vertical: Dictionary = probe.state.metadata.get("vertical_slice", {})
+			var restored_terrain: Dictionary = restored_vertical.get("terrain", {})
+			_check(int(restored_vertical.get("schema_version", -1)) == schema_version, "schema %d direct read was prematurely stamped current" % schema_version)
+			_check(int(restored_terrain.get("layout_version", -1)) == 4, "schema %d compatibility terrain lacks layout 4 container" % schema_version)
+			var expected_provenance := (
+				CityTerrainMapScript.PROVENANCE_SYNTHESIZED_LAYOUT_3_COMPAT
+				if terrain_mode == "absent"
+				else CityTerrainMapScript.PROVENANCE_PRESERVED_LAYOUT_3
+			)
+			_check(str(restored_terrain.get("classification_provenance", "")) == expected_provenance, "schema %d %s provenance mismatch" % [schema_version, terrain_mode])
+			if terrain_mode == "present_layout3":
+				_check(_canonical_fixture_json(restored_terrain.get("tiles", [])) == _canonical_fixture_json(layout3_terrain.get("tiles", [])), "schema %d present terrain records were reclassified" % schema_version)
+
+
 func _test_tracked_schema_fixtures() -> void:
 	var current_data := _read_fixture_dictionary(CURRENT_ROUND_TRIP_FIXTURE_PATH)
 	_check(not current_data.is_empty(), "tracked current round-trip fixture is readable")
@@ -792,6 +897,38 @@ func _test_tracked_schema_fixtures() -> void:
 			_canonical_fixture_json(round_trip.to_dict()) == _canonical_fixture_json(current_envelope.to_dict()),
 			"tracked current fixture round-trips without field loss"
 		)
+
+	var layout3_data := _read_fixture_dictionary(LAYOUT3_PRESERVATION_FIXTURE_PATH)
+	_check(not layout3_data.is_empty(), "frozen layout 3 migration fixture is readable")
+	var layout3_envelope = SaveEnvelopeScript.from_dict(layout3_data) if not layout3_data.is_empty() else null
+	_check(layout3_envelope != null, "frozen layout 3 fixture decodes")
+	if layout3_envelope != null:
+		var source_vertical: Dictionary = layout3_envelope.state.get("metadata", {}).get("vertical_slice", {})
+		var source_tiles := _canonical_fixture_json(source_vertical.get("terrain", {}).get("tiles", []))
+		_check(int(source_vertical.get("schema_version", -1)) == 11, "frozen fixture no longer records source schema 11")
+		_check(int(source_vertical.get("terrain", {}).get("layout_version", -1)) == 3, "frozen fixture no longer records source layout 3")
+		var layout3_probe = GameSessionScript.new(3001, 3001)
+		_check(layout3_probe.restore_envelope(layout3_envelope), "schema 11/layout 3 fixture restores")
+		if layout3_probe.state != null:
+			var preserved: Dictionary = layout3_probe.state.metadata.get("vertical_slice", {})
+			_check(int(preserved.get("schema_version", -1)) == 12, "schema 11 fixture did not migrate to schema 12")
+			_check(int(preserved.get("terrain", {}).get("layout_version", -1)) == 4, "layout 3 fixture did not migrate to layout 4")
+			_check(str(preserved.get("terrain", {}).get("classification_provenance", "")) == CityTerrainMapScript.PROVENANCE_PRESERVED_LAYOUT_3, "layout 3 fixture lost preservation provenance")
+			_check(_canonical_fixture_json(preserved.get("terrain", {}).get("tiles", [])) == source_tiles, "layout 3 fixture terrain records were reclassified")
+			var source_semantics: Dictionary = layout3_envelope.state.duplicate(true)
+			var migrated_semantics: Dictionary = layout3_probe.make_envelope().state.duplicate(true)
+			for state_snapshot: Dictionary in [source_semantics, migrated_semantics]:
+				var semantic_vertical: Dictionary = state_snapshot["metadata"]["vertical_slice"]
+				semantic_vertical.erase("schema_version")
+				var semantic_terrain: Dictionary = semantic_vertical["terrain"]
+				semantic_terrain.erase("layout_version")
+				semantic_terrain.erase("classification_provenance")
+			_check(_canonical_fixture_json(migrated_semantics) == _canonical_fixture_json(source_semantics), "schema 11/layout 3 migration changed a non-version domain")
+
+	var characterization := _read_fixture_dictionary(LEGACY_TERRAIN_CHARACTERIZATION_PATH)
+	_check(Array(characterization.get("cases", [])).size() == 7, "legacy characterization fixture does not retain seven immutable cases")
+	_check(str(characterization.get("lineage", {}).get("r5_manifest_sha256", "")) == "09ed610184f0f4dbcbf03f236fa3766a23c3d6d94e8b82b9b9c178de442eb124", "legacy characterization manifest lineage changed")
+	_check(str(characterization.get("lineage", {}).get("r5_results_sha256", "")) == "9088c8e71e038c4ae97c5d1a073e2db876da6c0ea96c5c5e7cf964d16ceab8a1", "legacy characterization results lineage changed")
 
 	var legacy_data := _read_fixture_dictionary(SUPPORTED_LEGACY_FIXTURE_PATH)
 	_check(not legacy_data.is_empty(), "tracked supported legacy fixture is readable")
@@ -838,7 +975,7 @@ func _test_tracked_schema_fixtures() -> void:
 			var migrated_package_vertical: Dictionary = package_v1_probe.state.metadata.get("vertical_slice", {})
 			var migrated_package_transport: Dictionary = migrated_package_vertical.get("transport", {})
 			var migrated_segment: Dictionary = migrated_package_transport.get("segments", {}).get("transport_segment_000001", {})
-			_check(int(migrated_package_vertical.get("schema_version", -1)) == 11, "route-package fixture migrates to vertical schema 11")
+			_check(int(migrated_package_vertical.get("schema_version", -1)) == SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION, "route-package fixture migrates to current vertical schema")
 			_check(int(migrated_package_transport.get("schema_version", -1)) == 2, "route-package fixture migrates to transport schema 2")
 			_check(int(migrated_package_vertical.get("transport_planning_session", {}).get("schema_version", -1)) == 2, "route-package fixture migrates to planning schema 2")
 			_check({
@@ -857,6 +994,10 @@ func _test_tracked_schema_fixtures() -> void:
 		var oldest_probe = GameSessionScript.new(304, 304)
 		_check(oldest_probe.restore_envelope(oldest_envelope), "oldest-supported vertical schema four restores")
 		_check(oldest_probe.state != null and oldest_probe.state.npcs.size() == 1, "oldest-supported restore preserves its complete resident")
+		var oldest_restored_vertical: Dictionary = oldest_probe.state.metadata.get("vertical_slice", {}) if oldest_probe.state != null else {}
+		_check(int(oldest_restored_vertical.get("schema_version", -1)) == 4, "schema four direct read was prematurely stamped current")
+		_check(int(oldest_restored_vertical.get("terrain", {}).get("layout_version", -1)) == 4, "schema four did not receive a validated current terrain container")
+		_check(str(oldest_restored_vertical.get("terrain", {}).get("classification_provenance", "")) == CityTerrainMapScript.PROVENANCE_SYNTHESIZED_LAYOUT_3_COMPAT, "schema four missing-terrain restore lacks compatibility provenance")
 		_check(not oldest_probe.make_envelope().state.has("npcs"), "oldest-supported restore upgrades to the CityState v2 single-copy writer")
 
 	var unsupported_vertical_data := _read_fixture_dictionary(UNSUPPORTED_VERTICAL_FIXTURE_PATH)
