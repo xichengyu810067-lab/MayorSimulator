@@ -369,6 +369,8 @@ var map_pan_offset := Vector2.ZERO
 var _map_pan_drag_active := false
 var _map_pan_drag_pending := false
 var _map_pan_drag_uses_left_button := false
+var _map_button_release_cancellation_pending := false
+var _map_buttons_waiting_for_cancelled_release: Dictionary = {}
 var _map_pan_drag_origin := Vector2.ZERO
 var _map_pan_drag_last_position := Vector2.ZERO
 var _npc_dialogue_remaining_seconds := 0.0
@@ -657,6 +659,7 @@ func _notification(what: int) -> void:
 		_request_application_quit()
 	elif what == NOTIFICATION_APPLICATION_FOCUS_OUT:
 		_npc_keyboard_dismiss_waiting_for_cancel_release = false
+		_begin_map_button_release_cancellation()
 		_clear_map_pan_drag_state()
 		if vertical_slice != null:
 			vertical_slice.set_time_paused(true)
@@ -711,6 +714,19 @@ func _input(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseButton:
 		var zoom_event := event as InputEventMouseButton
+		if (
+			zoom_event.button_index == MOUSE_BUTTON_LEFT
+			and _map_button_release_cancellation_pending
+		):
+			_map_button_release_cancellation_pending = false
+			if zoom_event.pressed:
+				# No release reached this window after focus loss. Restore the current
+				# UI policy before dispatching a new, intentional press.
+				_restore_map_buttons_after_cancelled_release()
+			else:
+				# Keep captured controls disabled throughout this release's GUI dispatch.
+				# Their stale BaseButton capture is cleared before their prior state returns.
+				call_deferred("_restore_map_buttons_after_cancelled_release")
 		if zoom_event.button_index == MOUSE_BUTTON_MIDDLE:
 			if zoom_event.pressed and _can_zoom_map_at(zoom_event.position):
 				_map_pan_drag_active = true
@@ -1606,8 +1622,41 @@ func _dismiss_hovered_map_control(control: BaseButton) -> void:
 	control.call_deferred("show")
 
 
+func _begin_map_button_release_cancellation() -> void:
+	if not _map_pan_drag_uses_left_button:
+		return
+	_map_button_release_cancellation_pending = true
+	if npc_map_controller != null:
+		for actor: Button in npc_map_controller.get_actors():
+			_hold_pressed_map_button_until_release(actor)
+	for button_variant in grid_buttons:
+		_hold_pressed_map_button_until_release(button_variant as Button)
+
+
+func _hold_pressed_map_button_until_release(button: Button) -> void:
+	if button == null or not is_instance_valid(button) or not button.is_pressed():
+		return
+	var instance_id := button.get_instance_id()
+	if not _map_buttons_waiting_for_cancelled_release.has(instance_id):
+		_map_buttons_waiting_for_cancelled_release[instance_id] = {
+			"button": button,
+			"disabled": button.disabled,
+		}
+	button.disabled = true
+
+
+func _restore_map_buttons_after_cancelled_release() -> void:
+	for record_variant in _map_buttons_waiting_for_cancelled_release.values():
+		var record := record_variant as Dictionary
+		var button := record.get("button") as Button
+		if button != null and is_instance_valid(button):
+			button.disabled = bool(record.get("disabled", false))
+	_map_buttons_waiting_for_cancelled_release.clear()
+
+
 func _set_map_interaction_enabled(enabled: bool) -> void:
 	if not enabled:
+		_begin_map_button_release_cancellation()
 		_clear_map_pan_drag_state()
 	_set_map_npc_tooltips_enabled(enabled)
 	_set_map_tile_tooltips_enabled(enabled)

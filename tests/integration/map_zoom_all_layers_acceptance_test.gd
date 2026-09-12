@@ -101,7 +101,9 @@ func _run() -> void:
 	await _drive_zoom(main, main.MAP_ZOOM_MIN, MOUSE_BUTTON_WHEEL_DOWN, "wheel down to 65%")
 	await _validate_zoom_snapshot(main, target_button, building_button, representative_npc, centers, transport_snapshot, target_tile, 0.65, "65%")
 	await _verify_left_drag_and_reset_contract(main, target_button, target_tile)
+	await _verify_tile_release_cancellation(main)
 	await _verify_left_drag_lifecycle_cleanup(main, target_button, target_tile)
+	await _verify_npc_dialogue_recovers_after_cancelled_release(main)
 
 	await _finish([main])
 
@@ -375,6 +377,10 @@ func _verify_left_drag_lifecycle_cleanup(main, target_button: Button, target_til
 		main.settings_overlay.hide()
 		main.call("_sync_map_interaction_for_ui")
 		await _release_left_outside_viewport(outside_viewport)
+		_check(
+			main.npc_dialogue_card == null or not main.npc_dialogue_card.visible,
+			"%s outside release after modal cancellation does not activate an NPC dialogue" % state_name
+		)
 		await _assert_no_button_motion_does_not_pan(main, origin, "%s drag after modal re-enable" % state_name)
 		await _click_target(main, target_button, target_tile, "%s drag cleanup retains ordinary tile click after modal" % state_name)
 
@@ -387,9 +393,95 @@ func _verify_left_drag_lifecycle_cleanup(main, target_button: Button, target_til
 		main.notification(NOTIFICATION_APPLICATION_FOCUS_IN)
 		await process_frame
 		await _release_left_outside_viewport(outside_viewport)
+		_check(
+			main.npc_dialogue_card == null or not main.npc_dialogue_card.visible,
+			"%s outside release after focus cancellation does not activate an NPC dialogue" % state_name
+		)
 		_check(_map_drag_state_is_clear(main), "%s left drag state clears across focus out/in before an outside release" % state_name)
 		await _assert_no_button_motion_does_not_pan(main, origin, "%s drag after focus re-entry" % state_name)
 		await _click_target(main, target_button, target_tile, "%s drag cleanup retains ordinary tile click after focus re-entry" % state_name)
+
+
+func _verify_tile_release_cancellation(main) -> void:
+	main.call("_reset_map_camera")
+	await _drive_zoom(main, 1.20, MOUSE_BUTTON_WHEEL_UP, "wheel up before deterministic tile release cancellation")
+	var viewport_rect: Rect2 = main.map_viewport.get_global_rect()
+	var outside_viewport := viewport_rect.end + Vector2(12.0, 12.0)
+	var tile_button: Button = null
+	var tile_index := -1
+	for index: int in range(main.grid_buttons.size()):
+		var candidate := main.grid_buttons[index] as Button
+		if candidate == null or not candidate.visible or bool(candidate.disabled):
+			continue
+		if str(main.city_grid[index]) != "":
+			continue
+		var center := candidate.get_global_rect().get_center()
+		if not viewport_rect.has_point(center):
+			continue
+		var hover_motion := InputEventMouseMotion.new()
+		hover_motion.position = center
+		hover_motion.global_position = center
+		root.push_input(hover_motion, true)
+		await process_frame
+		if root.gui_get_hovered_control() == candidate:
+			tile_button = candidate
+			tile_index = index
+			break
+	_check(tile_button != null, "an unobscured empty tile is available for cancelled-release verification")
+	if tile_button == null:
+		return
+	var independently_disabled_button: Button = null
+	for button_variant in main.grid_buttons:
+		var candidate := button_variant as Button
+		if candidate != null and candidate != tile_button and not candidate.disabled:
+			independently_disabled_button = candidate
+			break
+	_check(independently_disabled_button != null, "a separate tile can verify independent disabled-state ownership")
+	if independently_disabled_button != null:
+		independently_disabled_button.disabled = true
+	for interruption in ["modal", "focus"]:
+		_tile_press_count = 0
+		_last_tile_pressed = -1
+		var intent_before := _map_intent_snapshot(main)
+		var origin := tile_button.get_global_rect().get_center()
+		await _start_left_drag(main, origin, false)
+		_check(root.gui_get_hovered_control() == tile_button, "%s cancellation begins on the intended unobscured tile" % interruption)
+		_check(tile_button.is_pressed(), "%s cancellation fixture holds the intended tile button press" % interruption)
+		if interruption == "modal":
+			main.settings_overlay.show()
+			main.call("_sync_map_interaction_for_ui")
+			await process_frame
+			main.settings_overlay.hide()
+			main.call("_sync_map_interaction_for_ui")
+		else:
+			main.notification(NOTIFICATION_APPLICATION_FOCUS_OUT)
+			await process_frame
+			main.notification(NOTIFICATION_APPLICATION_FOCUS_IN)
+			await process_frame
+		_check(tile_button.disabled, "%s cancellation keeps the captured tile disabled through release dispatch" % interruption)
+		await _release_left_outside_viewport(outside_viewport)
+		_check(_tile_press_count == 0, "%s outside release does not emit a stale tile callback" % interruption)
+		_check(_last_tile_pressed == -1, "%s outside release does not select a stale tile callback target" % interruption)
+		_check(_map_intent_snapshot(main) == intent_before, "%s outside release preserves selection, placement, and transport intent" % interruption)
+		_check(not tile_button.disabled, "%s cancellation restores the captured tile's prior enabled state" % interruption)
+		if independently_disabled_button != null:
+			_check(independently_disabled_button.disabled, "%s cancellation preserves an unrelated tile's disabled state" % interruption)
+		await _click_target(main, tile_button, tile_index, "%s cancellation permits the next intentional tile click" % interruption)
+	if independently_disabled_button != null:
+		independently_disabled_button.disabled = false
+
+
+func _map_intent_snapshot(main) -> Dictionary:
+	return {
+		"selected_cell_index": int(main.selected_cell_index),
+		"pending_terrain_tile": int(main._pending_terrain_tile),
+		"pending_construction_tile": int(main._pending_construction_tile),
+		"placement_mode_active": bool(main.placement_mode_active),
+		"placement_building_name": str(main.placement_building_name),
+		"map_action_mode": str(main.map_action_mode),
+		"transport_plan_tiles": main.transport_plan_tiles.duplicate(),
+		"transport_session": main.call("_transport_session_snapshot"),
+	}
 
 
 func _start_left_drag(main, origin: Vector2, activate: bool) -> void:
@@ -423,6 +515,50 @@ func _release_left_outside_viewport(position: Vector2) -> void:
 	left_up.position = position
 	left_up.global_position = position
 	root.push_input(left_up, true)
+	await process_frame
+
+
+func _verify_npc_dialogue_recovers_after_cancelled_release(main) -> void:
+	main.call("_hide_npc_dialogue")
+	main.call("_sync_map_interaction_for_ui")
+	await process_frame
+	var clickable_actor: Button = null
+	for actor: Button in main.get_visible_npc_actors():
+		if not is_instance_valid(actor) or not actor.visible:
+			continue
+		var hover_motion := InputEventMouseMotion.new()
+		hover_motion.position = actor.get_global_rect().get_center()
+		hover_motion.global_position = hover_motion.position
+		root.push_input(hover_motion, true)
+		await process_frame
+		if root.gui_get_hovered_control() == actor:
+			clickable_actor = actor
+			break
+	_check(clickable_actor != null, "an unobscured NPC actor remains available after cancelled releases")
+	if clickable_actor == null:
+		return
+	_check(not clickable_actor.disabled, "NPC actor is re-enabled after cancelled release dispatch")
+	var position := clickable_actor.get_global_rect().get_center()
+	var left_down := InputEventMouseButton.new()
+	left_down.button_index = MOUSE_BUTTON_LEFT
+	left_down.button_mask = MOUSE_BUTTON_MASK_LEFT
+	left_down.pressed = true
+	left_down.position = position
+	left_down.global_position = position
+	root.push_input(left_down, true)
+	await process_frame
+	var left_up := InputEventMouseButton.new()
+	left_up.button_index = MOUSE_BUTTON_LEFT
+	left_up.pressed = false
+	left_up.position = position
+	left_up.global_position = position
+	root.push_input(left_up, true)
+	await process_frame
+	_check(main.npc_dialogue_card != null and main.npc_dialogue_card.visible, "a subsequent intentional NPC click opens dialogue normally")
+	main.call("_sync_map_interaction_for_ui")
+	await process_frame
+	_check(main.npc_dialogue_card != null and main.npc_dialogue_card.visible, "active NPC dialogue remains visible during ordinary map interaction sync")
+	main.call("_hide_npc_dialogue")
 	await process_frame
 
 
