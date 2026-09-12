@@ -331,6 +331,55 @@ function Get-ArtifactRecord {
     return [pscustomobject]$record
 }
 
+function Get-InterruptedTemporaryArtifactRecord {
+    param(
+        [Parameter(Mandatory)][object]$Marker,
+        [Parameter(Mandatory)][string]$SavePath,
+        [Parameter(Mandatory)][string]$AppDataRoot,
+        [Parameter(Mandatory)][string]$EvidenceDirectory
+    )
+
+    $markerTemporaryPath = [string]$Marker.temporary_path
+    if ([string]::IsNullOrWhiteSpace($markerTemporaryPath)) {
+        throw 'Interruption marker does not declare the actual private temporary path.'
+    }
+    try {
+        $canonicalSavePath = [IO.Path]::GetFullPath($SavePath)
+        $canonicalAppDataRoot = [IO.Path]::GetFullPath($AppDataRoot).TrimEnd('\') + '\'
+        $canonicalTemporaryPath = [IO.Path]::GetFullPath($markerTemporaryPath)
+        if (Test-Path -LiteralPath $canonicalTemporaryPath -PathType Leaf) {
+            $canonicalTemporaryPath = [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $canonicalTemporaryPath).Path)
+        }
+        $canonicalSaveDirectory = [IO.Path]::GetDirectoryName($canonicalSavePath)
+        $canonicalTemporaryDirectory = [IO.Path]::GetDirectoryName($canonicalTemporaryPath)
+        $canonicalTemporaryParent = [IO.Path]::GetDirectoryName($canonicalTemporaryDirectory)
+    }
+    catch {
+        throw "Interruption marker temporary path is not canonicalizable: $markerTemporaryPath"
+    }
+
+    $expectedDirectoryPrefix = ".$(Split-Path -Leaf $canonicalSavePath).save."
+    if (
+        -not $canonicalTemporaryPath.StartsWith($canonicalAppDataRoot, [StringComparison]::OrdinalIgnoreCase) -or
+        -not [string]::Equals($canonicalTemporaryParent, $canonicalSaveDirectory, [StringComparison]::OrdinalIgnoreCase) -or
+        -not (Split-Path -Leaf $canonicalTemporaryDirectory).StartsWith($expectedDirectoryPrefix, [StringComparison]::Ordinal) -or
+        -not [string]::Equals((Split-Path -Leaf $canonicalTemporaryPath), 'payload.tmp', [StringComparison]::Ordinal)
+    ) {
+        throw "Interruption marker temporary path escapes the run private-save root: $canonicalTemporaryPath"
+    }
+
+    # A post-install interruption intentionally observes that the unique path
+    # was consumed by the atomic rename. Every other phase must retain a real
+    # private temporary file; neither case may fall back to a fixed .tmp name.
+    if (-not (Test-Path -LiteralPath $canonicalTemporaryPath -PathType Leaf) -and $Marker.phase -cne 'primary_installed') {
+        throw "Interruption marker temporary path does not exist before its expected consumption stage: $canonicalTemporaryPath"
+    }
+    $record = Get-ArtifactRecord -SourcePath $canonicalTemporaryPath -EvidenceName 'temporary.json' -EvidenceDirectory $EvidenceDirectory
+    $record | Add-Member -NotePropertyName marker_path -NotePropertyValue $canonicalTemporaryPath
+    $record | Add-Member -NotePropertyName marker_path_within_private_root -NotePropertyValue $true
+    return $record
+}
+
 $hadAppData = Test-Path Env:APPDATA
 $hadLocalAppData = Test-Path Env:LOCALAPPDATA
 $hadControlRoot = Test-Path Env:MAYOR_SAVE_KILL_QA_CONTROL_ROOT
@@ -414,6 +463,8 @@ try {
                             [string]$candidate.phase -ceq $casePhase -and
                             $candidate.process_id -is [long] -and
                             $candidatePid -eq $writerProcessId -and
+                            $candidate.temporary_path -is [string] -and
+                            -not [string]::IsNullOrWhiteSpace([string]$candidate.temporary_path) -and
                             $candidate.ready_for_forced_termination -is [bool] -and
                             [bool]$candidate.ready_for_forced_termination) {
                             $marker = $candidate
@@ -488,7 +539,7 @@ try {
             $preRecoveryArtifacts = [pscustomobject]@{
                 primary = Get-ArtifactRecord -SourcePath $savePath -EvidenceName 'primary.json' -EvidenceDirectory $artifactEvidenceRoot
                 backup = Get-ArtifactRecord -SourcePath ($savePath + '.bak') -EvidenceName 'backup.json' -EvidenceDirectory $artifactEvidenceRoot
-                temporary = Get-ArtifactRecord -SourcePath ($savePath + '.tmp') -EvidenceName 'temporary.json' -EvidenceDirectory $artifactEvidenceRoot
+                temporary = Get-InterruptedTemporaryArtifactRecord -Marker $marker -SavePath $savePath -AppDataRoot $appDataRoot -EvidenceDirectory $artifactEvidenceRoot
                 recovery_temporary = Get-ArtifactRecord -SourcePath ($savePath + '.recovery.tmp') -EvidenceName 'recovery-temporary.json' -EvidenceDirectory $artifactEvidenceRoot
             }
 

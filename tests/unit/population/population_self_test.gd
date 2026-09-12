@@ -11,7 +11,7 @@ func _init() -> void:
 	var first = PopulationSystem.new()
 	first.initialize(300, 42_4242)
 	_assert(first.population_count() == 300, "initial population")
-	_assert(first.get_visible_proxy_data().size() == 80, "visible proxy cap")
+	_assert(first.get_visible_proxy_data().size() == 24, "default visible proxy cap")
 	_assert(first.get_visible_proxy_data(PackedStringArray(), 500).size() == 80, "hard proxy cap")
 	var structured_name_count := 0
 	for resident_id: String in first.sorted_npc_ids():
@@ -156,11 +156,37 @@ func _init() -> void:
 	_assert(legacy_healthcare.accept_request(legacy_request_id, 2), "legacy healthcare request can be accepted")
 	_assert(legacy_healthcare.complete_request(legacy_request_id, 3, {"hospital_count": 2}), "legacy raw hospital count still completes requests without a capacity key")
 
-	var capped = PopulationSystem.new()
-	capped.initialize(900, 7)
-	_assert(capped.population_count() == 500, "population hard cap")
-	_assert(capped.add_resident() == "", "cannot exceed cap")
-	_assert(capped.add_residents(10, 5, "test.cap").is_empty(), "bulk addition reports no residents beyond cap")
+	var legacy_capacity = PopulationSystem.new()
+	_assert(legacy_capacity.initialize(500, 7), "legacy 500-resident population initializes")
+	_assert(PopulationSystem.MAX_POPULATION == 200_000, "population hard cap is 200000")
+	_assert(legacy_capacity.population_count() == 500, "legacy 500-resident population remains complete")
+	var legacy_capacity_round_trip = PopulationSystem.from_dict(legacy_capacity.to_dict())
+	_assert(legacy_capacity_round_trip != null and legacy_capacity_round_trip.population_count() == 500, "current 500-resident snapshot remains readable")
+	var rejected_capacity_hash := legacy_capacity.stable_hash()
+	_assert(not legacy_capacity.initialize(200_001, 8), "200001 resident initialization is rejected")
+	_assert(legacy_capacity.population_count() == 500 and legacy_capacity.stable_hash() == rejected_capacity_hash, "capacity rejection does not partially replace canonical population")
+
+	var cached_cohorts = PopulationSystem.new()
+	cached_cohorts.initialize(10, 8_080)
+	var first_cohort := cached_cohorts.get_bounded_deterministic_cohort(4, 0)
+	var second_cohort := cached_cohorts.get_bounded_deterministic_cohort(4, 1)
+	var third_cohort := cached_cohorts.get_bounded_deterministic_cohort(4, 2)
+	var wrapped_cohort := cached_cohorts.get_bounded_deterministic_cohort(4, 3)
+	_assert(first_cohort == cached_cohorts.get_bounded_deterministic_cohort(4, 0), "bounded cohort is deterministic per batch")
+	var covered_ids := {}
+	for cohort: PackedStringArray in [first_cohort, second_cohort, third_cohort]:
+		var cohort_ids := {}
+		for npc_id: String in cohort:
+			cohort_ids[npc_id] = true
+			covered_ids[npc_id] = true
+		_assert(cohort_ids.size() == cohort.size(), "bounded cohort contains no duplicate IDs")
+	_assert(covered_ids.size() == 10, "bounded cohorts cover the cached deterministic ID order")
+	_assert(third_cohort == PackedStringArray(["npc_000009", "npc_000010"]), "bounded cohort exposes a short tail without early wrap")
+	_assert(wrapped_cohort == first_cohort, "bounded cohort wraps only after the complete cached order traversal")
+	var cache_added := cached_cohorts.add_resident()
+	_assert(not cache_added.is_empty() and cached_cohorts.sorted_npc_ids().back() == cache_added, "resident addition updates cached ID order")
+	_assert(cached_cohorts.remove_residents_by_id(PackedStringArray([cache_added]), 1, "test.cache").size() == 1, "resident removal invalidates cached ID order")
+	_assert(not cached_cohorts.sorted_npc_ids().has(cache_added), "invalidated cached ID order excludes removed resident")
 
 	var lifecycle = PopulationSystem.new()
 	lifecycle.initialize(300, 42_4242)

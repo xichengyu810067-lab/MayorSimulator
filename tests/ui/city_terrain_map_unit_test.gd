@@ -43,6 +43,8 @@ func _run() -> void:
 
 	var backdrop_terrain = CityTerrainMapScript.new()
 	backdrop_terrain.apply_default_city_layout()
+	_check(backdrop_terrain.base_kind(12) == "river_lake", "square tile 12 is not classified as river/lake")
+	_check(not backdrop_terrain.is_buildable(12) and not backdrop_terrain.is_walkable(12), "square tile 12 is not blocked")
 	var modeled_count := 0
 	for state_variant: Variant in backdrop_terrain.all_tile_states():
 		var state: Dictionary = state_variant
@@ -75,26 +77,41 @@ func _run() -> void:
 	_check(not terrain.is_flattenable(0), "already flattened tile remains flattenable")
 	_check(terrain.restore_base_terrain(0), "base terrain could not be restored")
 	_check(not terrain.is_walkable(0) and terrain.effective_kind(0) == "trees", "restoring base terrain did not restore its blocker")
-	_check(bool(terrain.flatten_tile(5).get("ok", false)) and not bool(terrain.flatten_tile(5).get("changed", true)), "flat grass flatten is not idempotent")
+	var flat_tile_id := -1
+	for tile_id in terrain.cell_count():
+		if terrain.base_kind(tile_id) == "flat_grass":
+			flat_tile_id = tile_id
+			break
+	_check(flat_tile_id >= 0, "terrain fixture has no flat grass tile")
+	_check(bool(terrain.flatten_tile(flat_tile_id).get("ok", false)) and not bool(terrain.flatten_tile(flat_tile_id).get("changed", true)), "flat grass flatten is not idempotent")
 	_check(not terrain.set_tile_kind(5, "lava"), "unknown terrain kind was accepted")
 	_check(not bool(terrain.flatten_tile(100).get("ok", true)), "out-of-range tile flattened")
 
 	terrain.flatten_tile(0)
 	var serialized: Dictionary = terrain.to_dict()
-	_check(int(serialized.get("layout_version", -1)) == 3, "fresh terrain snapshot does not write layout 3")
+	_check(int(serialized.get("layout_version", -1)) == 4, "fresh terrain snapshot does not write layout 4")
+	_check(str(serialized.get("classification_provenance", "")) == "backdrop_square_layout_4", "fresh terrain snapshot lost layout 4 provenance")
 	_check(bool(CityTerrainMapScript.validate_snapshot(serialized).get("valid", false)), "canonical full terrain snapshot was rejected")
 	var legacy_layout_two := serialized.duplicate(true)
 	legacy_layout_two["layout_version"] = 2
+	legacy_layout_two.erase("classification_provenance")
 	var legacy_tiles_json := JSON.stringify(legacy_layout_two["tiles"])
 	_check(not bool(CityTerrainMapScript.validate_snapshot(legacy_layout_two).get("valid", true)), "strict current validation accepted legacy layout 2 directly")
-	var migrated_layout_three := CityTerrainMapScript.migrate_snapshot_to_current(legacy_layout_two)
-	_check(int(migrated_layout_three.get("layout_version", -1)) == 3, "layout 2 did not migrate to layout 3")
-	_check(JSON.stringify(migrated_layout_three.get("tiles", [])) == legacy_tiles_json, "layout migration changed one or more of the 100 tile records")
-	_check(Array(migrated_layout_three.get("tiles", [])).size() == 100, "layout migration did not retain 100 tile records")
+	var migrated_layout_four := CityTerrainMapScript.migrate_snapshot_to_current(legacy_layout_two)
+	_check(int(migrated_layout_four.get("layout_version", -1)) == 4, "layout 2 did not migrate to layout 4")
+	_check(str(migrated_layout_four.get("classification_provenance", "")) == "preserved_layout_2", "layout 2 migration lost provenance")
+	_check(JSON.stringify(migrated_layout_four.get("tiles", [])) == legacy_tiles_json, "layout migration changed one or more of the 100 tile records")
+	_check(Array(migrated_layout_four.get("tiles", [])).size() == 100, "layout migration did not retain 100 tile records")
 	_check(
-		CityTerrainMapScript.migrate_snapshot_to_current(migrated_layout_three) == migrated_layout_three,
+		CityTerrainMapScript.migrate_snapshot_to_current(migrated_layout_four) == migrated_layout_four,
 		"layout migration is not re-entrant on an already-current snapshot"
 	)
+	var missing_provenance := serialized.duplicate(true)
+	missing_provenance.erase("classification_provenance")
+	_check(not bool(CityTerrainMapScript.validate_snapshot(missing_provenance).get("valid", true)), "current terrain without provenance was accepted")
+	var unknown_provenance := serialized.duplicate(true)
+	unknown_provenance["classification_provenance"] = "unknown"
+	_check(not bool(CityTerrainMapScript.validate_snapshot(unknown_provenance).get("valid", true)), "unknown terrain provenance was accepted")
 	var duplicate_tile_snapshot: Dictionary = serialized.duplicate(true)
 	duplicate_tile_snapshot["tiles"][99]["tile_id"] = 98
 	_check(not bool(CityTerrainMapScript.validate_snapshot(duplicate_tile_snapshot).get("valid", true)), "duplicate terrain tile id was accepted")

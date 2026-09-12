@@ -2,6 +2,28 @@
   "schema_version": 1,
   "updates": [
     {
+      "update_id": "2026-08-10-alpha-3-live-source-audit",
+      "version": "0.1.0-alpha.3",
+      "date": "2026-08-10",
+      "title": "Live-source internal Alpha audit candidate",
+      "changes": [
+        "Windows x64 internal-only candidate prepared from the current live source.",
+        "Fresh acceptance is required before any internal distribution.",
+        "Public distribution remains blocked by unresolved rights and provenance records."
+      ]
+    },
+    {
+      "update_id": "2026-08-10-alpha-2-internal-rc",
+      "version": "0.1.0-alpha.2",
+      "date": "2026-08-10",
+      "title": "Internal Alpha RC convergence",
+      "changes": [
+        "Windows x64 internal-only Release Candidate prepared.",
+        "Authorized internal testing only; this is not a public release.",
+        "Public distribution rights and asset-provenance gaps remain open."
+      ]
+    },
+    {
       "update_id": "2026-07-31-data-report-separation",
       "version": "開發版 2026.07.31",
       "date": "2026-07-31",

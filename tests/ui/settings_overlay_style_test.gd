@@ -10,14 +10,16 @@ func _init() -> void:
 
 
 func _run() -> void:
-	root.content_scale_size = Vector2i(1440, 900)
-	root.size = Vector2i(1440, 900)
+	root.content_scale_size = Vector2i(1280, 720)
+	root.size = Vector2i(1280, 720)
 	var l10n = root.get_node_or_null("L10n")
 	_check(l10n != null, "localization service is available")
 	var original_locale: String = str(l10n.current_locale)
 	var overlay = SettingsOverlayScript.new()
 	root.add_child(overlay)
 	await process_frame
+	var settings_panel := overlay.find_child("SettingsPanel", true, false) as PanelContainer
+	_check(settings_panel != null and settings_panel.custom_minimum_size == Vector2(680.0, 432.0), "settings panel uses the compact aligned layout contract")
 	var theme_icon := overlay.find_child("ThemeModeIcon", true, false) as TextureRect
 	_check(theme_icon != null, "theme mode row exposes the illustrated theme icon")
 	if theme_icon != null:
@@ -29,6 +31,18 @@ func _run() -> void:
 			)
 	_check(overlay.music_volume_slider != null, "settings exposes a music volume slider")
 	_check(overlay.sfx_volume_slider != null, "settings exposes a sound-effect volume slider")
+	var audio_toggle_row := overlay.find_child("AudioToggleRow", true, false) as HBoxContainer
+	var music_volume_row := overlay.find_child("MusicVolumeRow", true, false) as HBoxContainer
+	var sfx_volume_row := overlay.find_child("SfxVolumeRow", true, false) as HBoxContainer
+	_check(audio_toggle_row != null and music_volume_row != null and sfx_volume_row != null, "audio controls expose named aligned rows")
+	if audio_toggle_row != null and music_volume_row != null and sfx_volume_row != null:
+		_check(audio_toggle_row.get_theme_constant("separation") == 12 and music_volume_row.get_theme_constant("separation") == 12 and sfx_volume_row.get_theme_constant("separation") == 12, "audio controls use the shared 12px horizontal rhythm")
+		_check(overlay.music_button.custom_minimum_size == Vector2(150.0, 44.0) and overlay.sfx_button.custom_minimum_size == Vector2(150.0, 44.0), "audio toggles share 44px targets and a common baseline")
+		_check((music_volume_row.get_child(0) as Label).custom_minimum_size == Vector2(196.0, 44.0) and (sfx_volume_row.get_child(0) as Label).custom_minimum_size == Vector2(196.0, 44.0), "English volume captions keep one complete aligned column")
+		_check(overlay.music_volume_label.custom_minimum_size == Vector2(72.0, 44.0) and overlay.sfx_volume_label.custom_minimum_size == Vector2(72.0, 44.0), "volume percentages use one fixed right column")
+	overlay.open()
+	await process_frame
+	_validate_compact_layout(overlay, settings_panel, audio_toggle_row, music_volume_row, sfx_volume_row)
 	if overlay.music_volume_slider != null and overlay.sfx_volume_slider != null:
 		_check(overlay.music_volume_slider.min_value == 0.0 and overlay.music_volume_slider.max_value == 100.0, "music volume range is 0-100")
 		_check(overlay.sfx_volume_slider.min_value == 0.0 and overlay.sfx_volume_slider.max_value == 100.0, "SFX volume range is 0-100")
@@ -55,6 +69,7 @@ func _run() -> void:
 	overlay.open()
 	await process_frame
 	_validate_mode_buttons(overlay, true, "after locale switch")
+	_validate_compact_layout(overlay, settings_panel, audio_toggle_row, music_volume_row, sfx_volume_row)
 	_check(
 		overlay.language_selector.selected_choice_id() == switched_locale,
 		"language selector reflects the switched locale"
@@ -71,9 +86,36 @@ func _run() -> void:
 		quit(0)
 
 
+func _validate_compact_layout(overlay, panel: Control, audio_toggle_row: HBoxContainer, music_row: HBoxContainer, sfx_row: HBoxContainer) -> void:
+	_check(panel != null and Rect2(Vector2.ZERO, root.get_visible_rect().size).encloses(panel.get_global_rect()), "laid-out settings panel stays inside 1280x720")
+	if panel == null:
+		return
+	var panel_rect := panel.get_global_rect()
+	_check(panel_rect.size.x >= 640.0 and panel_rect.size.x <= 700.0 and panel_rect.size.y >= 420.0 and panel_rect.size.y <= 460.0, "laid-out settings panel keeps a bounded compact footprint")
+	var content := overlay.find_child("SettingsContent", true, false) as Control
+	var tutorial_row := overlay.find_child("TutorialSettingsRow", true, false) as Control
+	_check(content != null and tutorial_row != null, "settings compact grid exposes its content and final row")
+	if content != null and tutorial_row != null:
+		_check(panel_rect.end.y - tutorial_row.get_global_rect().end.y <= 24.0, "settings layout avoids a large lower blank field")
+	if audio_toggle_row == null or music_row == null or sfx_row == null:
+		return
+	var music_slider_rect: Rect2 = overlay.music_volume_slider.get_global_rect()
+	var sfx_slider_rect: Rect2 = overlay.sfx_volume_slider.get_global_rect()
+	var music_percent_rect: Rect2 = overlay.music_volume_label.get_global_rect()
+	var sfx_percent_rect: Rect2 = overlay.sfx_volume_label.get_global_rect()
+	_check(is_equal_approx(music_slider_rect.position.x, sfx_slider_rect.position.x) and is_equal_approx(music_slider_rect.end.x, sfx_slider_rect.end.x), "laid-out music and SFX rails share exact x axes")
+	_check(is_equal_approx(music_percent_rect.position.x, sfx_percent_rect.position.x) and is_equal_approx(music_percent_rect.end.x, sfx_percent_rect.end.x), "laid-out music and SFX percentages share exact x axes")
+	_check(is_equal_approx(overlay.music_button.get_global_rect().position.y, overlay.sfx_button.get_global_rect().position.y) and is_equal_approx(overlay.music_button.get_global_rect().size.x, overlay.sfx_button.get_global_rect().size.x), "laid-out audio toggles share their baseline and width")
+
+
 func _validate_mode_buttons(overlay, dark_mode: bool, phase: String) -> void:
 	var selected_button: Button = overlay.dark_button if dark_mode else overlay.light_button
 	var idle_button: Button = overlay.light_button if dark_mode else overlay.dark_button
+	for button in [selected_button, idle_button, overlay.music_button, overlay.sfx_button]:
+		_check(
+			button.tooltip_text == button.text and not button.tooltip_text.is_empty(),
+			"%s clipped mode labels preserve their complete localized tooltip" % phase
+		)
 	for state in ["normal", "hover", "pressed", "hover_pressed"]:
 		_check(selected_button.has_theme_stylebox_override(state), "%s selected mode defines %s background" % [phase, state])
 		_check(idle_button.has_theme_stylebox_override(state), "%s idle mode defines %s background" % [phase, state])

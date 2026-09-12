@@ -162,14 +162,19 @@ func _validate_navigation_grid_contract() -> Object:
 	for required_kind: String in ["river_lake", "hill_cliff", "trees_scenery"]:
 		_check(represented_kinds.has(required_kind), "static navigation omits %s obstacles" % required_kind)
 
-	# This deterministic query forces the direct segment through the north lake;
-	# a valid route must bend through the meadow and remain clear at <=4 px
-	# samples after string pulling.
-	var static_start := Vector2(420, 320)
-	var static_target := Vector2(850, 320)
+	# Select only from bounded meadow pairs around the frozen north-central lake.
+	# Selection checks endpoint walkability plus the blocked direct segment and
+	# river_lake classification; it never asks pathfinding whether a pair works.
+	var static_fixture: Dictionary = _find_static_lake_detour_fixture(grid)
+	_check(not static_fixture.is_empty(), "static lake detour fixture finds walkable endpoints with a lake-blocked direct segment")
+	if static_fixture.is_empty():
+		return grid
+	var static_start: Vector2 = Vector2(static_fixture.get("start", Vector2.ZERO))
+	var static_target: Vector2 = Vector2(static_fixture.get("target", Vector2.ZERO))
 	_check(bool(grid.call("is_position_walkable", static_start)), "static detour fixture start is not walkable")
 	_check(bool(grid.call("is_position_walkable", static_target)), "static detour fixture target is not walkable")
 	_check(not bool(grid.call("is_segment_walkable", static_start, static_target)), "static detour fixture no longer crosses the river/lake mask")
+	_check(_segment_crosses_static_kind(grid, static_start, static_target, "river_lake"), "static detour fixture direct segment no longer crosses the intended river/lake geometry")
 	var static_path: PackedVector2Array = grid.call("find_path", static_start, static_target, false)
 	_check(not static_path.is_empty(), "navigation could not route around the river/lake")
 	_check(str((grid.call("get_last_query_diagnostics") as Dictionary).get("status", "")) == "ok", "static detour did not report status=ok")
@@ -177,9 +182,9 @@ func _validate_navigation_grid_contract() -> Object:
 
 	# Dynamic blockers must immediately affect A* solidity and path smoothing.
 	grid.call("clear_dynamic_blockers")
-	var dynamic_start := Vector2(260, 460)
-	var dynamic_target := Vector2(860, 460)
-	var blocker_center := Vector2(560, 460)
+	var dynamic_start := Vector2(385, 445)
+	var dynamic_target := Vector2(805, 445)
+	var blocker_center := Vector2(595, 445)
 	var before_path: PackedVector2Array = grid.call("find_path", dynamic_start, dynamic_target, false)
 	_check(not before_path.is_empty(), "dynamic fixture has no baseline path")
 	grid.call("set_building_blocker", DYNAMIC_TILE_INDEX, blocker_center, true, Vector2(64, 40))
@@ -491,6 +496,101 @@ func _path_from_variant(value: Variant) -> PackedVector2Array:
 			if point is Vector2:
 				path.append(point)
 	return path
+
+
+func _find_static_lake_detour_fixture(grid: Object) -> Dictionary:
+	var debug_points: Array = grid.call("get_debug_points", true)
+	var best_length: int = 0
+	var best_start: Vector2 = Vector2.ZERO
+	var best_target: Vector2 = Vector2.ZERO
+	var best_row: int = -1
+	var best_start_x: int = -1
+	var best_end_x: int = -1
+	for start_index: int in range(1, debug_points.size() - 1):
+		var previous_variant: Variant = debug_points[start_index - 1]
+		var start_variant: Variant = debug_points[start_index]
+		if not previous_variant is Dictionary or not start_variant is Dictionary:
+			continue
+		var previous: Dictionary = previous_variant
+		var run_start: Dictionary = start_variant
+		var previous_id_variant: Variant = previous.get("id", null)
+		var start_id_variant: Variant = run_start.get("id", null)
+		if not previous_id_variant is Vector2i or not start_id_variant is Vector2i:
+			continue
+		var previous_id: Vector2i = previous_id_variant
+		var start_id: Vector2i = start_id_variant
+		if not bool(previous.get("walkable", false)) or not _is_pure_river_lake_grid_record(run_start):
+			continue
+		if previous_id.y != start_id.y or previous_id.x != start_id.x - 1:
+			continue
+
+		var end_index: int = start_index
+		var end_id: Vector2i = start_id
+		while end_index + 1 < debug_points.size():
+			var next_variant: Variant = debug_points[end_index + 1]
+			if not next_variant is Dictionary:
+				break
+			var next_record: Dictionary = next_variant
+			var next_id_variant: Variant = next_record.get("id", null)
+			if not next_id_variant is Vector2i:
+				break
+			var next_id: Vector2i = next_id_variant
+			if not _is_pure_river_lake_grid_record(next_record) or next_id.y != start_id.y or next_id.x != end_id.x + 1:
+				break
+			end_index += 1
+			end_id = next_id
+
+		if end_index + 1 >= debug_points.size():
+			continue
+		var following_variant: Variant = debug_points[end_index + 1]
+		if not following_variant is Dictionary:
+			continue
+		var following: Dictionary = following_variant
+		var following_id_variant: Variant = following.get("id", null)
+		var previous_position_variant: Variant = previous.get("position", null)
+		var following_position_variant: Variant = following.get("position", null)
+		if not following_id_variant is Vector2i or not previous_position_variant is Vector2 or not following_position_variant is Vector2:
+			continue
+		var following_id: Vector2i = following_id_variant
+		if following_id.y != start_id.y or following_id.x != end_id.x + 1 or not bool(following.get("walkable", false)):
+			continue
+		var run_length: int = end_index - start_index + 1
+		if run_length > best_length:
+			best_length = run_length
+			best_start = previous_position_variant
+			best_target = following_position_variant
+			best_row = start_id.y
+			best_start_x = start_id.x
+			best_end_x = end_id.x
+
+	if best_length <= 0:
+		return {}
+	return {
+		"id": "river_lake_row_%d_x_%d_to_%d" % [best_row, best_start_x, best_end_x],
+		"start": best_start,
+		"target": best_target,
+	}
+
+
+func _is_pure_river_lake_grid_record(record: Dictionary) -> bool:
+	if bool(record.get("walkable", false)):
+		return false
+	var static_kinds_variant: Variant = record.get("static_kinds", null)
+	if not static_kinds_variant is PackedStringArray:
+		return false
+	var static_kinds: PackedStringArray = static_kinds_variant
+	return static_kinds.has("river_lake") and not static_kinds.has("hill_cliff") and not static_kinds.has("trees_scenery") and not static_kinds.has("outside_stage")
+
+
+func _segment_crosses_static_kind(grid: Object, start: Vector2, target: Vector2, static_kind: String) -> bool:
+	var distance: float = start.distance_to(target)
+	var sample_count: int = maxi(1, ceili(distance / PATH_SAMPLE_STEP))
+	for sample_index: int in range(sample_count + 1):
+		var sample: Vector2 = start.lerp(target, float(sample_index) / float(sample_count))
+		var classifications: PackedStringArray = grid.call("static_classification_at", sample)
+		if classifications.has(static_kind):
+			return true
+	return false
 
 
 func _path_length(path: PackedVector2Array) -> float:

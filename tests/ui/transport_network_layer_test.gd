@@ -2,6 +2,7 @@ extends SceneTree
 
 const NetworkLayerScript = preload("res://scripts/world/transport_network_layer.gd")
 const VehicleControllerScript = preload("res://scripts/world/transport_vehicle_controller.gd")
+const SquareGridLayoutScript = preload("res://scripts/world/square_grid_layout.gd")
 
 var _failed := false
 var _checks := 0
@@ -21,6 +22,14 @@ func _run() -> void:
 	var vehicles = VehicleControllerScript.new()
 	stage.add_child(vehicles)
 	await process_frame
+	var marker_center := Vector2(180, 120)
+	var marker_points := NetworkLayerScript.construction_marker_points(marker_center)
+	_check(marker_points.size() == 5 and marker_points[0] == marker_points[4], "construction marker is not a closed four-corner shape")
+	_check(is_equal_approx(marker_points[0].y, marker_points[1].y) and is_equal_approx(marker_points[1].x, marker_points[2].x), "construction marker still uses diamond edges")
+	var marker_width := marker_points[0].distance_to(marker_points[1])
+	var marker_height := marker_points[1].distance_to(marker_points[2])
+	_check(is_equal_approx(marker_width, marker_height), "construction marker is not square")
+	_check(is_equal_approx(marker_width, SquareGridLayoutScript.CELL_SIZE.x - 12.0), "construction marker is not constrained by canonical cell size")
 
 	var centers := {
 		"0": Vector2(80, 120),
@@ -41,6 +50,12 @@ func _run() -> void:
 		"operational_lines": [],
 		"private_road_paths": [],
 		"crossings": {},
+		"station_access_edges": [{
+			"station_id": "bus_stop_fixture",
+			"station_tile_id": 1,
+			"network_tile_id": 0,
+			"kind": "road",
+		}],
 	}
 	ground.set_network_snapshot(isolated_snapshot, centers)
 	vehicles.set_runtime_snapshot(isolated_snapshot, centers)
@@ -48,6 +63,46 @@ func _run() -> void:
 	var ground_debug: Dictionary = ground.debug_snapshot()
 	_check(not bool(ground_debug.get("autonomous_vehicle_generation", true)), "ground layer must never own vehicle generation")
 	_check(bool(ground_debug.get("shares_map_stage_transform", false)), "network layer must inherit the map-stage transform")
+	_check(int(ground_debug.get("station_access_edge_count", 0)) == 1, "network layer dropped the derived station access edge")
+	var access_segments: Array = ground_debug.get("station_access_segments", [])
+	_check(access_segments.size() == 1, "network layer did not project the station access edge")
+	if access_segments.size() == 1:
+		var access_segment: Dictionary = access_segments[0]
+		_check(Vector2(access_segment.get("from", Vector2.INF)).is_equal_approx(centers["0"]), "station connector did not start at the authoritative road center")
+		_check(Vector2(access_segment.get("to", Vector2.INF)).is_equal_approx(centers["1"]), "station connector did not end at the authoritative station center")
+
+	var turn_center := Vector2(180, 120)
+	var turn_contract: Dictionary = NetworkLayerScript.connected_junction_contract(turn_center, "road", ["w", "s"])
+	_check(bool(turn_contract.get("filled_center", false)), "a square-grid L-turn does not render a filled center junction")
+	_check(bool(turn_contract.get("has_perpendicular_turn", false)), "the renderer does not classify perpendicular road strokes as one continuous turn")
+	_check(Vector2(turn_contract.get("center", Vector2.INF)).is_equal_approx(turn_center), "the L-turn junction moved away from the authoritative tile center")
+	_check(Array(turn_contract.get("directions", [])) == ["s", "w"], "the render-only junction changed or invented connection directions")
+	_check(NetworkLayerScript.connected_junction_contract(turn_center, "road", ["w"]).is_empty(), "a terminal cap was misreported as a multi-edge junction")
+	var turn_snapshot := {
+		"tile_states": {
+			"0": {"segments": ["road"], "facilities": [], "connections": {"road": ["e"]}, "neighbours": {"e": 1}, "crossing": ""},
+			"1": {"segments": ["road"], "facilities": [], "connections": {"road": ["w", "s"]}, "neighbours": {"w": 0, "s": 2}, "crossing": ""},
+			"2": {"segments": ["road"], "facilities": [], "connections": {"road": ["n"]}, "neighbours": {"n": 1}, "crossing": ""},
+		},
+		"operational_lines": [],
+		"private_road_paths": [],
+		"crossings": {},
+		"station_access_edges": [],
+	}
+	var turn_topology_before: Dictionary = turn_snapshot.duplicate(true)
+	ground.set_network_snapshot(turn_snapshot, {
+		"0": Vector2(80, 120),
+		"1": turn_center,
+		"2": Vector2(180, 220),
+	})
+	var turn_debug: Dictionary = ground.debug_snapshot()
+	_check(turn_snapshot == turn_topology_before, "L-turn rendering mutated its caller-owned topology snapshot")
+	_check(int(turn_debug.get("tile_state_count", 0)) == 3, "L-turn rendering changed the number of authoritative topology tiles")
+	var connected_junctions: Array = turn_debug.get("connected_junctions", [])
+	_check(connected_junctions.size() == 1, "L-turn fixture did not project exactly one render-only junction")
+	if connected_junctions.size() == 1:
+		var projected_turn: Dictionary = connected_junctions[0]
+		_check(int(projected_turn.get("tile_id", -1)) == 1 and bool(projected_turn.get("has_perpendicular_turn", false)), "render-only junction was not attached to the authoritative L-turn tile")
 
 	var operational_snapshot := isolated_snapshot.duplicate(true)
 	operational_snapshot["tile_states"] = {
@@ -78,7 +133,7 @@ func _run() -> void:
 	var before_pos: Vector2 = before.get("vehicles", [])[0].get("position", Vector2.INF)
 	var after_pos: Vector2 = after.get("vehicles", [])[0].get("position", Vector2.INF)
 	_check(before_pos != after_pos, "the same train must advance along its authoritative cross-tile path")
-	_check(is_equal_approx(after_pos.y, 120.0) and after_pos.x >= 80.0 and after_pos.x <= 280.0, "train position left the authoritative rail polyline")
+	_check(absf(after_pos.y - 120.0) <= 6.0 and after_pos.x >= 74.0 and after_pos.x <= 286.0, "train position left the authoritative offset rail curve")
 	_check(bool(after.get("vehicles", [])[0].get("on_authoritative_path", false)), "vehicle debug contract must identify the authoritative route source")
 	vehicles.debug_set_simulation_time(2.5)
 	var crossing_debug: Dictionary = vehicles.debug_route_snapshot().get("crossing_states", {})

@@ -6,7 +6,7 @@ const COORDINATOR_PATH := "res://scripts/app/vertical_slice_coordinator.gd"
 const LOCALES := ["zh_TW", "zh_CN", "en", "ja", "ko"]
 const TEST_SEED := 24_072_026
 const TEST_FUNDS := 5_000_000
-const TEST_TILE := 900
+const TEST_TILE := 55
 const OPERATION_LABELS := {
 	"build": "興建工程",
 	"demolish": "拆除工程",

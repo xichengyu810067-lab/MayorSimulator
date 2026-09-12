@@ -64,14 +64,11 @@ func _run_flow() -> void:
 	if str(scene.get("selected_building")) != "商店":
 		_fail("Building card did not select 商店.")
 		return
-
-	var blueprint_button := overlay.find_child("OpenBlueprintButton", true, false) as Button
-	if not _press(blueprint_button, "direct blueprint shortcut"):
+	if overlay.find_child("OpenBlueprintButton", true, false) != null or overlay.find_child("OpenTransportPlanningButton", true, false) != null:
+		_fail("Building page still exposes duplicate blueprint or transport shortcuts.")
 		return
-	navigation_actions += 1
-	await _settle()
 	if str(overlay.call("current_page")) != "blueprint":
-		_fail("Blueprint shortcut did not open the blueprint page.")
+		_fail("Building card did not open the blueprint page directly.")
 		return
 
 	var material := overlay.find_child("BlueprintMaterial", true, false) as OptionButton
@@ -144,10 +141,9 @@ func _run_flow() -> void:
 		return
 	navigation_actions += 1
 	await _settle()
-	if not _press(blueprint_button, "approved blueprint shortcut"):
+	if str(overlay.call("current_page")) != "blueprint":
+		_fail("Approved building card did not reopen its blueprint directly.")
 		return
-	navigation_actions += 1
-	await _settle()
 	if submit.disabled or not submit.text.contains("放置"):
 		_fail("Approved blueprint did not expose the placement action.")
 		return

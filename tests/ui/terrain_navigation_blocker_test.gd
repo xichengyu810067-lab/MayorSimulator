@@ -2,6 +2,7 @@ extends SceneTree
 
 const CityTerrainMapScript = preload("res://scripts/world/city_terrain_map.gd")
 const NpcMapControllerScript = preload("res://scripts/app/npc_map_controller.gd")
+const SquareGridLayoutScript = preload("res://scripts/world/square_grid_layout.gd")
 
 const TERRAIN_KINDS := [
 	"trees",
@@ -146,6 +147,19 @@ func _validate_transport_crossing_aperture(controller, navigation, building_cent
 		navigation.get_debug_transport_crossing_aperture_tile_ids() == PackedInt32Array([CROSSING_TILE_ID]),
 		"debug contract does not expose the open crossing aperture"
 	)
+	var overlapping_buildings := building_centers.duplicate()
+	overlapping_buildings[CROSSING_TILE_ID] = CROSSING_CENTER
+	controller.sync_map_snapshot(_map_snapshot(
+		transport_blockers,
+		overlapping_buildings,
+		PackedInt32Array([CROSSING_TILE_ID])
+	))
+	_check(not navigation.is_position_walkable(CROSSING_CENTER), "crossing aperture overrode a building on the same tile")
+	controller.sync_map_snapshot(_map_snapshot(
+		transport_blockers,
+		building_centers,
+		PackedInt32Array([CROSSING_TILE_ID])
+	))
 
 	controller.set_crossing_states({str(CROSSING_TILE_ID): {"closed": true, "flash": false}})
 	_check(not navigation.is_position_walkable(CROSSING_CENTER), "closed gate left its NPC aperture walkable")
@@ -177,16 +191,35 @@ func _validate_all_terrain_blockers(navigation, centers: PackedVector2Array) -> 
 
 
 func _validate_backdrop_flatten_aperture(navigation) -> void:
-	var lake_point := Vector2(640, 260)
-	_check(
-		navigation.static_classification_at(lake_point).has("river_lake"),
-		"known lake point is absent from the backdrop model"
+	var centers := PackedVector2Array()
+	centers.resize(CityTerrainMapScript.CELL_COUNT)
+	var mapping = CityTerrainMapScript.new()
+	for tile_id in mapping.cell_count():
+		centers[tile_id] = SquareGridLayoutScript.center_for_coordinate(
+			mapping.coordinate_for_tile_id(tile_id)
+		)
+	var current = CityTerrainMapScript.new()
+	current.apply_default_city_layout()
+	var lake_point := centers[12]
+	navigation.sync_map_tile_blockers(
+		current.navigation_blockers(centers),
+		{},
+		{},
+		SquareGridLayoutScript.CELL_SIZE * 0.5
 	)
-	_check(not navigation.is_position_walkable(lake_point), "NPC can walk on the backdrop lake")
-	navigation.set_flattened_terrain_apertures({97: lake_point}, Vector2(74, 46))
-	_check(navigation.is_position_walkable(lake_point), "completed earthworks did not open the flattened backdrop plot")
-	var apertures: Array[Dictionary] = navigation.get_debug_flattened_terrain_apertures()
-	_check(apertures.size() == 1 and int(apertures[0].get("tile_index", -1)) == 97, "flattened backdrop aperture is not traceable")
+	_check(navigation.get_debug_static_polygons().is_empty(), "startup natural blockers survived authoritative snapshot sync")
+	_check(not navigation.is_position_walkable(lake_point), "layout 4 loaded lake tile is walkable")
+	var legacy = CityTerrainMapScript.create_from_dict(
+		CityTerrainMapScript.synthesized_layout3_compat_snapshot()
+	)
+	navigation.sync_map_tile_blockers(
+		legacy.navigation_blockers(centers),
+		{},
+		{},
+		SquareGridLayoutScript.CELL_SIZE * 0.5
+	)
+	_check(legacy.base_kind(12) == "flat_grass", "legacy compatibility fixture unexpectedly reclassified tile 12")
+	_check(navigation.is_position_walkable(lake_point), "layout 4 default blocker leaked into loaded legacy terrain")
 
 
 func _records_by_id(records: Array[Dictionary]) -> Dictionary:

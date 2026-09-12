@@ -11,6 +11,11 @@ const WALK_FRAMES_PER_DIRECTION := 4
 const WALK_FRAME_DISTANCE := 5.5
 const WALK_SPEED_THRESHOLD := 1.0
 const WALK_DISTANCE_THRESHOLD := 0.01
+const ATLAS_FEET_SOURCE_Y := 173.0
+const ATLAS_TO_DRAW_SCALE := ART_DRAW_SIZE.y / ATLAS_CELL_SIZE.y
+const ATLAS_FEET_TO_DRAW_TOP_Y := ATLAS_FEET_SOURCE_Y * ATLAS_TO_DRAW_SCALE
+const ATLAS_FOOTER_PX := ATLAS_CELL_SIZE.y - ATLAS_FEET_SOURCE_Y
+const DRAW_FEET_OFFSET_Y := ART_DRAW_SIZE.y - ATLAS_FEET_TO_DRAW_TOP_Y
 const FEET_BOTTOM_INSET := 3.0
 const STOP_SETTLE_DURATION := 0.14
 const STOP_SETTLE_SWITCH_RATIO := 0.50
@@ -379,6 +384,11 @@ func get_animation_contract() -> Dictionary:
 		"active_atlas_path": walk_texture.resource_path if walk_texture != null else "",
 		"runtime_hit_rect": MINIMUM_HIT_SIZE,
 		"runtime_draw_size": ART_DRAW_SIZE,
+		"atlas_feet_source_y": ATLAS_FEET_SOURCE_Y,
+		"atlas_footer_px": ATLAS_FOOTER_PX,
+		"atlas_to_draw_scale": ATLAS_TO_DRAW_SCALE,
+		"draw_feet_offset_y": DRAW_FEET_OFFSET_Y,
+		"draw_top_to_feet_y": ATLAS_FEET_TO_DRAW_TOP_Y,
 		"frame_distance": WALK_FRAME_DISTANCE,
 		"walk_cycle_distance": WALK_FRAME_DISTANCE * float(WALK_FRAMES_PER_DIRECTION),
 		"neutral_frames": NEUTRAL_FRAMES.duplicate(),
@@ -396,6 +406,8 @@ func get_animation_contract() -> Dictionary:
 
 
 func get_locomotion_debug_snapshot() -> Dictionary:
+	var feet_anchor := debug_feet_anchor()
+	var visual_bounds := debug_visual_bounds()
 	return {
 		"direction": current_direction,
 		"render_direction": _render_direction(),
@@ -403,8 +415,11 @@ func get_locomotion_debug_snapshot() -> Dictionary:
 		"frame_index": current_frame,
 		"atlas_frame_index": int(DIRECTION_ROWS[current_direction]) * WALK_FRAMES_PER_DIRECTION + current_frame,
 		"source_rect": debug_source_rect(),
-		"feet_anchor": debug_feet_anchor(),
-		"visual_bounds": debug_visual_bounds(),
+		"feet_anchor": feet_anchor,
+		"painted_feet_y": _painted_feet_y(feet_anchor),
+		"painted_feet_gap_px": absf(_painted_feet_y(feet_anchor) - feet_anchor.y),
+		"feet_draw_offset_y": DRAW_FEET_OFFSET_Y,
+		"visual_bounds": visual_bounds,
 		"is_walking": is_walking,
 		"cycle_phase": cycle_phase,
 		"velocity": current_velocity,
@@ -435,6 +450,9 @@ func debug_sample_locomotion(direction: String, travelled_distance: float, speed
 		"is_walking": walking_now,
 		"cycle_phase": _cycle_phase_for_distance(safe_distance),
 		"feet_anchor": debug_feet_anchor(),
+		"painted_feet_y": _painted_feet_y(debug_feet_anchor()),
+		"painted_feet_gap_px": absf(_painted_feet_y(debug_feet_anchor()) - debug_feet_anchor().y),
+		"feet_draw_offset_y": DRAW_FEET_OFFSET_Y,
 		"source_rect": _source_rect_for(safe_direction, frame_index),
 	}
 
@@ -457,7 +475,13 @@ func debug_feet_anchor() -> Vector2:
 
 func debug_visual_bounds() -> Rect2:
 	var feet := debug_feet_anchor()
-	return Rect2(feet - Vector2(ART_DRAW_SIZE.x * 0.5, ART_DRAW_SIZE.y), ART_DRAW_SIZE)
+	var draw_top := Vector2(feet.x - ART_DRAW_SIZE.x * 0.5, feet.y - ATLAS_FEET_TO_DRAW_TOP_Y)
+	return Rect2(draw_top, ART_DRAW_SIZE)
+
+
+func _painted_feet_y(feet: Vector2) -> float:
+	var visual_bounds := debug_visual_bounds()
+	return visual_bounds.position.y + ATLAS_FEET_SOURCE_Y * ATLAS_TO_DRAW_SCALE
 
 
 func _draw() -> void:

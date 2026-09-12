@@ -4,12 +4,18 @@ const TestCleanup := preload("res://tests/helpers/scene_tree_test_cleanup.gd")
 const TEST_SAVE_PATH := "user://mayor_simulator/tests/localization_autosave.json"
 const TEST_PREFERENCE_PATH := "user://mayor_simulator/tests/fresh-preference/settings.cfg"
 const LOCALES := ["zh_TW", "zh_CN", "en", "ja", "ko"]
+const BUILDING_BLUEPRINT_LABEL_SOURCE := "建築 · 藍圖"
+const BUILDING_BLUEPRINT_LABEL_EN := "Buildings · Blueprints"
 const TRADITIONAL_ONLY_CHARACTERS := "體與為這會個來開關學數據處實務點選擇議審醫療環營運讀檔儲滿廠園場發維護評級圖書館電費離"
+const GEOMETRY_EPSILON := 1.5
+const MUNICIPAL_LAYOUT_RESOLUTION := Vector2i(1440, 900)
+const INFORMATIONAL_PAGE_IDS := ["city_data", "report"]
 const PAGE_TITLES := {
 	"buildings": "選擇建築",
 	"governance": "政策與法案",
 	"judicial": "法院審判與辯護",
 	"oversight": "監察質詢與彈劾辯護",
+	"transport_planning": "城市交通規劃",
 	"blueprint": "設計藍圖",
 	"finance": "稅率與公共事業費",
 	"public_affairs": "民情中心",
@@ -131,6 +137,11 @@ func _run() -> void:
 		english_dynamic_sample.contains("population 48") and english_dynamic_sample.contains("Satisfied 2"),
 		"English runtime metrics keep readable spacing: %s" % english_dynamic_sample
 	)
+	var english_blueprint_label: String = _l10n.text(BUILDING_BLUEPRINT_LABEL_SOURCE)
+	_check(
+		english_blueprint_label == BUILDING_BLUEPRINT_LABEL_EN,
+		"English building+blueprint label is fully localized and semantic: %s" % english_blueprint_label
+	)
 	var english_petition: String = _l10n.text("陳情受理｜%s「%s」：%s") % ["Huang Jianhong", "A park", "Residents need green space."]
 	_check(
 		not english_petition.contains("陳情受理") and english_petition.contains("Huang Jianhong") and english_petition.contains("A park") and english_petition.contains("Residents need green space."),
@@ -143,6 +154,17 @@ func _run() -> void:
 		_l10n.clear_missing_sources()
 		_l10n.set_locale(locale, false)
 		await _settle(4)
+		var localized_blueprint_label: String = _l10n.text(BUILDING_BLUEPRINT_LABEL_SOURCE)
+		if locale == "en":
+			_check(
+				localized_blueprint_label == BUILDING_BLUEPRINT_LABEL_EN,
+				"English building+blueprint label stays complete in locale loop: %s" % localized_blueprint_label
+			)
+		else:
+			_check(
+				not localized_blueprint_label.contains("?") and not localized_blueprint_label.is_empty(),
+				"%s blueprint label stays non-placeholder and non-empty: %s" % [locale, localized_blueprint_label]
+			)
 		_validate_benchmark_format_templates(locale)
 		_validate_healthcare_localization(locale)
 		_check_visible_translation(main, locale, "新遊戲", "start screen")
@@ -164,8 +186,20 @@ func _run() -> void:
 	_check(main.language_selector.choice_count() == 5, "settings preserves all five languages")
 	_check(main.language_selector.visible_popup_item_count() == 5, "settings exposes all five language choices on one popup page")
 	_check(main.language_selector.shows_all_choices(), "settings language selector disables More paging")
-	main.call("_open_municipal_center")
+	root.content_scale_size = MUNICIPAL_LAYOUT_RESOLUTION
+	root.size = MUNICIPAL_LAYOUT_RESOLUTION
+	await _settle(3)
+	_check(
+		Vector2i(roundi(root.get_visible_rect().size.x), roundi(root.get_visible_rect().size.y)) == MUNICIPAL_LAYOUT_RESOLUTION,
+		"municipal localization layout uses the required %s viewport" % MUNICIPAL_LAYOUT_RESOLUTION
+	)
+	var municipal_button := main.find_child("MunicipalButton", true, false) as Button
+	_check(municipal_button != null, "public HUD MunicipalButton exists before municipal localization coverage")
+	_check(main.municipal_overlay == null, "municipal overlay remains lazy until the public HUD action")
+	if municipal_button != null:
+		municipal_button.pressed.emit()
 	await _settle(2)
+	_check(main.municipal_overlay != null, "public HUD MunicipalButton creates the lazy municipal overlay")
 	var forced_case_name := "商業促進法案強制施行審查"
 	var forced_case_result: Dictionary = main.vertical_slice.governance.justice_system.open_judicial_case(
 		"commerce_act",
@@ -195,7 +229,13 @@ func _run() -> void:
 		main.municipal_overlay.call("open_hub")
 		await process_frame
 		_check_visible_translation(main, locale, "市政服務中心", "municipal hub")
-		_check_visible_translation(main, locale, "請先選擇工作類別；每一層最多顯示 3 個選項。", "municipal hub")
+		_check_visible_translation(main, locale, "選擇市政工作；七項服務皆可直接開啟。", "municipal hub")
+		_check_visible_translation(main, locale, "建設與藍圖", "municipal hub")
+		var municipal_back := main.municipal_overlay.find_child("BackButton", true, false) as Button
+		_check(
+			municipal_back != null and municipal_back.tooltip_text == _l10n.text("返回上一頁（Esc）"),
+			"%s municipal BackButton tooltip is exactly localized: %s" % [locale, "<missing>" if municipal_back == null else municipal_back.tooltip_text]
+		)
 		var municipal_window := main.municipal_overlay.get_node_or_null("MunicipalWindow") as Control
 		_check(municipal_window != null, "municipal window exists for layout checks")
 		if municipal_window != null:
@@ -204,6 +244,30 @@ func _run() -> void:
 			main.municipal_overlay.call("open_page", page_id)
 			await _settle(2)
 			_check_visible_translation(main, locale, str(PAGE_TITLES[page_id]), "%s page" % page_id)
+			await _assert_municipal_page_layout(main, page_id, locale)
+			if page_id == "finance":
+				if int(main.call("debug_fiscal_draft_state").get("dirty_count", 0)) == 0:
+					main.call("_on_tax_changed", float(int(main.tax_rates["income"]) + 1), "income")
+					await _settle(2)
+				var fiscal_draft_status := main.municipal_overlay.find_child("FiscalDraftStatus", true, false) as Label
+				var fiscal_draft_state: Dictionary = main.call("debug_fiscal_draft_state")
+				var dirty_count := int(fiscal_draft_state.get("dirty_count", 0))
+				_check(
+					fiscal_draft_status != null and dirty_count > 0,
+					"%s finance page exposes a pending fiscal draft for localization coverage" % locale
+				)
+				if fiscal_draft_status != null:
+					var projected_net := int(fiscal_draft_state.get("projected_net", 0))
+					var safety_buffer := int(main.call("_fiscal_safety_buffer"))
+					var operating_source := "● 財政安全\n預估淨額已覆蓋市政支出與安全緩衝。" if projected_net >= safety_buffer else ("● 緩衝不足\n可運作，但無法承受收入波動。" if projected_net >= 0 else "● 赤字預警\n目前收費不足以支應每月市政運作。")
+					var expected_status := "%s\n%s" % [
+						_l10n.text(operating_source),
+						_l10n.text("尚未套用：%d 項變更\n可預覽整組草稿後再執行。") % dirty_count,
+					]
+					_check(
+						fiscal_draft_status.text == expected_status,
+						"%s pending fiscal draft status is exactly localized: expected='%s' actual='%s'" % [locale, expected_status, fiscal_draft_status.text]
+					)
 			if page_id == "judicial":
 				var case_title := main.judicial_panel.get("_case_title") as Label
 				var expected_case_title: String = _l10n.text("違法施行案件：%s") % _l10n.text("商業促進法案")
@@ -253,20 +317,23 @@ func _run() -> void:
 					)
 			if municipal_window != null:
 				_check_horizontal_layout(main.municipal_overlay, municipal_window.get_global_rect(), locale, "%s page" % page_id)
-			_audit_tree(main, locale, "city")
+			_audit_tree(main, locale, "city", true)
+		# Lazy municipal pages are localized and audited when they become active.
+		# Hidden siblings may be refreshed later in the source locale, then are
+		# localized again on their next activation, so do not re-audit them eagerly.
 		_check(_l10n.missing_sources.is_empty(), "%s city UI has no runtime translation misses: %s" % [locale, _l10n.missing_sources.keys()])
 		main.municipal_overlay.call("close_overlay")
 		main.settings_button.emit_signal("pressed")
 		await process_frame
 		for source in ["設定", "介面語言", "顯示模式", "淺色", "深色"]:
 			_check_visible_translation(main, locale, source, "settings")
-		_audit_tree(main, locale, "settings")
+		_audit_tree(main, locale, "settings", true)
 		main.settings_overlay.close()
 		main.exit_confirmation.call("open")
 		await process_frame
 		for source in ["要離開 Mayor Simulator 嗎？", "取消", "離開遊戲"]:
 			_check_visible_translation(main, locale, source, "exit confirmation")
-		_audit_tree(main, locale, "exit confirmation")
+		_audit_tree(main, locale, "exit confirmation", true)
 		main.exit_confirmation.call("close")
 
 	_l10n.set_locale("zh_TW", false)
@@ -277,7 +344,9 @@ func _run() -> void:
 	await TestCleanup.finish(self, [main], exit_code)
 
 
-func _audit_tree(node: Node, locale: String, context: String) -> void:
+func _audit_tree(node: Node, locale: String, context: String, visible_only: bool = false) -> void:
+	if visible_only and node is CanvasItem and not (node as CanvasItem).is_visible_in_tree():
+		return
 	if bool(node.get_meta("l10n_skip", false)):
 		return
 	var values: Array[String] = []
@@ -299,7 +368,7 @@ func _audit_tree(node: Node, locale: String, context: String) -> void:
 		if locale == "zh_CN" and _contains_any(value, TRADITIONAL_ONLY_CHARACTERS):
 			_fail("zh_CN %s contains Traditional-only text on %s: %s" % [context, node.get_path(), value])
 	for child in node.get_children():
-		_audit_tree(child, locale, context)
+		_audit_tree(child, locale, context, visible_only)
 
 
 func _check_visible_translation(root_node: Node, locale: String, source: String, context: String) -> void:
@@ -338,12 +407,27 @@ func _check_horizontal_layout(node: Node, bounds: Rect2, locale: String, context
 	if node is Label or node is Button or node is OptionButton or node is LineEdit:
 		var control := node as Control
 		var rect := control.get_global_rect()
-		if rect.size.x > 0.5:
-			var left_ok := rect.position.x >= bounds.position.x - 2.0
-			var right_ok := rect.end.x <= bounds.end.x + 2.0
+		if rect.size.x > 0.5 and rect.size.y > 0.5:
+			var left_ok := rect.position.x >= bounds.position.x - GEOMETRY_EPSILON
+			var right_ok := rect.end.x <= bounds.end.x + GEOMETRY_EPSILON
+			var top_ok := rect.position.y >= bounds.position.y - GEOMETRY_EPSILON
+			var bottom_ok := rect.end.y <= bounds.end.y + GEOMETRY_EPSILON
+			var scroll := _scroll_ancestor(control)
+			if scroll != null and not (top_ok and bottom_ok):
+				var scroll_rect := scroll.get_global_rect()
+				var vertical_scroll_is_safe := (
+					scroll.vertical_scroll_mode != ScrollContainer.SCROLL_MODE_DISABLED
+					and scroll_rect.position.x >= bounds.position.x - GEOMETRY_EPSILON
+					and scroll_rect.end.x <= bounds.end.x + GEOMETRY_EPSILON
+					and scroll_rect.position.y >= bounds.position.y - GEOMETRY_EPSILON
+					and scroll_rect.end.y <= bounds.end.y + GEOMETRY_EPSILON
+				)
+				top_ok = vertical_scroll_is_safe
+				bottom_ok = vertical_scroll_is_safe
+
 			_check(
-				left_ok and right_ok,
-				"%s %s horizontal overflow on %s: rect=%s bounds=%s text=%s" % [
+				left_ok and right_ok and top_ok and bottom_ok,
+				"%s %s control escapes its layout bounds on %s: rect=%s bounds=%s text=%s" % [
 					locale,
 					context,
 					node.get_path(),
@@ -352,8 +436,200 @@ func _check_horizontal_layout(node: Node, bounds: Rect2, locale: String, context
 					str(node.get("text")),
 				]
 			)
+			_assert_visible_text_metrics(control, locale, context)
 	for child in node.get_children():
 		_check_horizontal_layout(child, bounds, locale, context)
+
+
+func _assert_visible_text_metrics(control: Control, locale: String, context: String) -> void:
+	if not _requires_no_trimming(control):
+		return
+	var text := _visible_control_text(control)
+	if text.is_empty():
+		return
+	var font := control.get_theme_font("font")
+	var font_size := control.get_theme_font_size("font_size")
+	_check(font != null and font_size > 0, "%s %s control '%s' exposes a theme font and font size" % [locale, context, control.get_path()])
+	if font == null or font_size <= 0:
+		return
+	var content_size := _text_content_size(control)
+	var natural_size := font.get_multiline_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size, -1, TextServer.BREAK_MANDATORY)
+	var rendered_size := font.get_multiline_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, maxf(1.0, content_size.x), font_size)
+	var wraps := false
+	if control is Label:
+		wraps = (control as Label).autowrap_mode != TextServer.AUTOWRAP_OFF
+	elif control is Button:
+		wraps = (control as Button).autowrap_mode != TextServer.AUTOWRAP_OFF
+	var required_size := rendered_size if wraps else natural_size
+	var minimum_size := control.get_combined_minimum_size()
+	var allocated_size := control.get_global_rect().size
+	_check(
+		content_size.x + GEOMETRY_EPSILON >= required_size.x and content_size.y + GEOMETRY_EPSILON >= required_size.y,
+		"%s %s control '%s' renders its theme-font text without overflow: text=%s required=%s content=%s" % [locale, context, control.get_path(), text, required_size, content_size]
+	)
+	_check(
+		allocated_size.x + GEOMETRY_EPSILON >= minimum_size.x and allocated_size.y + GEOMETRY_EPSILON >= minimum_size.y,
+		"%s %s control '%s' receives at least its computed minimum size: minimum=%s actual=%s" % [locale, context, control.get_path(), minimum_size, allocated_size]
+	)
+
+
+func _requires_no_trimming(control: Control) -> bool:
+	if control is Label:
+		return (control as Label).text_overrun_behavior == TextServer.OVERRUN_NO_TRIMMING
+	if control is Button:
+		return (control as Button).text_overrun_behavior == TextServer.OVERRUN_NO_TRIMMING
+	return false
+
+
+func _visible_control_text(control: Control) -> String:
+	if control is Label or control is Button or control is OptionButton or control is LineEdit:
+		return str(control.get("text"))
+	return ""
+
+
+func _text_content_size(control: Control) -> Vector2:
+	var content_size := control.get_global_rect().size
+	var style_box := control.get_theme_stylebox("normal")
+	if style_box != null:
+		content_size.x -= style_box.get_margin(SIDE_LEFT) + style_box.get_margin(SIDE_RIGHT)
+		content_size.y -= style_box.get_margin(SIDE_TOP) + style_box.get_margin(SIDE_BOTTOM)
+	return Vector2(maxf(0.0, content_size.x), maxf(0.0, content_size.y))
+
+
+func _assert_municipal_page_layout(main: Node, page_id: String, locale: String) -> void:
+	if main == null or main.municipal_overlay == null:
+		return
+	var page_host: Node = main.municipal_overlay.find_child("PageHost", true, false)
+	if page_host == null:
+		_check(false, "%s %s lacks PageHost for long-copy layout validation" % [locale, page_id])
+		return
+	var page_host_control: Control = page_host as Control
+	var long_label := _longest_visible_label(page_host_control)
+	var button := _first_visible_button(page_host_control)
+	_check(long_label != null, "%s %s exposes a long label for PageHost reveal validation" % [locale, page_id])
+	if long_label != null:
+		await _assert_control_reveals_in_page_host(long_label, page_host_control, locale, "%s long label" % page_id)
+	if page_id in INFORMATIONAL_PAGE_IDS:
+		_check(button == null, "%s %s remains an information page without an invented action button" % [locale, page_id])
+		_check(long_label != null, "%s %s exposes a readable content sentinel that vertical scrolling can reveal" % [locale, page_id])
+		return
+	_check(button != null, "%s %s exposes a button for PageHost reveal validation" % [locale, page_id])
+	if button != null:
+		await _assert_control_reveals_in_page_host(button, page_host_control, locale, "%s button" % page_id)
+
+
+func _longest_visible_label(root_node: Node) -> Label:
+	var selected: Label
+	var selected_length := -1
+	if root_node == null:
+		return null
+	for candidate_variant in root_node.find_children("*", "Label", true, false):
+		var candidate := candidate_variant as Label
+		if candidate != null and candidate.is_visible_in_tree():
+			var length := candidate.text.length()
+			if length > selected_length:
+				selected = candidate
+				selected_length = length
+	return selected
+
+
+func _first_visible_button(root_node: Node) -> BaseButton:
+	if root_node == null:
+		return null
+	for candidate_variant in root_node.find_children("*", "BaseButton", true, false):
+		var candidate := candidate_variant as BaseButton
+		if candidate != null and candidate.is_visible_in_tree() and not candidate.disabled:
+			return candidate
+	return null
+
+
+func _assert_control_reveals_in_page_host(control: Control, page_host: Control, locale: String, context: String) -> void:
+	var scroll_positions: Array[Dictionary] = []
+	var original_rect := control.get_global_rect()
+	var host_rect := page_host.get_global_rect()
+	var required_visible_height := minf(original_rect.size.y, host_rect.size.y)
+	for scroll: ScrollContainer in _scroll_ancestors(control, page_host):
+		required_visible_height = minf(required_visible_height, scroll.get_global_rect().size.y)
+	var original_effective_rect := _effective_visible_rect(control).intersection(host_rect)
+	var needs_vertical_reveal := original_effective_rect.size.y < required_visible_height - GEOMETRY_EPSILON
+	var vertical_reveal_observed := false
+	for scroll: ScrollContainer in _scroll_ancestors(control, page_host):
+		scroll_positions.append({
+			"scroll": scroll,
+			"horizontal": scroll.scroll_horizontal,
+			"vertical": scroll.scroll_vertical,
+		})
+		_check(
+			scroll.horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED,
+			"%s %s forbids horizontal scrolling inside PageHost" % [locale, context]
+		)
+		_check(
+			scroll.vertical_scroll_mode != ScrollContainer.SCROLL_MODE_DISABLED,
+			"%s %s permits vertical reveal inside PageHost" % [locale, context]
+		)
+		var vertical_before := scroll.scroll_vertical
+		scroll.ensure_control_visible(control)
+		await _settle(2)
+		vertical_reveal_observed = vertical_reveal_observed or absf(float(scroll.scroll_vertical - vertical_before)) > GEOMETRY_EPSILON
+	var revealed_rect := control.get_global_rect()
+	var effective_rect := _effective_visible_rect(control).intersection(host_rect)
+	_check(
+		_rect_is_finite(revealed_rect)
+		and _rect_is_finite(effective_rect)
+		and effective_rect.size.x >= revealed_rect.size.x - GEOMETRY_EPSILON
+		and effective_rect.size.y >= required_visible_height - GEOMETRY_EPSILON,
+		"%s %s is fully revealed inside PageHost: raw=%s effective=%s host=%s" % [locale, context, revealed_rect, effective_rect, host_rect]
+	)
+	if needs_vertical_reveal:
+		_check(vertical_reveal_observed, "%s %s is revealed through an actual vertical scroll movement" % [locale, context])
+	if control is Label:
+		_check(not (control as Label).clip_text, "%s %s does not clip localized copy" % [locale, context])
+	for snapshot in scroll_positions:
+		var scroll := snapshot.get("scroll") as ScrollContainer
+		if scroll != null and is_instance_valid(scroll):
+			scroll.scroll_horizontal = int(snapshot.get("horizontal", 0))
+			scroll.scroll_vertical = int(snapshot.get("vertical", 0))
+	await _settle(2)
+
+
+func _scroll_ancestor(control: Control) -> ScrollContainer:
+	var ancestor := control.get_parent()
+	while ancestor != null:
+		if ancestor is ScrollContainer:
+			return ancestor as ScrollContainer
+		ancestor = ancestor.get_parent()
+	return null
+
+
+func _scroll_ancestors(control: Control, boundary: Control) -> Array[ScrollContainer]:
+	var result: Array[ScrollContainer] = []
+	var ancestor := control.get_parent()
+	while ancestor != null:
+		if ancestor is ScrollContainer:
+			result.append(ancestor as ScrollContainer)
+		if ancestor == boundary:
+			break
+		ancestor = ancestor.get_parent()
+	return result
+
+
+func _rect_is_finite(rect: Rect2) -> bool:
+	return (
+		is_finite(rect.position.x)
+		and is_finite(rect.position.y)
+		and is_finite(rect.size.x)
+		and is_finite(rect.size.y)
+	)
+
+
+func _effective_visible_rect(control: Control) -> Rect2:
+	var visible_rect := control.get_global_rect()
+	var ancestor := control.get_parent()
+	while ancestor != null:
+		if ancestor is Control and (ancestor as Control).clip_contents:
+			visible_rect = visible_rect.intersection((ancestor as Control).get_global_rect())
+		ancestor = ancestor.get_parent()
+	return visible_rect
 
 
 func _contains_han(value: String) -> bool:

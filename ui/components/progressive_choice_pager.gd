@@ -1,24 +1,32 @@
 class_name ProgressiveChoicePager
 extends VBoxContainer
 
+const SemanticPalette = preload("res://ui/theme/semantic_palette.gd")
+
 signal page_changed(page_index: int)
 
 const DEFAULT_PAGE_SIZE := 3
+const MAX_PAGE_SIZE := 6
 
 var page_size := DEFAULT_PAGE_SIZE
 var columns := 3
+var minimum_choice_width := 0.0
+var _forced_columns := 0
 var _page_index := 0
 var _choices: Array[Control] = []
 var _grid: GridContainer
+var _balanced_rows_host: VBoxContainer
 var _navigation: HBoxContainer
 var _previous_button: Button
 var _page_label: Label
 var _next_button: Button
+var _balanced_page_layout := false
+var _dark_mode := false
 
 
 func _init(p_columns: int = 3, p_page_size: int = DEFAULT_PAGE_SIZE) -> void:
 	columns = maxi(1, p_columns)
-	page_size = clampi(p_page_size, 1, DEFAULT_PAGE_SIZE)
+	page_size = clampi(p_page_size, 1, MAX_PAGE_SIZE)
 	name = "ProgressiveChoicePager"
 	set_meta("progressive_choice_group", true)
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -31,6 +39,13 @@ func _init(p_columns: int = 3, p_page_size: int = DEFAULT_PAGE_SIZE) -> void:
 	_grid.add_theme_constant_override("h_separation", 10)
 	_grid.add_theme_constant_override("v_separation", 10)
 	add_child(_grid)
+
+	_balanced_rows_host = VBoxContainer.new()
+	_balanced_rows_host.name = "BalancedChoiceRows"
+	_balanced_rows_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_balanced_rows_host.add_theme_constant_override("separation", 10)
+	_balanced_rows_host.visible = false
+	add_child(_balanced_rows_host)
 
 	_navigation = HBoxContainer.new()
 	_navigation.name = "ChoicePagination"
@@ -48,15 +63,14 @@ func _init(p_columns: int = 3, p_page_size: int = DEFAULT_PAGE_SIZE) -> void:
 	_page_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_page_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_page_label.add_theme_font_size_override("font_size", 17)
-	# A dark glyph with a light outline stays legible on both supported palettes.
-	_page_label.add_theme_color_override("font_color", Color(0.08, 0.12, 0.16))
-	_page_label.add_theme_color_override("font_outline_color", Color(0.98, 0.98, 0.96))
 	_page_label.add_theme_constant_override("outline_size", 4)
 	_navigation.add_child(_page_label)
 	_next_button = _navigation_button("ChoiceNext", "下一頁 →")
 	_next_button.pressed.connect(func() -> void: set_page(_page_index + 1))
 	_navigation.add_child(_next_button)
+	_apply_semantic_palette()
 	_refresh()
+	resized.connect(_refresh_columns_for_width)
 
 
 func add_choice(control: Control) -> void:
@@ -72,6 +86,8 @@ func add_choice(control: Control) -> void:
 	_choices.append(control)
 	_grid.add_child(control)
 	_refresh()
+	if is_inside_tree():
+		_refresh_columns_for_width()
 
 
 func remove_choice(control: Control) -> void:
@@ -79,8 +95,8 @@ func remove_choice(control: Control) -> void:
 	if index < 0:
 		return
 	_choices.remove_at(index)
-	if is_instance_valid(control) and control.get_parent() == _grid:
-		_grid.remove_child(control)
+	if is_instance_valid(control) and control.get_parent() != null:
+		control.get_parent().remove_child(control)
 	_refresh()
 
 
@@ -92,8 +108,8 @@ func clear_choices(queue_nodes: bool = false) -> void:
 	for choice in _choices:
 		if not is_instance_valid(choice):
 			continue
-		if choice.get_parent() == _grid:
-			_grid.remove_child(choice)
+		if choice.get_parent() != null:
+			choice.get_parent().remove_child(choice)
 		if queue_nodes:
 			choice.queue_free()
 	_choices.clear()
@@ -137,6 +153,81 @@ func choices() -> Array[Control]:
 	return _choices.duplicate()
 
 
+func set_minimum_choice_width(value: float) -> void:
+	minimum_choice_width = maxf(0.0, value)
+	_refresh_columns_for_width()
+
+
+func set_forced_columns(value: int) -> void:
+	_forced_columns = maxi(0, value)
+	_refresh_columns_for_width()
+
+
+func set_balanced_page_layout(enabled: bool) -> void:
+	_balanced_page_layout = enabled
+	set_meta("balanced_building_pager", enabled)
+	_refresh()
+
+
+func set_dark_mode(enabled: bool) -> void:
+	if _dark_mode == enabled:
+		return
+	_dark_mode = enabled
+	_apply_semantic_palette()
+
+
+func balanced_rows_for_count(visible_count: int) -> Array[int]:
+	match clampi(visible_count, 0, page_size):
+		0: return []
+		1: return [1]
+		2: return [2]
+		3: return [3]
+		4: return [2, 2]
+		5: return [3, 2]
+		_: return [3, 3]
+
+
+func debug_layout_state() -> Dictionary:
+	var row_counts: Array[int] = []
+	var row_rects: Array[Rect2] = []
+	if _balanced_page_layout:
+		for row_variant in _balanced_rows_host.get_children():
+			var row := row_variant as HBoxContainer
+			if row == null:
+				continue
+			var card_count := 0
+			for child_variant in row.get_children():
+				if child_variant is Control and bool((child_variant as Control).get_meta("progressive_choice", false)):
+					card_count += 1
+			row_counts.append(card_count)
+			row_rects.append(row.get_rect())
+	return {
+		"balanced": _balanced_page_layout,
+		"page_size": page_size,
+		"page_index": _page_index,
+		"page_count": page_count(),
+		"choice_count": choice_count(),
+		"visible_count": visible_choice_count(),
+		"row_counts": row_counts,
+		"row_rects": row_rects,
+		"last_row_centered": _balanced_last_row_centered(visible_choice_count()),
+		"navigation_visible": _navigation.visible,
+		"minimum_choice_width": minimum_choice_width,
+		"dark_mode": _dark_mode,
+	}
+
+
+func _refresh_columns_for_width() -> void:
+	if _forced_columns > 0:
+		_grid.columns = _forced_columns
+		return
+	if _balanced_page_layout or minimum_choice_width <= 0.0 or size.x <= 0.0:
+		return
+	var gutter := float(_grid.get_theme_constant("h_separation"))
+	var fit_columns := maxi(1, floori((size.x + gutter) / (minimum_choice_width + gutter)))
+	_grid.columns = clampi(fit_columns, 1, columns)
+
+
 func _refresh() -> void:
 	_page_index = clampi(_page_index, 0, maxi(0, page_count() - 1))
 	var start := _page_index * page_size
@@ -145,11 +236,119 @@ func _refresh() -> void:
 		var choice := _choices[index]
 		if is_instance_valid(choice):
 			choice.visible = index >= start and index < finish
+	if _balanced_page_layout:
+		_rebuild_balanced_rows(start, mini(finish, _choices.size()))
+	else:
+		_restore_standard_grid()
 	var has_pages := _choices.size() > page_size
 	_navigation.visible = has_pages
 	_previous_button.disabled = _page_index <= 0
 	_next_button.disabled = _page_index >= page_count() - 1
 	_page_label.text = L10n.text("第 %d / %d 頁") % [_page_index + 1, page_count()]
+
+
+func _rebuild_balanced_rows(start: int, finish: int) -> void:
+	_restore_choices_to_grid()
+	_clear_balanced_rows()
+	_grid.visible = false
+	_balanced_rows_host.visible = true
+	var visible_count := maxi(0, finish - start)
+	var row_counts := balanced_rows_for_count(visible_count)
+	var cursor := start
+	for row_index in row_counts.size():
+		var card_count := row_counts[row_index]
+		var row := HBoxContainer.new()
+		row.name = "BalancedChoiceRow_%d" % row_index
+		row.custom_minimum_size = Vector2(0, 120)
+		row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_theme_constant_override("separation", 10)
+		_balanced_rows_host.add_child(row)
+		var center_single := visible_count == 1 and card_count == 1
+		var center_two := visible_count == 5 and row_index == row_counts.size() - 1 and card_count == 2
+		if center_single:
+			_add_balanced_spacer(row, 1.0)
+		elif center_two:
+			_add_balanced_spacer(row, 0.5)
+		for _slot in card_count:
+			var choice := _choices[cursor]
+			cursor += 1
+			if choice.get_parent() != null:
+				choice.get_parent().remove_child(choice)
+			choice.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			choice.size_flags_stretch_ratio = 1.0
+			row.add_child(choice)
+		if center_single:
+			_add_balanced_spacer(row, 1.0)
+		elif center_two:
+			_add_balanced_spacer(row, 0.5)
+
+
+func _restore_standard_grid() -> void:
+	_restore_choices_to_grid()
+	_clear_balanced_rows()
+	_balanced_rows_host.visible = false
+	_grid.visible = true
+	_refresh_columns_for_width()
+
+
+func _restore_choices_to_grid() -> void:
+	for choice in _choices:
+		if not is_instance_valid(choice) or choice.get_parent() == _grid:
+			continue
+		if choice.get_parent() != null:
+			choice.get_parent().remove_child(choice)
+		_grid.add_child(choice)
+
+
+func _clear_balanced_rows() -> void:
+	for row_variant in _balanced_rows_host.get_children():
+		_balanced_rows_host.remove_child(row_variant)
+		row_variant.free()
+
+
+func _add_balanced_spacer(row: HBoxContainer, ratio: float) -> void:
+	var spacer := Control.new()
+	spacer.set_meta("balanced_spacer", true)
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	spacer.size_flags_stretch_ratio = ratio
+	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(spacer)
+
+
+func _balanced_last_row_centered(visible_count: int) -> bool:
+	return visible_count == 1 or visible_count == 5
+
+
+func _apply_semantic_palette() -> void:
+	var text_primary := SemanticPalette.color_for(_dark_mode, "text_primary")
+	_page_label.add_theme_color_override("font_color", text_primary)
+	_page_label.add_theme_color_override("font_outline_color", SemanticPalette.color_for(_dark_mode, "surface_base"))
+	for button in [_previous_button, _next_button]:
+		if not is_instance_valid(button):
+			continue
+		var normal := StyleBoxFlat.new()
+		normal.bg_color = SemanticPalette.color_for(_dark_mode, "surface_raised")
+		normal.border_color = SemanticPalette.color_for(_dark_mode, "border_default")
+		normal.set_border_width_all(2)
+		normal.set_corner_radius_all(8)
+		var hover := normal.duplicate() as StyleBoxFlat
+		hover.bg_color = SemanticPalette.color_for(_dark_mode, "surface_muted")
+		hover.border_color = SemanticPalette.color_for(_dark_mode, "border_focus")
+		var pressed := normal.duplicate() as StyleBoxFlat
+		pressed.bg_color = SemanticPalette.color_for(_dark_mode, "surface_base")
+		var disabled := normal.duplicate() as StyleBoxFlat
+		disabled.bg_color = SemanticPalette.color_for(_dark_mode, "action_primary_disabled")
+		disabled.border_color = SemanticPalette.color_for(_dark_mode, "border_disabled")
+		button.add_theme_stylebox_override("normal", normal)
+		button.add_theme_stylebox_override("hover", hover)
+		button.add_theme_stylebox_override("focus", hover)
+		button.add_theme_stylebox_override("pressed", pressed)
+		button.add_theme_stylebox_override("disabled", disabled)
+		button.add_theme_color_override("font_color", text_primary)
+		button.add_theme_color_override("font_hover_color", text_primary)
+		button.add_theme_color_override("font_pressed_color", text_primary)
+		button.add_theme_color_override("font_focus_color", text_primary)
+		button.add_theme_color_override("font_disabled_color", SemanticPalette.color_for(_dark_mode, "text_disabled"))
 
 
 func _navigation_button(node_name: String, label_text: String) -> Button:

@@ -16,6 +16,7 @@ func _initialize() -> void:
 func _run() -> void:
 	terrain = CityTerrainMapScript.new()
 	_validate_catalog_and_planning_rules()
+	_validate_completed_corridor_classification()
 	_validate_demolition_races_and_snapshot_shapes()
 	_validate_active_project_round_trips_and_reserved_ids()
 	_validate_multi_attachment_route_continuity()
@@ -42,6 +43,26 @@ func _validate_catalog_and_planning_rules() -> void:
 	}, terrain)
 	_check(not bool(terrain_rejected.get("ok", false)) and _issues_have(terrain_rejected, "terrain_not_flat"), "non-flat terrain must reject infrastructure")
 	terrain.configure_tile(tree_tile, "flat_grass")
+
+	var lake_tile := _tile(1, 1)
+	terrain.configure_tile(lake_tile, "river_lake")
+	var before_lake_quote: Dictionary = planner.to_dict()
+	var lake_plan := {
+		"segments": [{"id": "lake_road", "kind": "road", "tile_path": [lake_tile]}],
+	}
+	var lake_quote: Dictionary = planner.quote_project("build", lake_plan, terrain)
+	_check(
+		not bool(lake_quote.get("ok", false)) and _issues_have(lake_quote, "terrain_not_flat"),
+		"unflattened river/lake must reject a direct road quote"
+	)
+	_check(planner.to_dict() == before_lake_quote, "rejected river/lake quote mutated transport authority")
+	var lake_start: Dictionary = planner.start_project("build", lake_plan, terrain)
+	_check(
+		not bool(lake_start.get("ok", false)) and _issues_have(lake_start, "terrain_not_flat"),
+		"unflattened river/lake must reject direct project start"
+	)
+	_check(planner.to_dict() == before_lake_quote, "rejected river/lake start mutated transport authority")
+	terrain.configure_tile(lake_tile, "flat_grass")
 
 	var non_cardinal: Dictionary = planner.quote_project("build", {
 		"segments": [{"kind": "road", "tile_path": [_tile(0, 0), _tile(1, 1)]}],
@@ -80,6 +101,144 @@ func _validate_disconnected_station_never_spawns_vehicle() -> void:
 	_check(Array(runtime.get("operational_lines", [])).is_empty(), "disconnected station runtime must contain no vehicle-producing line")
 	_check(is_equal_approx(network.service_operational_factor("metro"), 0.0), "disconnected metro must produce no service factor")
 	_check(network.service_revenue("metro", 300, {"base_uses": 24, "reasonable": 30}) == 0, "disconnected metro must produce no service revenue")
+
+	var bus_network = TransportNetworkSystemScript.new()
+	_check(bool(bus_network.register_station("orphan_bus_a", "公車站", _tile(1, 2)).get("ok", false)), "first orphan bus station registration failed")
+	_check(bool(bus_network.register_station("orphan_bus_b", "公車站", _tile(4, 2)).get("ok", false)), "second orphan bus station registration failed")
+	var bus_created: Dictionary = bus_network.create_route({
+		"id": "orphan_bus_line",
+		"name": "未接道路公車",
+		"mode": "bus",
+		"stop_ids": ["orphan_bus_a", "orphan_bus_b"],
+		"fleet_size": 2,
+		"headway_minutes": 8,
+		"fare": 15,
+		"enabled": true,
+	})
+	_check(bool(bus_created.get("ok", false)) and not bool(bus_created.get("valid", true)), "bus route without station road access must remain invalid")
+	_check(bus_network.active_lines().is_empty(), "bus stations without road access must expose zero operational lines")
+	_check(bus_network.service_revenue("bus", 300, {"base_uses": 24, "reasonable": 15}) == 0, "bus stations without road access must earn zero revenue")
+	var bus_runtime: Dictionary = bus_network.visual_runtime_snapshot([], terrain)
+	_check(Array(bus_runtime.get("operational_lines", [])).is_empty(), "bus stations without road access must spawn zero vehicle-producing lines")
+	_check(Array(bus_runtime.get("station_access_edges", [])).is_empty(), "bus stations without road access must expose no derived visual connector")
+
+
+func _validate_completed_corridor_classification() -> void:
+	var network = TransportNetworkSystemScript.new()
+	var reused_path := _horizontal_path(6, 1, 3)
+	_check(_build_and_complete(network, {"segments": [{"id": "reuse_main", "kind": "road", "tile_path": reused_path}]}), "reuse fixture must complete")
+	var snapshot_before := network.to_dict()
+	var all_reuse: Dictionary = network.classify_completed_corridor("bus", reused_path, terrain)
+	_check(bool(all_reuse.get("ok", false)), "completed road corridor must classify")
+	_check(str(all_reuse.get("classification", "")) == "all_reuse", "completed corridor must classify as all-reuse")
+	_check(Array(all_reuse.get("new_runs", [])).is_empty(), "all-reuse corridor must not create new runs")
+	_check(Array(all_reuse.get("reused_segment_refs", [])).size() == 1 and str(Dictionary(Array(all_reuse.get("reused_segment_refs", []))[0]).get("id", "")) == "reuse_main", "reused segment references must be deterministic")
+	_check(network.to_dict() == snapshot_before, "corridor classification must not mutate a completed network")
+
+	var mixed_path := _horizontal_path(6, 1, 5)
+	var mixed: Dictionary = network.classify_completed_corridor("bus", mixed_path, terrain)
+	_check(bool(mixed.get("ok", false)) and str(mixed.get("classification", "")) == "mixed", "partially completed corridor must classify as mixed")
+	_check(Array(mixed.get("new_runs", [])).size() == 1 and Dictionary(Array(mixed.get("new_runs", []))[0]).get("tile_path", []) == [_tile(4, 6), _tile(5, 6)], "mixed corridor must retain its contiguous new run")
+	var mixed_quote: Dictionary = network.quote_completed_corridor("bus", mixed_path, terrain)
+	_check(bool(mixed_quote.get("ok", false)), "partially completed corridor must produce a v3 quote")
+	var mixed_corridor_quote: Dictionary = mixed_quote.get("corridor_quote", {})
+	var mixed_contract: Dictionary = mixed_corridor_quote.get("corridor", {})
+	_check(str(mixed_corridor_quote.get("price_model", "")) == "route_package_v3", "reuse-aware corridor quote is versioned as v3")
+	_check(str(mixed_contract.get("classification", "")) == "mixed" and str(mixed_contract.get("mode", "")) == "bus", "v3 quote persists corridor classification and mode")
+	_check(int(mixed_contract.get("total_units", -1)) == 5 and int(mixed_contract.get("reused_units", -1)) == 3 and int(mixed_contract.get("new_units", -1)) == 2, "v3 quote persists total, reused, and new units")
+	_check(Array(mixed_contract.get("reused_segment_refs", [])).size() == 1 and Array(mixed_contract.get("new_runs", [])).size() == 1, "v3 quote persists ordered reused references and new runs")
+	_check(int(mixed_corridor_quote.get("total_cost", -1)) == 1_040 and int(mixed_corridor_quote.get("monthly_maintenance", -1)) == 36, "v3 quote charges only the two new road units")
+	_check(int(mixed_corridor_quote.get("price_breakdown", {}).get("reused_corridor", -1)) == 0, "v3 quote never charges reused corridor construction")
+	_check(bool(TransportModesScript.validate_route_package_corridor_price_quote(mixed_corridor_quote).get("valid", false)), "v3 corridor checksum validates")
+	var mixed_plan: Dictionary = mixed_quote.get("plan", {})
+	_check(Array(mixed_plan.get("segments", [])).size() == 1 and Dictionary(Array(mixed_plan.get("segments", []))[0]).get("tile_path", []) == [_tile(4, 6), _tile(5, 6)], "v3 plan contains only unfinished runs")
+	var planned_mixed: Dictionary = network.plan_project("build", mixed_plan, terrain)
+	_check(bool(planned_mixed.get("ok", false)), "v3 mixed corridor plan persists as a transport project")
+	var planned_snapshot := network.to_dict()
+	_check(bool(TransportNetworkSystemScript.validate_snapshot(planned_snapshot).get("valid", false)), "v3 project snapshot validates")
+	var tampered_v3_snapshot := planned_snapshot.duplicate(true)
+	var planned_project_id := str(planned_mixed.get("project", {}).get("id", ""))
+	if not planned_project_id.is_empty():
+		tampered_v3_snapshot["projects"][planned_project_id]["quote"]["corridor_quote"]["checksum"] = "0".repeat(64)
+		var tampered_v3_validation: Dictionary = TransportNetworkSystemScript.validate_snapshot(tampered_v3_snapshot)
+		_check(not bool(tampered_v3_validation.get("valid", true)) and _issues_have(tampered_v3_validation, "invalid_project_corridor_quote"), "tampered persisted v3 checksum fails closed")
+	var all_reuse_quote: Dictionary = network.quote_completed_corridor("bus", reused_path, terrain)
+	_check(bool(all_reuse_quote.get("ok", false)) and int(all_reuse_quote.get("total_cost", -1)) == 0, "all-reuse corridor quote is a deterministic zero-cost plan")
+	_check(Array(all_reuse_quote.get("plan", {}).get("segments", [])).is_empty(), "all-reuse corridor quote creates no construction run")
+	var schema_one_snapshot := snapshot_before.duplicate(true)
+	schema_one_snapshot["schema_version"] = 1
+	var migrated_schema_one = TransportNetworkSystemScript.create_from_dict(schema_one_snapshot)
+	_check(migrated_schema_one != null and int(migrated_schema_one.to_dict().get("schema_version", -1)) == 2, "transport schema 1 migrates deterministically to schema 2")
+	var future_schema_snapshot := snapshot_before.duplicate(true)
+	future_schema_snapshot["schema_version"] = 3
+	_check(TransportNetworkSystemScript.create_from_dict(future_schema_snapshot) == null, "future transport schema fails closed")
+	var all_new: Dictionary = network.classify_completed_corridor("bus", _horizontal_path(7, 1, 3), terrain)
+	_check(bool(all_new.get("ok", false)) and str(all_new.get("classification", "")) == "all_new", "empty corridor must classify as all-new")
+
+	_check(_build_and_complete(network, {"segments": [{"id": "reuse_left", "kind": "road", "tile_path": [_tile(1, 8)]}]}), "left split fixture must complete")
+	_check(_build_and_complete(network, {"segments": [{"id": "reuse_right", "kind": "road", "tile_path": [_tile(3, 8)]}]}), "right split fixture must complete")
+	var split: Dictionary = network.classify_completed_corridor("bus", _horizontal_path(8, 0, 4), terrain)
+	var split_runs: Array = split.get("new_runs", [])
+	_check(bool(split.get("ok", false)) and split_runs.size() == 3, "interleaved reuse must split discontinuous new runs")
+	_check(Dictionary(split_runs[0]).get("tile_path", []) == [_tile(0, 8)] and Dictionary(split_runs[1]).get("tile_path", []) == [_tile(2, 8)] and Dictionary(split_runs[2]).get("tile_path", []) == [_tile(4, 8)], "new runs must retain the requested corridor order")
+	var split_refs: Array = split.get("reused_segment_refs", [])
+	_check(split_refs.size() == 2 and str(Dictionary(split_refs[0]).get("id", "")) == "reuse_left" and str(Dictionary(split_refs[1]).get("id", "")) == "reuse_right", "multiple reused segment references must sort by ID")
+
+	var mode_corridor_cases = [
+		["bus", "road", _horizontal_path(9, 0, 2)],
+		["metro", "metro_track", _horizontal_path(6, 3, 5)],
+		["train", "rail_track", _horizontal_path(6, 6, 8)],
+		["air", "runway", _horizontal_path(6, 1, 3)],
+	]
+	for case in mode_corridor_cases:
+		var mode_name := str(case[0])
+		var expected_kind := str(case[1])
+		var corridor_path: Array = case[2]
+		var mapping_network = TransportNetworkSystemScript.new()
+		_check(_build_and_complete(mapping_network, {
+			"segments": [{"id": "mapping_%s" % mode_name, "kind": expected_kind, "tile_path": corridor_path}],
+		}), "mapping fixture must support completed %s corridor" % mode_name)
+		var mapped: Dictionary = mapping_network.classify_completed_corridor(mode_name, corridor_path, terrain)
+		_check(bool(mapped.get("ok", false)), "completed segment must classify under mode %s" % mode_name)
+		_check(str(mapped.get("segment_kind", "")) == expected_kind, "%s corridor classification must map to %s" % [mode_name, expected_kind])
+		_check(str(mapped.get("classification", "")) == "all_reuse", "%s corridor classification must reuse completed %s segment" % [mode_name, expected_kind])
+
+	var non_completed_network = TransportNetworkSystemScript.new()
+	var non_completed_path := _horizontal_path(8, 0, 2)
+	_check(_build_and_complete(non_completed_network, {"segments": [{"id": "non_completed_road", "kind": "road", "tile_path": non_completed_path}]}), "non-completed fixture should be buildable")
+	var non_completed_snapshot := non_completed_network.to_dict()
+	var non_completed_segments: Dictionary = non_completed_snapshot.get("segments", {})
+	var non_completed_segment: Dictionary = non_completed_segments.get("non_completed_road", {})
+	non_completed_segment["status"] = "under_construction"
+	non_completed_segments["non_completed_road"] = non_completed_segment
+	non_completed_snapshot["segments"] = non_completed_segments
+	_check(TransportNetworkSystemScript.create_from_dict(non_completed_snapshot) == null, "corrupt current snapshot with orphaned construction state fails closed")
+	var downgraded_network = TransportNetworkSystemScript.new()
+	downgraded_network.segments = non_completed_segments.duplicate(true)
+	var downgraded_status = str(downgraded_network.to_dict().get("segments", {}).get("non_completed_road", {}).get("status", ""))
+	_check(downgraded_status == "under_construction", "non-completed fixture status must be downgraded in loaded network")
+	var non_completed_classification: Dictionary = downgraded_network.classify_completed_corridor("bus", non_completed_path, terrain)
+	_check(not bool(non_completed_classification.get("ok", true)), "non-completed fixture status must fail classification")
+	_check(str(non_completed_classification.get("error", "")) == "invalid_transport_network_snapshot", "non-completed fixture status failure must be snapshot validation failure")
+
+	_check(not bool(network.classify_completed_corridor("ferry", reused_path, terrain).get("ok", true)), "unknown route mode must fail closed")
+	_check(not bool(network.classify_completed_corridor("bus", [_tile(0, 9), _tile(1, 10)], terrain).get("ok", true)), "diagonal corridor must fail closed")
+	_check(not bool(network.classify_completed_corridor("bus", [_tile(0, 9), _tile(0, 9)], terrain).get("ok", true)), "duplicate corridor tile must fail closed")
+
+	var active_network = TransportNetworkSystemScript.new()
+	var active_tile := _tile(6, 9)
+	_check(bool(active_network.plan_project("build", {"segments": [{"kind": "road", "tile_path": [active_tile]}]}, terrain).get("ok", false)), "active-project fixture must plan")
+	_check(not bool(active_network.classify_completed_corridor("bus", [active_tile], terrain).get("ok", true)), "active project corridor tile must fail closed")
+
+	var crossing_network = TransportNetworkSystemScript.new()
+	var crossing_tile := _tile(8, 9)
+	_check(_build_and_complete(crossing_network, {"segments": [{"kind": "rail_track", "tile_path": [crossing_tile]}]}), "crossing rail fixture must complete")
+	_check(_build_and_complete(crossing_network, {"segments": [{"kind": "road", "tile_path": [crossing_tile]}]}), "crossing road fixture must complete")
+	_check(crossing_network.crossings.has("level_crossing_%03d" % crossing_tile), "crossing fixture must create authoritative level crossing")
+	var legal_crossing_classification: Dictionary = crossing_network.classify_completed_corridor("bus", [crossing_tile], terrain)
+	_check(bool(legal_crossing_classification.get("ok", false)) and str(legal_crossing_classification.get("classification", "")) == "all_reuse", "legal road-track crossing should classify as reuse")
+	crossing_network.crossings.clear()
+	_check(not bool(crossing_network.classify_completed_corridor("bus", [crossing_tile], terrain).get("ok", true)), "malformed crossing snapshot must fail closed")
 
 
 func _validate_demolition_races_and_snapshot_shapes() -> void:
@@ -666,6 +825,15 @@ func _validate_complete_networks_and_persistence() -> void:
 
 	var runtime := network.visual_runtime_snapshot(connected_city, terrain)
 	_check(Array(runtime.get("operational_lines", [])).size() == 4, "runtime snapshot must contain only the four operational lines")
+	var access_edges: Array = runtime.get("station_access_edges", [])
+	_check(not access_edges.is_empty(), "completed station guideway access must be derived for rendering")
+	var bus_stations_with_access: Dictionary = {}
+	for edge_variant: Variant in access_edges:
+		var edge: Dictionary = edge_variant
+		if str(edge.get("station_id", "")).begins_with("bus_stop_"):
+			bus_stations_with_access[str(edge.get("station_id", ""))] = true
+			_check(str(edge.get("kind", "")) == "road", "bus station access edge must terminate on a completed road")
+	_check(bus_stations_with_access.has("bus_stop_a") and bus_stations_with_access.has("bus_stop_b"), "each completed bus station must expose at least one same-cell or cardinal road access edge")
 	_check(Dictionary(runtime.get("tile_states", {})).has(str(_tile(5, 3))), "runtime snapshot must expose crossing tile state")
 	_check(Dictionary(runtime.get("crossings", {})).has(crossing_id), "runtime snapshot must expose authoritative crossing records")
 
@@ -681,6 +849,7 @@ func _validate_complete_networks_and_persistence() -> void:
 	_check(not network.crossings.has(crossing_id), "orphan level crossing must disappear after its track is removed")
 
 	var snapshot := network.to_dict()
+	_check(not snapshot.has("station_access_edges"), "derived station access edges must never enter the persisted transport schema")
 	var validation := TransportNetworkSystemScript.validate_snapshot(snapshot)
 	_check(bool(validation.get("valid", false)), "authoritative transport snapshot must validate before persistence: %s" % [validation.get("issues", [])])
 	var encoded := JSON.stringify(snapshot)
@@ -691,6 +860,7 @@ func _validate_complete_networks_and_persistence() -> void:
 	var restored = TransportNetworkSystemScript.create_from_dict(decoded)
 	var restored_snapshot: Dictionary = restored.to_dict()
 	_check(restored_snapshot == snapshot, "transport network must survive a deterministic JSON round trip")
+	_check(restored.station_access_edges(terrain) == network.station_access_edges(terrain), "station access edges must be recomputed deterministically after reload")
 	_check(restored.active_lines().size() == 3 and str(restored.routes.get("metro_line_1", {}).get("status", "")) == "suspended", "route operational and suspension states must survive loading")
 	_check(restored.navigation_blocker_ids() == network.navigation_blocker_ids(), "navigation blockers must survive loading")
 	var deletion_copy = TransportNetworkSystemScript.create_from_dict(decoded)

@@ -120,6 +120,93 @@ function Read-Utf8FileWithRetry {
     }
 }
 
+$mainIntegrationExpectedMunicipalDiagnostics = @(
+    [pscustomobject]@{
+        warning = "MunicipalOverlay has no registered page named 'unknown_municipal_page'."
+        overlay_function = 'open_page'
+        overlay_line = 179
+        test_line = 497
+    },
+    [pscustomobject]@{
+        warning = "MunicipalOverlay page 'released_navigation_test' is no longer valid."
+        overlay_function = 'open_page'
+        overlay_line = 183
+        test_line = 512
+    },
+    [pscustomobject]@{
+        warning = "MunicipalOverlay skipped an unavailable history page named 'released_navigation_test'."
+        overlay_function = '_handle_back'
+        overlay_line = 584
+        test_line = 520
+    }
+)
+
+function Get-MainIntegrationExpectedMunicipalDiagnosticPattern {
+    param(
+        [Parameter(Mandatory = $true)]
+        [pscustomobject]$ExpectedDiagnostic
+    )
+
+    $warning = [regex]::Escape([string]$ExpectedDiagnostic.warning)
+    $overlayFunction = [regex]::Escape([string]$ExpectedDiagnostic.overlay_function)
+    $overlayLine = [int]$ExpectedDiagnostic.overlay_line
+    $testLine = [int]$ExpectedDiagnostic.test_line
+    return ('(?m)^WARNING: {0}\r?\n\s+at: push_warning \(core/variant/variant_utility\.cpp:\d+\)\r?\n\s+GDScript backtrace \(most recent call first\):\r?\n\s+\[0\] {1} \(res://ui/shell/municipal_overlay\.gd:{2}\)\r?\n\s+\[1\] _run \(res://tests/integration/main_integration_test\.gd:{3}\)\r?\n?' -f $warning, $overlayFunction, $overlayLine, $testLine)
+}
+
+function Test-MainIntegrationExpectedMunicipalDiagnostics {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TestId,
+        [Parameter(Mandatory = $true)]
+        [bool]$Completed,
+        [Parameter(Mandatory = $true)]
+        [int]$ExitCode,
+        [Parameter(Mandatory = $true)]
+        [bool]$HasSuccessMarker,
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$CanonicalGodotLog,
+        [Parameter(Mandatory = $true)]
+        [string]$CertificatePattern
+    )
+
+    $result = [pscustomobject]@{
+        accepted = $false
+        patterns = @()
+        reasons = [System.Collections.Generic.List[string]]::new()
+    }
+    if ($TestId -cne 'main_integration' -or -not $Completed -or $ExitCode -ne 0 -or -not $HasSuccessMarker) {
+        return $result
+    }
+
+    $canonicalProductLog = [regex]::Replace($CanonicalGodotLog, $CertificatePattern, '')
+    $patterns = [System.Collections.Generic.List[string]]::new()
+    foreach ($expectedDiagnostic in $mainIntegrationExpectedMunicipalDiagnostics) {
+        $pattern = Get-MainIntegrationExpectedMunicipalDiagnosticPattern -ExpectedDiagnostic $expectedDiagnostic
+        $patterns.Add($pattern)
+        $matchCount = [regex]::Matches($canonicalProductLog, $pattern).Count
+        if ($matchCount -ne 1) {
+            $result.reasons.Add("main_integration expected MunicipalOverlay diagnostic count for '$($expectedDiagnostic.warning)' was $matchCount, expected 1")
+        }
+    }
+
+    $expectedWarnings = @($mainIntegrationExpectedMunicipalDiagnostics | ForEach-Object { [string]$_.warning })
+    $canonicalDiagnosticMatches = [regex]::Matches($canonicalProductLog, '(?im)^(?:SCRIPT ERROR|ERROR|WARNING):[^\r\n]*')
+    foreach ($diagnosticMatch in $canonicalDiagnosticMatches) {
+        $diagnostic = $diagnosticMatch.Value.Trim()
+        if ($diagnostic -notlike 'WARNING: MunicipalOverlay *' -or $diagnostic.Substring('WARNING: '.Length) -notin $expectedWarnings) {
+            $result.reasons.Add("main_integration unexpected canonical diagnostic: $diagnostic")
+        }
+    }
+
+    if ($result.reasons.Count -eq 0) {
+        $result.accepted = $true
+        $result.patterns = @($patterns)
+    }
+    return $result
+}
+
 $hadAppData = Test-Path Env:APPDATA
 $hadLocalAppData = Test-Path Env:LOCALAPPDATA
 $originalAppData = $env:APPDATA
@@ -186,9 +273,14 @@ try {
         $durationSeconds = [Math]::Round(((Get-Date) - $caseStartedAt).TotalSeconds, 3)
 
         $logParts = [System.Collections.Generic.List[string]]::new()
+        $canonicalGodotLog = ''
         foreach ($logPath in @($stdoutPath, $stderrPath, $godotLogPath)) {
             if (Test-Path -LiteralPath $logPath -PathType Leaf) {
-                $logParts.Add((Read-Utf8FileWithRetry -LiteralPath $logPath))
+                $logContent = Read-Utf8FileWithRetry -LiteralPath $logPath
+                $logParts.Add($logContent)
+                if ($logPath -eq $godotLogPath) {
+                    $canonicalGodotLog = $logContent
+                }
             }
         }
         $plainLog = [regex]::Replace(($logParts -join "`n"), $ansiPattern, '')
@@ -212,7 +304,19 @@ try {
             }
         }
 
-        $diagnosticMatches = [regex]::Matches($productLog, '(?im)^(?:SCRIPT ERROR|ERROR|WARNING):[^\r\n]*')
+        $hasSuccessMarker = $plainLog.IndexOf([string]$test.success_pattern, [StringComparison]::Ordinal) -ge 0
+        $diagnosticContract = Test-MainIntegrationExpectedMunicipalDiagnostics -TestId $id -Completed $completed -ExitCode $exitCode -HasSuccessMarker $hasSuccessMarker -CanonicalGodotLog $canonicalGodotLog -CertificatePattern $certificatePattern
+        foreach ($contractReason in $diagnosticContract.reasons) {
+            $reasons.Add($contractReason)
+        }
+
+        $diagnosticProductLog = $productLog
+        if ($diagnosticContract.accepted) {
+            foreach ($expectedPattern in $diagnosticContract.patterns) {
+                $diagnosticProductLog = [regex]::Replace($diagnosticProductLog, $expectedPattern, '')
+            }
+        }
+        $diagnosticMatches = [regex]::Matches($diagnosticProductLog, '(?im)^(?:SCRIPT ERROR|ERROR|WARNING):[^\r\n]*')
         foreach ($diagnosticMatch in $diagnosticMatches) {
             $diagnostic = $diagnosticMatch.Value.Trim()
             if (-not $reasons.Contains($diagnostic)) {

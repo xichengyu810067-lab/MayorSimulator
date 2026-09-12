@@ -97,6 +97,10 @@ func _validate_refresh_contract(dashboard) -> void:
 	_check(is_equal_approx(dashboard.monthly_data_service_charts["security"].safety_value(), 60.0), "second month keeps an independent service safety line")
 	_check(dashboard.monthly_data_service_charts["security"].has_safety_warning(), "security 45 still raises a safety warning")
 	_check(dashboard.monthly_data_service_charts["security"].difference_label.text.contains("上月"), "security comparison explicitly names the previous month")
+	_check(str(dashboard.monthly_data_service_charts["security"].get_meta("chart_render_mode", "")) == "donut", "monthly charts render as donut charts while preserving their public API")
+	await _validate_baseline_to_target_animation(dashboard.monthly_data_service_charts["security"])
+	_validate_safety_warning_streaks(dashboard)
+	_validate_current_period_history_semantics(dashboard)
 
 	dashboard.restart_animations()
 	var restarted_count := 0
@@ -106,6 +110,93 @@ func _validate_refresh_contract(dashboard) -> void:
 				restarted_count += 1
 	_check(restarted_count == 14, "restart covers all fourteen unique dashboard charts")
 	await _settle()
+
+
+func _validate_baseline_to_target_animation(chart) -> void:
+	chart.set_chart({
+		"minimum": 0.0,
+		"maximum": 100.0,
+		"baseline": 20.0,
+		"safety": 60.0,
+		"current": 80.0,
+		"duration": 0.80,
+		"current_text": "測試 80%",
+		"difference_text": "測試動畫",
+	}, true)
+	_check(is_equal_approx(chart.displayed_value(), 20.0), "donut animation starts at the comparison baseline")
+	await create_timer(0.12).timeout
+	var mid_value: float = float(chart.displayed_value())
+	_check(mid_value > 20.0 and mid_value < 80.0, "donut animation visibly interpolates between baseline and target")
+	await create_timer(0.80).timeout
+	_check(is_equal_approx(chart.displayed_value(), 80.0), "donut animation reaches the current target value")
+
+
+func _validate_safety_warning_streaks(dashboard) -> void:
+	var first_warning = _refresh_security_warning(dashboard, [], 45)
+	_check(str(first_warning.get_meta("safety_warning_severity", "")) == "caution", "first unsafe month uses a caution warning")
+	var third_warning = _refresh_security_warning(dashboard, [_security_history_snapshot(45), _security_history_snapshot(45)], 45)
+	_check(str(third_warning.get_meta("safety_warning_severity", "")) == "critical", "third consecutive unsafe month escalates to a critical warning")
+	var reset_warning = _refresh_security_warning(dashboard, [_security_history_snapshot(45), _security_history_snapshot(70)], 45)
+	_check(str(reset_warning.get_meta("safety_warning_severity", "")) == "caution", "a safe intervening month resets the warning streak")
+
+
+func _validate_current_period_history_semantics(dashboard) -> void:
+	var snapshot := _snapshot(false)
+	snapshot["metrics"]["security"] = 45
+	snapshot["monthly_report_history"] = [
+		_security_history_snapshot(72, 1),
+		_security_history_snapshot(45, 2),
+	]
+	snapshot["history_includes_current"] = true
+	snapshot["current_period_index"] = 2
+	snapshot["has_previous_month"] = true
+	snapshot["previous_month"] = _security_history_snapshot(45, 2)
+	dashboard.refresh(snapshot)
+	var chart = dashboard.monthly_data_service_charts["security"]
+	_check(is_equal_approx(chart.baseline_value(), 72.0), "a history tail marked current compares against the true prior period")
+	_check(chart.safety_warning_label.text.contains("連續 1 月"), "the current unsafe period is counted exactly once")
+
+	var gap_snapshot := _snapshot(false)
+	gap_snapshot["metrics"]["security"] = 45
+	gap_snapshot["monthly_report_history"] = [
+		_security_history_snapshot(45, 1),
+		_security_history_snapshot(45, 3),
+	]
+	gap_snapshot["history_includes_current"] = true
+	gap_snapshot["current_period_index"] = 3
+	dashboard.refresh(gap_snapshot)
+	chart = dashboard.monthly_data_service_charts["security"]
+	_check(is_equal_approx(chart.baseline_value(), 60.0), "a missing prior period falls back to the safety-line baseline")
+	_check(chart.safety_warning_label.text.contains("連續 1 月"), "a period gap interrupts the unsafe warning streak")
+
+
+func _refresh_security_warning(dashboard, history: Array, current_security: int):
+	var snapshot := _snapshot(false)
+	snapshot["metrics"]["security"] = current_security
+	snapshot["monthly_report_history"] = history.duplicate(true)
+	snapshot["has_previous_month"] = not history.is_empty()
+	snapshot["previous_month"] = history[history.size() - 1].duplicate(true) if not history.is_empty() else {}
+	var before := snapshot.duplicate(true)
+	dashboard.refresh(snapshot)
+	_check(snapshot == before, "warning streak refresh preserves caller-owned monthly history")
+	return dashboard.monthly_data_service_charts["security"]
+
+
+func _security_history_snapshot(value: int, period_index: int = 0) -> Dictionary:
+	var snapshot := {
+		"security": value,
+		"coverage_rate": 100.0,
+		"population_rate": 0.0,
+		"satisfaction": 70,
+		"score": 70,
+		"environment": 70,
+		"traffic": 70,
+		"education": 70,
+		"healthcare": 70,
+	}
+	if period_index > 0:
+		snapshot["period_index"] = period_index
+	return snapshot
 
 
 func _validate_hidden_tab_chart_redraw(dashboard) -> void:
@@ -128,19 +219,21 @@ func _validate_hidden_tab_chart_redraw(dashboard) -> void:
 
 
 func _snapshot(has_previous_month: bool) -> Dictionary:
+	var previous_month := {
+		"coverage_rate": 125.0,
+		"population_rate": 1.5,
+		"satisfaction": 68,
+		"score": 66,
+		"security": 72,
+		"environment": 69,
+		"traffic": 67,
+		"education": 71,
+		"healthcare": 70,
+	}
 	return {
 		"has_previous_month": has_previous_month,
-		"previous_month": {
-			"coverage_rate": 125.0,
-			"population_rate": 1.5,
-			"satisfaction": 68,
-			"score": 66,
-			"security": 72,
-			"environment": 69,
-			"traffic": 67,
-			"education": 71,
-			"healthcare": 70,
-		} if has_previous_month else {},
+		"previous_month": previous_month.duplicate(true) if has_previous_month else {},
+		"monthly_report_history": [previous_month.duplicate(true)] if has_previous_month else [],
 		"population": 315,
 		"month_start_population": 300,
 		"satisfaction": 70,

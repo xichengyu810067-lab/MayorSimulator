@@ -12,6 +12,9 @@ const MUSIC_BUS := &"Music"
 const SFX_BUS := &"SFX"
 const MUSIC_BASE_DB := -23.0
 const SFX_BASE_DB := -9.0
+const SHUTDOWN_STOP_SETTLE_FRAMES := 3
+const SHUTDOWN_DETACH_SETTLE_FRAMES := 3
+const SHUTDOWN_FREE_SETTLE_FRAMES := 3
 
 var music_enabled := true
 var sfx_enabled := true
@@ -20,6 +23,7 @@ var sfx_volume := 1.0
 var music_player: AudioStreamPlayer
 var sfx_players: Array[AudioStreamPlayer] = []
 var _next_sfx_player := 0
+var _shutdown_settled := false
 
 
 func _ready() -> void:
@@ -55,8 +59,25 @@ func _exit_tree() -> void:
 
 
 func shutdown() -> void:
+	if _shutdown_settled:
+		return
 	stop_all()
 	detach_streams()
+	_shutdown_settled = true
+
+
+func settle_for_shutdown(tree: SceneTree) -> void:
+	if _shutdown_settled:
+		return
+	stop_all()
+	# AudioServer consumes playback commands asynchronously. Keep the same
+	# frame barriers used by the leak-clean test teardown before releasing WAVs.
+	for _frame in range(SHUTDOWN_STOP_SETTLE_FRAMES):
+		await tree.process_frame
+	detach_streams()
+	for _frame in range(SHUTDOWN_DETACH_SETTLE_FRAMES):
+		await tree.process_frame
+	_shutdown_settled = true
 
 
 func stop_all() -> void:

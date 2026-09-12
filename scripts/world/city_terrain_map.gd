@@ -1,7 +1,7 @@
 class_name CityTerrainMap
 extends RefCounted
 
-const CityNavigationGridScript = preload("res://scripts/world/city_navigation_grid.gd")
+const CityTerrainLayoutScript = preload("res://data/catalogs/city_terrain_layout.gd")
 
 ## Authoritative logical terrain state for the city map.
 ##
@@ -12,13 +12,14 @@ const CityNavigationGridScript = preload("res://scripts/world/city_navigation_gr
 
 const SCHEMA_VERSION := 1
 const LEGACY_LAYOUT_VERSION := 2
-const LAYOUT_VERSION := 3
-const GRID_COLUMNS := 10
-const GRID_ROWS := 10
-const CELL_COUNT := GRID_COLUMNS * GRID_ROWS
-const LEGACY_GRID_SIZE := 8
-const LEGACY_CELL_COUNT := LEGACY_GRID_SIZE * LEGACY_GRID_SIZE
-const LEGACY_OFFSET := Vector2i(1, 1)
+const FROZEN_LAYOUT_VERSION := CityTerrainLayoutScript.LEGACY_LAYOUT_VERSION
+const LAYOUT_VERSION := CityTerrainLayoutScript.LAYOUT_VERSION
+const GRID_COLUMNS := CityTerrainLayoutScript.GRID_COLUMNS
+const GRID_ROWS := CityTerrainLayoutScript.GRID_ROWS
+const CELL_COUNT := CityTerrainLayoutScript.CELL_COUNT
+const LEGACY_GRID_SIZE := CityTerrainLayoutScript.LEGACY_GRID_SIZE
+const LEGACY_CELL_COUNT := CityTerrainLayoutScript.LEGACY_CELL_COUNT
+const LEGACY_OFFSET := CityTerrainLayoutScript.LEGACY_OFFSET
 const INVALID_COORDINATE := Vector2i(-1, -1)
 
 const KIND_FLAT_GRASS := "flat_grass"
@@ -27,6 +28,17 @@ const KIND_HILL_CLIFF := "hill_cliff"
 const KIND_RIVER_LAKE := "river_lake"
 const KIND_ROAD_PATH := "road_path"
 const KIND_RAIL_TRACK := "rail_track"
+
+const PROVENANCE_BACKDROP_SQUARE_LAYOUT_4 := "backdrop_square_layout_4"
+const PROVENANCE_PRESERVED_LAYOUT_3 := "preserved_layout_3"
+const PROVENANCE_PRESERVED_LAYOUT_2 := "preserved_layout_2"
+const PROVENANCE_SYNTHESIZED_LAYOUT_3_COMPAT := "synthesized_layout_3_compat"
+const VALID_PROVENANCE: Array[String] = [
+	PROVENANCE_BACKDROP_SQUARE_LAYOUT_4,
+	PROVENANCE_PRESERVED_LAYOUT_3,
+	PROVENANCE_PRESERVED_LAYOUT_2,
+	PROVENANCE_SYNTHESIZED_LAYOUT_3_COMPAT,
+]
 
 const TERRAIN_RULES := {
 	KIND_FLAT_GRASS: {
@@ -65,6 +77,7 @@ var _coordinates_by_tile_id: Array[Vector2i] = []
 var _tile_id_by_coordinate: Dictionary = {}
 var _base_kinds := PackedStringArray()
 var _flattened := PackedByteArray()
+var _classification_provenance := PROVENANCE_BACKDROP_SQUARE_LAYOUT_4
 
 
 func _init(snapshot: Dictionary = {}) -> void:
@@ -127,17 +140,13 @@ func terrain_kinds() -> PackedStringArray:
 
 
 func apply_default_city_layout() -> void:
-	# The original backdrop image remains the terrain authority. Layout 3 keeps
-	# the established base_kind/flattened record shape so the atomic 2 -> 3
-	# migration can preserve all 100 records without reclassifying terrain.
 	_reset_terrain_state()
-	for coordinate: Vector2i in coordinates_in_display_order():
-		var model: Dictionary = CityNavigationGridScript.backdrop_terrain_for_coordinate(coordinate)
-		var modeled_kind := str(model.get("kind", KIND_FLAT_GRASS))
-		var terrain_kind := KIND_TREES if modeled_kind == "trees_scenery" else modeled_kind
+	_classification_provenance = PROVENANCE_BACKDROP_SQUARE_LAYOUT_4
+	for tile_id in CELL_COUNT:
+		var terrain_kind := CityTerrainLayoutScript.terrain_kind_for_tile_id(tile_id)
 		if not TERRAIN_RULES.has(terrain_kind):
 			terrain_kind = KIND_FLAT_GRASS
-		_base_kinds[tile_id_for_coordinate(coordinate)] = terrain_kind
+		_base_kinds[tile_id] = terrain_kind
 
 
 func is_valid_terrain_kind(kind: String) -> bool:
@@ -219,9 +228,9 @@ func tile_state(tile_id: int) -> Dictionary:
 func backdrop_model_for_tile(tile_id: int) -> Dictionary:
 	if not is_valid_tile_id(tile_id):
 		return {}
-	return CityNavigationGridScript.backdrop_terrain_for_coordinate(
-		coordinate_for_tile_id(tile_id)
-	)
+	if _classification_provenance != PROVENANCE_BACKDROP_SQUARE_LAYOUT_4:
+		return CityTerrainLayoutScript.legacy_model_for_tile_id(tile_id)
+	return CityTerrainLayoutScript.model_for_tile_id(tile_id)
 
 
 func all_tile_states() -> Array[Dictionary]:
@@ -298,6 +307,7 @@ func to_dict() -> Dictionary:
 	return {
 		"schema_version": SCHEMA_VERSION,
 		"layout_version": LAYOUT_VERSION,
+		"classification_provenance": _classification_provenance,
 		"grid_columns": GRID_COLUMNS,
 		"grid_rows": GRID_ROWS,
 		"tiles": serialized_tiles,
@@ -309,22 +319,41 @@ static func validate_snapshot(snapshot: Dictionary) -> Dictionary:
 
 
 static func migrate_snapshot_to_current(snapshot: Dictionary) -> Dictionary:
-	# Re-entry is a no-op on an already-current snapshot. The legacy edge changes
-	# only the layout marker; all 100 terrain records, including completed
-	# flatten apertures, remain byte-for-byte equivalent as Variant data.
 	if bool(validate_snapshot(snapshot).get("valid", false)):
 		return snapshot.duplicate(true)
-	var legacy_validation := _validate_snapshot_for_layout(snapshot, LEGACY_LAYOUT_VERSION)
+	var layout_value: Variant = snapshot.get("layout_version", null)
+	if not _is_integer_value(layout_value):
+		return {}
+	var source_layout := int(layout_value)
+	if source_layout != LEGACY_LAYOUT_VERSION and source_layout != FROZEN_LAYOUT_VERSION:
+		return {}
+	var legacy_validation := _validate_legacy_snapshot(snapshot, source_layout)
 	if not bool(legacy_validation.get("valid", false)):
 		return {}
 	var migrated := snapshot.duplicate(true)
 	migrated["layout_version"] = LAYOUT_VERSION
+	migrated["classification_provenance"] = (
+		PROVENANCE_PRESERVED_LAYOUT_2
+		if source_layout == LEGACY_LAYOUT_VERSION
+		else PROVENANCE_PRESERVED_LAYOUT_3
+	)
 	return migrated if bool(validate_snapshot(migrated).get("valid", false)) else {}
+
+
+static func synthesized_layout3_compat_snapshot() -> Dictionary:
+	var terrain := CityTerrainMap.new()
+	terrain._reset_terrain_state()
+	terrain._classification_provenance = PROVENANCE_SYNTHESIZED_LAYOUT_3_COMPAT
+	for tile_id in CELL_COUNT:
+		terrain._base_kinds[tile_id] = CityTerrainLayoutScript.legacy_terrain_kind_for_tile_id(tile_id)
+	var snapshot := terrain.to_dict()
+	return snapshot if bool(validate_snapshot(snapshot).get("valid", false)) else {}
 
 
 static func _validate_snapshot_for_layout(snapshot: Dictionary, expected_layout_version: int) -> Dictionary:
 	var required_top_level := [
-		"schema_version", "layout_version", "grid_columns", "grid_rows", "tiles",
+		"schema_version", "layout_version", "classification_provenance",
+		"grid_columns", "grid_rows", "tiles",
 	]
 	if snapshot.size() != required_top_level.size():
 		return _snapshot_error("invalid_snapshot_shape")
@@ -335,6 +364,9 @@ static func _validate_snapshot_for_layout(snapshot: Dictionary, expected_layout_
 		return _snapshot_error("unsupported_schema")
 	if not _is_integer_value(snapshot["layout_version"]) or int(snapshot["layout_version"]) != expected_layout_version:
 		return _snapshot_error("unsupported_layout")
+	var provenance_value: Variant = snapshot["classification_provenance"]
+	if not provenance_value is String or not VALID_PROVENANCE.has(str(provenance_value)):
+		return _snapshot_error("unsupported_classification_provenance")
 	if not _is_integer_value(snapshot["grid_columns"]) or int(snapshot["grid_columns"]) != GRID_COLUMNS:
 		return _snapshot_error("invalid_grid_columns")
 	if not _is_integer_value(snapshot["grid_rows"]) or int(snapshot["grid_rows"]) != GRID_ROWS:
@@ -372,8 +404,22 @@ static func _validate_snapshot_for_layout(snapshot: Dictionary, expected_layout_
 	return {"valid": true, "error": ""}
 
 
+static func _validate_legacy_snapshot(snapshot: Dictionary, _expected_layout_version: int) -> Dictionary:
+	if snapshot.has("classification_provenance"):
+		return _snapshot_error("legacy_provenance_not_allowed")
+	var legacy := snapshot.duplicate(true)
+	legacy["layout_version"] = LAYOUT_VERSION
+	legacy["classification_provenance"] = PROVENANCE_PRESERVED_LAYOUT_2
+	return _validate_snapshot_for_layout(legacy, LAYOUT_VERSION)
+
+
 func load_dict(data: Dictionary) -> void:
 	_reset_terrain_state()
+	var provenance_value: Variant = data.get(
+		"classification_provenance", PROVENANCE_BACKDROP_SQUARE_LAYOUT_4
+	)
+	if provenance_value is String and VALID_PROVENANCE.has(str(provenance_value)):
+		_classification_provenance = str(provenance_value)
 	var raw_tiles: Variant = data.get("tiles", [])
 	if raw_tiles is Array and not (raw_tiles as Array).is_empty():
 		for tile_variant: Variant in raw_tiles:
@@ -410,21 +456,8 @@ func _initialize_coordinate_mapping() -> void:
 	_coordinates_by_tile_id.clear()
 	_tile_id_by_coordinate.clear()
 
-	# Preserve the original row-major 8x8 tile ids in the central 8x8 area.
-	for legacy_row in range(LEGACY_GRID_SIZE):
-		for legacy_column in range(LEGACY_GRID_SIZE):
-			_register_coordinate(Vector2i(
-				legacy_column + LEGACY_OFFSET.x,
-				legacy_row + LEGACY_OFFSET.y
-			))
-
-	# Append the 36 new outer-ring coordinates in display row-major order.
-	for row in range(GRID_ROWS):
-		for column in range(GRID_COLUMNS):
-			var coordinate := Vector2i(column, row)
-			if _tile_id_by_coordinate.has(coordinate):
-				continue
-			_register_coordinate(coordinate)
+	for tile_id in CELL_COUNT:
+		_register_coordinate(CityTerrainLayoutScript.coordinate_for_tile_id(tile_id))
 
 	assert(_coordinates_by_tile_id.size() == CELL_COUNT)
 	assert(_tile_id_by_coordinate.size() == CELL_COUNT)
@@ -439,6 +472,7 @@ func _register_coordinate(coordinate: Vector2i) -> void:
 func _reset_terrain_state() -> void:
 	_base_kinds.clear()
 	_flattened.clear()
+	_classification_provenance = PROVENANCE_BACKDROP_SQUARE_LAYOUT_4
 	for _tile_id in range(CELL_COUNT):
 		_base_kinds.append(KIND_FLAT_GRASS)
 		_flattened.append(0)

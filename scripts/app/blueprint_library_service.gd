@@ -12,6 +12,15 @@ var next_blueprint_sequence := 1
 var blueprint_library: Dictionary = {}
 var active_blueprint_by_building: Dictionary = {}
 
+const MATERIAL_COST_MULTIPLIERS := {
+	"wood": 0.85,
+	"brick": 1.0,
+	"steel": 1.30,
+	"eco_composite": 1.15,
+}
+const SIZE_COST_MULTIPLIERS := {"small": 0.75, "medium": 1.0, "large": 1.50}
+const DECORATION_COST_MULTIPLIERS := {"flowers": 1.0, "flags": 1.04, "window_trim": 1.02}
+
 
 func reset(building_definitions: Dictionary) -> void:
 	next_blueprint_sequence = 1
@@ -193,23 +202,60 @@ static func _generated_blueprint_sequence(blueprint_id: String) -> int:
 	return maxi(0, int(suffix))
 
 
+func preview_submission_blueprint(payload: Dictionary, definition) -> Dictionary:
+	## The preview and submitted blueprint intentionally share this exact
+	## normalization/cost authority.  UI quote callers must never manufacture a
+	## parallel estimate from an approved (possibly older) blueprint.
+	var defaults := _default_blueprint_for_definition(definition)
+	var material_id := str(payload.get("material_id", defaults["material_id"]))
+	if not MATERIAL_COST_MULTIPLIERS.has(material_id):
+		material_id = str(defaults["material_id"])
+	var size_tier := str(payload.get("size_tier", defaults["size_tier"]))
+	if not SIZE_COST_MULTIPLIERS.has(size_tier):
+		size_tier = str(defaults["size_tier"])
+	var decoration_id := str(payload.get("decor_id", payload.get("decoration_id", defaults["decoration_id"])))
+	if not DECORATION_COST_MULTIPLIERS.has(decoration_id):
+		decoration_id = str(defaults["decoration_id"])
+	var floors := clampi(int(payload.get("floors", defaults["floors"])), 1, 40)
+	var requested_workers := clampi(int(payload.get("workers", payload.get("requested_workers", defaults["requested_workers"]))), 1, 20)
+	return {
+		"version": 1,
+		"building_id": String(definition.id),
+		"material_id": material_id,
+		"floors": floors,
+		"size_tier": size_tier,
+		"roof_color": str(payload.get("roof_color", "blue")),
+		"wall_color": str(payload.get("wall_color", "cream")),
+		"decoration_id": decoration_id,
+		"decoration_count": 1,
+		"requested_workers": requested_workers,
+		"base_cost": _design_base_cost(definition, defaults, material_id, size_tier, floors, decoration_id),
+	}
+
+
 func create_submission_blueprint(payload: Dictionary, definition) -> Dictionary:
 	var blueprint_id := "blueprint_%06d" % next_blueprint_sequence
 	next_blueprint_sequence += 1
-	return {
-		"id": blueprint_id,
-		"version": 1,
-		"building_id": String(definition.id),
-		"material_id": str(payload.get("material_id", definition.default_material_id)),
-		"floors": maxi(1, int(payload.get("floors", 1))),
-		"size_tier": str(payload.get("size_tier", "medium")),
-		"roof_color": str(payload.get("roof_color", "blue")),
-		"wall_color": str(payload.get("wall_color", "cream")),
-		"decoration_id": str(payload.get("decor_id", payload.get("decoration_id", "flowers"))),
-		"decoration_count": 1,
-		"requested_workers": clampi(int(payload.get("workers", 5)), 1, 20),
-		"base_cost": definition.base_cost,
-	}
+	var blueprint := preview_submission_blueprint(payload, definition)
+	blueprint["id"] = blueprint_id
+	return blueprint
+
+
+static func _design_base_cost(
+	definition,
+	defaults: Dictionary,
+	material_id: String,
+	size_tier: String,
+	floors: int,
+	decoration_id: String
+) -> int:
+	## Keep every catalog default exactly price-compatible while making each
+	## player-visible design choice directly affect the quoted construction cost.
+	var material_ratio: float = float(MATERIAL_COST_MULTIPLIERS[material_id]) / float(MATERIAL_COST_MULTIPLIERS[str(defaults["material_id"])])
+	var size_ratio: float = float(SIZE_COST_MULTIPLIERS[size_tier]) / float(SIZE_COST_MULTIPLIERS[str(defaults["size_tier"])])
+	var floor_ratio := maxf(0.50, 1.0 + float(floors - int(defaults["floors"])) * 0.08)
+	var decor_ratio: float = float(DECORATION_COST_MULTIPLIERS[decoration_id]) / float(DECORATION_COST_MULTIPLIERS[str(defaults["decoration_id"])])
+	return maxi(1, int(round(float(definition.base_cost) * material_ratio * size_ratio * floor_ratio * decor_ratio)))
 
 
 func approved_blueprints(building_id: String) -> Array[Dictionary]:

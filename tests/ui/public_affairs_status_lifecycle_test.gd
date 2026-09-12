@@ -24,6 +24,8 @@ func _run() -> void:
 	await process_frame
 	await process_frame
 	await process_frame
+	main._open_municipal_center()
+	await process_frame
 	var panel = main.public_affairs_panel
 	_check(panel != null, "Main exposes the public-affairs panel")
 	if panel == null:

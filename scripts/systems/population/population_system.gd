@@ -1,16 +1,22 @@
 class_name MayorPopulationSystem
 extends RefCounted
 
-## Deterministic small-population simulation for the vertical slice.
-## All 300-500 residents remain persistent; only proxy dictionaries are pooled for display.
+const SaveSchemaAuthorityScript = preload("res://scripts/core/save_schema_authority.gd")
+
+## Deterministic persistent-population simulation for the vertical slice.
+## All residents remain canonical records; only bounded cohorts are simulated and
+## bounded proxy dictionaries are materialized for display.
 
 const NpcRecordScript = preload("res://scripts/systems/population/npc_record.gd")
 const PopulationRequestScript = preload("res://scripts/systems/population/population_request.gd")
 const EventBookScript = preload("res://scripts/systems/population/event_book.gd")
 
-const SCHEMA_VERSION := 2
+const SCHEMA_VERSION := SaveSchemaAuthorityScript.POPULATION_CURRENT_SCHEMA_VERSION
+const MIN_SUPPORTED_SCHEMA_VERSION := SaveSchemaAuthorityScript.POPULATION_MIN_SUPPORTED_SCHEMA_VERSION
+const MAX_SUPPORTED_SCHEMA_VERSION := SaveSchemaAuthorityScript.POPULATION_MAX_SUPPORTED_SCHEMA_VERSION
 const DEFAULT_INITIAL_POPULATION := 300
-const MAX_POPULATION := 500
+const MAX_POPULATION := 200_000
+const DEFAULT_VISIBLE_PROXIES := 24
 const MAX_VISIBLE_PROXIES := 80
 const DEFAULT_SEED := 270_419
 const DAYS_PER_MONTH := 30
@@ -50,15 +56,23 @@ var records: Dictionary = {}
 var requests: Dictionary = {}
 var income_transactions: Array[Dictionary] = []
 var event_book = EventBookScript.new()
+var _sorted_npc_id_cache: Array[String] = []
+var _sorted_npc_id_cache_valid := false
 
 
-func initialize(initial_count: int = DEFAULT_INITIAL_POPULATION, seed_value: int = DEFAULT_SEED) -> void:
+func initialize(initial_count: int = DEFAULT_INITIAL_POPULATION, seed_value: int = DEFAULT_SEED) -> bool:
+	# Capacity rejection is atomic. In particular, callers probing 200001 must
+	# retain the prior canonical population instead of receiving a clamped state.
+	if initial_count > MAX_POPULATION:
+		return false
 	simulation_seed = absi(seed_value) if seed_value != 0 else DEFAULT_SEED
 	next_npc_sequence = 1
 	next_request_sequence = 1
 	next_transaction_sequence = 1
 	current_year = 1
 	records.clear()
+	_sorted_npc_id_cache.clear()
+	_sorted_npc_id_cache_valid = true
 	requests.clear()
 	income_transactions.clear()
 	event_book = EventBookScript.new()
@@ -66,11 +80,13 @@ func initialize(initial_count: int = DEFAULT_INITIAL_POPULATION, seed_value: int
 	for index: int in range(safe_count):
 		var record = _create_record(index)
 		records[record.npc_id] = record
+		_append_sorted_npc_id_cache(record.npc_id)
 	_build_initial_sparse_relationships()
 	event_book.append(0, "population_initialized", "city", "population_seeded", {
 		"population": safe_count,
 		"seed": simulation_seed,
 	})
+	return true
 
 
 func population_count() -> int:
@@ -101,6 +117,7 @@ func add_residents(
 		if not address_id.is_empty():
 			record.address_id = address_id
 		records[record.npc_id] = record
+		_append_sorted_npc_id_cache(record.npc_id)
 		added_ids.append(record.npc_id)
 		event_book.append(game_day, "resident_added", record.npc_id, reason_tag, {
 			"address_id": record.address_id,
@@ -113,7 +130,7 @@ func remove_residents(
 	game_day: int,
 	reason_tag: String
 ) -> PackedStringArray:
-	var candidates := sorted_npc_ids()
+	var candidates := _cached_sorted_npc_ids().duplicate()
 	candidates.reverse()
 	var requested := PackedStringArray()
 	for npc_id: String in candidates:
@@ -137,11 +154,12 @@ func remove_residents_by_id(
 		for request_id: String in sorted_request_ids():
 			if str(requests[request_id].npc_id) == npc_id:
 				requests.erase(request_id)
-		for other_id: String in sorted_npc_ids():
+		for other_id: String in _cached_sorted_npc_ids():
 			if other_id != npc_id:
 				records[other_id].remove_relationship(npc_id)
 		var removed_record = records[npc_id]
 		records.erase(npc_id)
+		_invalidate_sorted_npc_id_cache()
 		removed_ids.append(npc_id)
 		event_book.append(game_day, "resident_removed", npc_id, reason_tag, {
 			"address_id": str(removed_record.address_id),
@@ -222,7 +240,7 @@ func monthly_income_total(npc_id: String, year: int, month: int) -> int:
 
 func resident_income_total() -> int:
 	var total := 0
-	for npc_id: String in sorted_npc_ids():
+	for npc_id: String in _cached_sorted_npc_ids():
 		total += maxi(0, int(records[npc_id].income))
 	return total
 
@@ -237,7 +255,7 @@ func match_open_jobs(open_jobs: Array[Dictionary], game_day: int) -> Array[Dicti
 	)
 	var unemployed := _record_ids_with_state("待業")
 	var occupied_by_job := {}
-	for npc_id: String in sorted_npc_ids():
+	for npc_id: String in _cached_sorted_npc_ids():
 		var existing_record = records[npc_id]
 		if existing_record.employment_state != "在職" or existing_record.job_id.is_empty():
 			continue
@@ -262,7 +280,7 @@ func advance_year(new_year: int, game_day: int) -> int:
 	if new_year <= current_year:
 		return 0
 	var years_elapsed := new_year - current_year
-	var ids := sorted_npc_ids()
+	var ids := _cached_sorted_npc_ids()
 	for npc_id: String in ids:
 		var record = records[npc_id]
 		record.age += years_elapsed
@@ -311,17 +329,41 @@ func calculate_policy_attitude(
 	}
 
 
-func get_visible_proxy_data(requested_ids: PackedStringArray = PackedStringArray(), limit: int = MAX_VISIBLE_PROXIES) -> Array[Dictionary]:
+func get_visible_proxy_data(requested_ids: PackedStringArray = PackedStringArray(), limit: int = DEFAULT_VISIBLE_PROXIES) -> Array[Dictionary]:
 	var safe_limit := clampi(limit, 0, MAX_VISIBLE_PROXIES)
-	var source_ids: Array[String] = []
 	if requested_ids.is_empty():
-		source_ids = sorted_npc_ids()
-	else:
-		for npc_id: String in requested_ids:
-			if records.has(npc_id) and not source_ids.has(npc_id):
-				source_ids.append(npc_id)
+		return _materialize_proxy_ids(_cached_sorted_npc_ids(), safe_limit)
+	var source_ids: Array[String] = []
+	var seen := {}
+	for npc_id: String in requested_ids:
+		if records.has(npc_id) and not seen.has(npc_id):
+			seen[npc_id] = true
+			source_ids.append(npc_id)
+	return _materialize_proxy_ids(source_ids, safe_limit)
+
+
+## Returns one deterministic, unique cohort without re-sorting the population.
+## Consecutive cohort indices tile the cached ID order. The final batch is a
+## short tail; wrapping begins with the following batch instead of mixing the
+## tail with records from the next traversal.
+func get_bounded_deterministic_cohort(cohort_size: int, cohort_index: int) -> PackedStringArray:
+	var ids := _cached_sorted_npc_ids()
+	var safe_size := clampi(cohort_size, 0, ids.size())
+	var cohort := PackedStringArray()
+	if safe_size == 0:
+		return cohort
+	var batch_count := ceili(float(ids.size()) / float(safe_size))
+	var normalized_batch := _positive_mod(cohort_index, batch_count)
+	var start := normalized_batch * safe_size
+	var batch_size := mini(safe_size, ids.size() - start)
+	for offset: int in range(batch_size):
+		cohort.append(ids[start + offset])
+	return cohort
+
+
+func _materialize_proxy_ids(source_ids: Array[String], limit: int) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
-	for index: int in range(mini(safe_limit, source_ids.size())):
+	for index: int in range(mini(limit, source_ids.size())):
 		var proxy := materialize_proxy(source_ids[index])
 		if not proxy.is_empty():
 			result.append(proxy)
@@ -539,11 +581,27 @@ func public_affairs_requests() -> Array[Dictionary]:
 
 
 func sorted_npc_ids() -> Array[String]:
-	var ids: Array[String] = []
-	for key: Variant in records.keys():
-		ids.append(str(key))
-	ids.sort()
-	return ids
+	return _cached_sorted_npc_ids().duplicate()
+
+
+func _cached_sorted_npc_ids() -> Array[String]:
+	if not _sorted_npc_id_cache_valid:
+		_sorted_npc_id_cache.clear()
+		for key: Variant in records.keys():
+			_sorted_npc_id_cache.append(str(key))
+		_sorted_npc_id_cache.sort()
+		_sorted_npc_id_cache_valid = true
+	return _sorted_npc_id_cache
+
+
+func _invalidate_sorted_npc_id_cache() -> void:
+	_sorted_npc_id_cache.clear()
+	_sorted_npc_id_cache_valid = false
+
+
+func _append_sorted_npc_id_cache(npc_id: String) -> void:
+	if _sorted_npc_id_cache_valid:
+		_sorted_npc_id_cache.append(npc_id)
 
 
 func sorted_request_ids() -> Array[String]:
@@ -559,7 +617,7 @@ func stable_summary() -> Dictionary:
 	var unemployed := 0
 	var age_total := 0
 	var relationship_edges := 0
-	for npc_id: String in sorted_npc_ids():
+	for npc_id: String in _cached_sorted_npc_ids():
 		var record = records[npc_id]
 		age_total += record.age
 		relationship_edges += record.relationships.size()
@@ -587,7 +645,7 @@ func stable_summary() -> Dictionary:
 
 func to_dict() -> Dictionary:
 	var npc_data: Array[Dictionary] = []
-	for npc_id: String in sorted_npc_ids():
+	for npc_id: String in _cached_sorted_npc_ids():
 		npc_data.append(records[npc_id].to_dict())
 	var request_data: Array[Dictionary] = []
 	for request_id: String in sorted_request_ids():
@@ -615,64 +673,120 @@ func stable_hash() -> String:
 
 
 static func from_dict(data: Dictionary):
-	var schema_version := int(data.get("schema_version", 1))
-	if schema_version < 1 or schema_version > SCHEMA_VERSION:
+	if not validate_snapshot(data):
 		return null
+	var schema_version := int(data["schema_version"])
 	var system = new()
-	system.simulation_seed = int(data.get("simulation_seed", DEFAULT_SEED))
-	system.next_npc_sequence = maxi(1, int(data.get("next_npc_sequence", 1)))
-	system.next_request_sequence = maxi(1, int(data.get("next_request_sequence", 1)))
-	system.next_transaction_sequence = maxi(1, int(data.get("next_transaction_sequence", 1)))
-	system.current_year = maxi(1, int(data.get("current_year", 1)))
+	system.simulation_seed = int(data["simulation_seed"])
+	system.next_npc_sequence = int(data["next_npc_sequence"])
+	system.next_request_sequence = int(data["next_request_sequence"])
+	system.next_transaction_sequence = int(data["next_transaction_sequence"]) if schema_version >= 2 else 1
+	system.current_year = int(data["current_year"])
 	system.records.clear()
-	var record_values: Array = data.get("records", [])
+	var record_values: Array = data["records"]
 	for value: Variant in record_values:
-		if value is Dictionary:
-			var record = NpcRecordScript.from_dict(value)
-			if not record.npc_id.is_empty() and system.records.size() < MAX_POPULATION:
-				system.records[record.npc_id] = record
+		var record = NpcRecordScript.from_dict(value as Dictionary)
+		if record == null:
+			return null
+		system.records[record.npc_id] = record
+	system._invalidate_sorted_npc_id_cache()
 	system.requests.clear()
-	var request_values: Array = data.get("requests", [])
+	var request_values: Array = data["requests"]
 	for value: Variant in request_values:
-		if value is Dictionary:
-			var request = PopulationRequestScript.from_dict(value)
-			if not request.request_id.is_empty():
-				system.requests[request.request_id] = request
+		var request = PopulationRequestScript.from_dict(value as Dictionary)
+		system.requests[request.request_id] = request
 	system.income_transactions.clear()
-	var transaction_ids := {}
-	var highest_transaction_sequence := 0
-	var transaction_values: Array = data.get("income_transactions", [])
+	var transaction_values: Array = data["income_transactions"] if schema_version >= 2 else []
 	for value: Variant in transaction_values:
-		if not value is Dictionary:
-			continue
 		var source: Dictionary = value
-		var transaction_id := str(source.get("transaction_id", "")).strip_edges()
-		var npc_id := str(source.get("npc_id", "")).strip_edges()
-		var source_type := str(source.get("source_type", "")).strip_edges().to_lower()
-		var game_day := int(source.get("game_day", -1))
-		var amount := int(source.get("amount", 0))
-		if transaction_id.is_empty() or transaction_ids.has(transaction_id) or npc_id.is_empty() or source_type not in INCOME_TRANSACTION_SOURCE_TYPES or game_day < 0 or amount <= 0:
-			continue
-		var metadata_value: Variant = source.get("metadata", {})
-		var metadata: Dictionary = Dictionary(metadata_value).duplicate(true) if metadata_value is Dictionary else {}
 		system.income_transactions.append({
-			"transaction_id": transaction_id,
-			"npc_id": npc_id,
-			"game_day": game_day,
-			"source_type": source_type,
-			"amount": amount,
-			"metadata": metadata,
+			"transaction_id": str(source["transaction_id"]),
+			"npc_id": str(source["npc_id"]),
+			"game_day": int(source["game_day"]),
+			"source_type": str(source["source_type"]),
+			"amount": int(source["amount"]),
+			"metadata": Dictionary(source["metadata"]).duplicate(true),
 		})
-		transaction_ids[transaction_id] = true
-		var suffix := transaction_id.trim_prefix("income_tx_")
-		if suffix.is_valid_int():
-			highest_transaction_sequence = maxi(highest_transaction_sequence, int(suffix))
 	system.income_transactions.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		return str(a.get("transaction_id", "")) < str(b.get("transaction_id", ""))
 	)
-	system.next_transaction_sequence = maxi(system.next_transaction_sequence, highest_transaction_sequence + 1)
-	system.event_book = EventBookScript.from_dict(data.get("event_book", {}))
+	system.event_book = EventBookScript.from_dict(data["event_book"])
 	return system
+
+
+static func validate_snapshot(data: Dictionary) -> bool:
+	var schema_value: Variant = data.get("schema_version", null)
+	if not _is_integer_value(schema_value):
+		return false
+	var schema_version := int(schema_value)
+	if schema_version < MIN_SUPPORTED_SCHEMA_VERSION or schema_version > MAX_SUPPORTED_SCHEMA_VERSION:
+		return false
+	var expected_keys := [
+		"schema_version", "simulation_seed", "next_npc_sequence",
+		"next_request_sequence", "current_year", "records", "requests", "event_book",
+	]
+	if schema_version >= 2:
+		expected_keys.append_array(["next_transaction_sequence", "income_transactions"])
+	if not _has_exact_keys(data, expected_keys):
+		return false
+	for integer_field: String in ["simulation_seed", "next_npc_sequence", "next_request_sequence", "current_year"]:
+		if not _is_integer_value(data[integer_field]):
+			return false
+	if int(data["next_npc_sequence"]) < 1 or int(data["next_request_sequence"]) < 1 or int(data["current_year"]) < 1:
+		return false
+	if schema_version >= 2 and (not _is_integer_value(data["next_transaction_sequence"]) or int(data["next_transaction_sequence"]) < 1):
+		return false
+	if not data["records"] is Array or not data["requests"] is Array or not data["event_book"] is Dictionary:
+		return false
+	if schema_version >= 2 and not data["income_transactions"] is Array:
+		return false
+	var record_values: Array = data["records"]
+	if record_values.size() > MAX_POPULATION:
+		return false
+	var npc_ids: Dictionary = {}
+	var highest_npc_sequence := 0
+	for value: Variant in record_values:
+		if not value is Dictionary or not NpcRecordScript.validate_dict(value as Dictionary):
+			return false
+		var record: Dictionary = value
+		var npc_id := str(record["npc_id"])
+		if npc_ids.has(npc_id):
+			return false
+		npc_ids[npc_id] = true
+		highest_npc_sequence = maxi(highest_npc_sequence, _generated_sequence(npc_id, "npc_"))
+	if int(data["next_npc_sequence"]) <= highest_npc_sequence:
+		return false
+	for value: Variant in record_values:
+		var relationships: Dictionary = (value as Dictionary)["relationships"]
+		for other_id: Variant in relationships.keys():
+			if not npc_ids.has(str(other_id)):
+				return false
+	var request_ids: Dictionary = {}
+	var highest_request_sequence := 0
+	for value: Variant in data["requests"]:
+		if not value is Dictionary or not _validate_request_snapshot(value as Dictionary, npc_ids):
+			return false
+		var request_id := str((value as Dictionary)["request_id"])
+		if request_ids.has(request_id):
+			return false
+		request_ids[request_id] = true
+		highest_request_sequence = maxi(highest_request_sequence, _generated_sequence(request_id, "request_"))
+	if int(data["next_request_sequence"]) <= highest_request_sequence:
+		return false
+	if schema_version >= 2:
+		var transaction_ids: Dictionary = {}
+		var highest_transaction_sequence := 0
+		for value: Variant in data["income_transactions"]:
+			if not value is Dictionary or not _validate_transaction_snapshot(value as Dictionary, npc_ids):
+				return false
+			var transaction_id := str((value as Dictionary)["transaction_id"])
+			if transaction_ids.has(transaction_id):
+				return false
+			transaction_ids[transaction_id] = true
+			highest_transaction_sequence = maxi(highest_transaction_sequence, _generated_sequence(transaction_id, "income_tx_"))
+		if int(data["next_transaction_sequence"]) <= highest_transaction_sequence:
+			return false
+	return _validate_event_book_snapshot(data["event_book"] as Dictionary)
 
 
 static func from_json(json_text: String):
@@ -715,7 +829,7 @@ func _create_record(index: int):
 
 
 func _build_initial_sparse_relationships() -> void:
-	var ids := sorted_npc_ids()
+	var ids := _cached_sorted_npc_ids()
 	for index: int in range(ids.size()):
 		if index > 0 and index % 2 == 0:
 			_connect(ids[index], ids[index - 1], "鄰居", 20 + _sample(index, 211, 61))
@@ -732,7 +846,7 @@ func _connect(first_id: String, second_id: String, relationship_type: String, af
 
 func _record_ids_with_state(state: String) -> Array[String]:
 	var result: Array[String] = []
-	for npc_id: String in sorted_npc_ids():
+	for npc_id: String in _cached_sorted_npc_ids():
 		if records[npc_id].employment_state == state:
 			result.append(npc_id)
 	return result
@@ -775,7 +889,7 @@ func _has_active_request_type(request_type: String) -> bool:
 
 
 func _select_request_npc(game_day: int, request_type: String) -> String:
-	var ids := sorted_npc_ids()
+	var ids := _cached_sorted_npc_ids()
 	if ids.is_empty():
 		return ""
 	var type_salt := 0
@@ -798,6 +912,108 @@ func _sample(index: int, salt: int, modulo: int) -> int:
 static func _positive_mod(value: int, modulo: int) -> int:
 	var result := value % modulo
 	return result + modulo if result < 0 else result
+
+
+static func _validate_request_snapshot(data: Dictionary, npc_ids: Dictionary) -> bool:
+	if not _has_exact_keys(data, [
+		"schema_version", "request_id", "npc_id", "request_type", "title",
+		"description", "status", "created_day", "accepted_day", "rejected_day",
+		"completed_day", "payload",
+	]):
+		return false
+	if not _is_integer_value(data["schema_version"]) or int(data["schema_version"]) != PopulationRequestScript.SCHEMA_VERSION:
+		return false
+	for string_field: String in ["request_id", "npc_id", "request_type", "title", "description", "status"]:
+		if not data[string_field] is String:
+			return false
+	if str(data["request_id"]).is_empty() or str(data["npc_id"]).is_empty() or str(data["request_type"]).is_empty() or str(data["title"]).is_empty():
+		return false
+	if not npc_ids.has(str(data["npc_id"])) or not data["payload"] is Dictionary:
+		return false
+	for day_field: String in ["created_day", "accepted_day", "rejected_day", "completed_day"]:
+		if not _is_integer_value(data[day_field]):
+			return false
+	var created_day := int(data["created_day"])
+	var accepted_day := int(data["accepted_day"])
+	var rejected_day := int(data["rejected_day"])
+	var completed_day := int(data["completed_day"])
+	if created_day < 0 or accepted_day < -1 or rejected_day < -1 or completed_day < -1:
+		return false
+	match str(data["status"]):
+		PopulationRequestScript.STATUS_PENDING:
+			return accepted_day == -1 and rejected_day == -1 and completed_day == -1
+		PopulationRequestScript.STATUS_ACCEPTED:
+			return accepted_day >= created_day and rejected_day == -1 and completed_day == -1
+		PopulationRequestScript.STATUS_REJECTED:
+			return accepted_day == -1 and rejected_day >= created_day and completed_day == -1
+		PopulationRequestScript.STATUS_COMPLETED:
+			return accepted_day >= created_day and rejected_day == -1 and completed_day >= accepted_day
+	return false
+
+
+static func _validate_transaction_snapshot(data: Dictionary, npc_ids: Dictionary) -> bool:
+	if not _has_exact_keys(data, [
+		"transaction_id", "npc_id", "game_day", "source_type", "amount", "metadata",
+	]):
+		return false
+	if not data["transaction_id"] is String or str(data["transaction_id"]).is_empty():
+		return false
+	if not data["npc_id"] is String or not npc_ids.has(str(data["npc_id"])):
+		return false
+	if not data["source_type"] is String or str(data["source_type"]) not in INCOME_TRANSACTION_SOURCE_TYPES:
+		return false
+	if not _is_integer_value(data["game_day"]) or int(data["game_day"]) < 0:
+		return false
+	if not _is_integer_value(data["amount"]) or int(data["amount"]) <= 0:
+		return false
+	return data["metadata"] is Dictionary
+
+
+static func _validate_event_book_snapshot(data: Dictionary) -> bool:
+	if not _has_exact_keys(data, ["schema_version", "next_sequence", "events"]):
+		return false
+	if not _is_integer_value(data["schema_version"]) or int(data["schema_version"]) != EventBookScript.SCHEMA_VERSION:
+		return false
+	if not _is_integer_value(data["next_sequence"]) or int(data["next_sequence"]) < 1 or not data["events"] is Array:
+		return false
+	var previous_sequence := 0
+	for value: Variant in data["events"]:
+		if not value is Dictionary:
+			return false
+		var event: Dictionary = value
+		if not _has_exact_keys(event, ["sequence", "game_day", "event_type", "subject_id", "reason_tag", "data"]):
+			return false
+		if not _is_integer_value(event["sequence"]) or int(event["sequence"]) <= previous_sequence:
+			return false
+		if not _is_integer_value(event["game_day"]) or int(event["game_day"]) < 0:
+			return false
+		for string_field: String in ["event_type", "subject_id", "reason_tag"]:
+			if not event[string_field] is String or str(event[string_field]).is_empty():
+				return false
+		if not event["data"] is Dictionary:
+			return false
+		previous_sequence = int(event["sequence"])
+	return int(data["next_sequence"]) > previous_sequence
+
+
+static func _generated_sequence(identifier: String, prefix: String) -> int:
+	if not identifier.begins_with(prefix):
+		return 0
+	var suffix := identifier.trim_prefix(prefix)
+	return int(suffix) if suffix.is_valid_int() else 0
+
+
+static func _has_exact_keys(value: Dictionary, expected_keys: Array) -> bool:
+	if value.size() != expected_keys.size():
+		return false
+	for key: Variant in expected_keys:
+		if not value.has(key):
+			return false
+	return true
+
+
+static func _is_integer_value(value: Variant) -> bool:
+	return value is int or (value is float and is_finite(float(value)) and float(value) == roundf(float(value)))
 
 
 static func _canonicalize(value: Variant) -> Variant:

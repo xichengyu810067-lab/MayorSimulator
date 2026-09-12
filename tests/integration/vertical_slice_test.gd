@@ -87,8 +87,11 @@ func _test_population_contract() -> void:
 	var npc_ids: Array[String] = coordinator.population.sorted_npc_ids()
 	_check(coordinator.population.population_count() == 300, "coordinator starts with 300 persistent NPCs")
 	_check(npc_ids.size() == 300, "population index exposes 300 NPC IDs")
-	_check(coordinator.session.state.npcs.size() == 300, "core CityState stores all 300 NPC records")
+	_check(coordinator.session.state.npcs.size() == 300, "runtime CityState hydrates all 300 NPC records")
 	_check(int(coordinator.session.state.metrics.get("population", -1)) == 300, "core population metric starts at 300")
+	_check(coordinator.session.kernel.command_sequence == 3, "300-resident new game uses only the three metric commands")
+	_check(coordinator.session.kernel.event_sequence == 3, "bulk NPC hydration emits no per-resident domain events")
+	_check(coordinator.next_operation_sequence == 4, "bulk NPC hydration consumes no operation IDs")
 	var seen := {}
 	for npc_id: String in npc_ids:
 		_check(not npc_id.is_empty(), "NPC IDs are non-empty")
@@ -97,6 +100,15 @@ func _test_population_contract() -> void:
 		_check(coordinator.population.get_record(npc_id) != null, "NPC record is queryable: %s" % npc_id)
 	_check(coordinator.visible_npc_proxies(500).size() == 80, "visible NPC proxy pool remains capped at 80")
 	_check_population_mirror(coordinator, 300, "initial population")
+	var injected = _coordinator_script.new(TEST_SEED + 1, TEST_FUNDS, 500)
+	_check(injected.population.population_count() == 500, "production constructor accepts an injected initial population")
+	_check(injected.session.state.npcs.size() == 500, "injected population uses the canonical atomic runtime hydration path")
+	_check(injected.session.kernel.command_sequence == 3 and injected.session.kernel.event_sequence == 3, "injected population emits only the three metric commands and events")
+	_check(injected.next_operation_sequence == 4, "injected bulk hydration consumes no operation IDs")
+	var before_rejected_new_game_hash: String = injected.deterministic_hash()
+	_check(not injected.new_game(TEST_SEED + 2, TEST_FUNDS, 200_001), "production new_game rejects 200001 residents")
+	_check(injected.deterministic_hash() == before_rejected_new_game_hash, "rejected production new_game leaves the live state unchanged")
+	_check(not FileAccess.file_exists(ProjectSettings.globalize_path(TEST_SAVE_PATH)), "rejected production new_game performs no save I/O")
 
 
 func _test_request_completion_fact() -> void:
@@ -158,16 +170,22 @@ func _test_build_and_demolish_flow() -> void:
 	_check(coordinator.approved_blueprints("公園").size() == 2, "starter and first player-approved park blueprints are both retained")
 	_check(str(coordinator.active_blueprint_status("公園").get("source", "")) == "player", "newly approved custom blueprint becomes the active reusable version")
 
-	var started: Dictionary = coordinator.start_approved_building("公園", 12, 20)
+	var build_tile: int = _find_valid_building_anchor(coordinator, "公園", 20)
+	_check(build_tile >= 0, "park lifecycle fixture finds a legal complete footprint")
+	if build_tile < 0:
+		return
+	var build_quote: Dictionary = coordinator.placement_footprint_quote("公園", build_tile, 20)
+	_check(bool(build_quote.get("ok", false)) and Array(build_quote.get("occupied_tile_ids", [])).size() == 1, "park lifecycle fixture quote preserves the complete footprint")
+	var started: Dictionary = coordinator.start_approved_building("公園", build_tile, 20)
 	_check(bool(started.get("ok", false)), "approved blueprint starts construction")
 	if not bool(started.get("ok", false)):
 		return
-	_check(coordinator.get_building_by_tile(12).is_empty(), "tile remains empty while construction is active")
+	_check(coordinator.get_building_by_tile(build_tile).is_empty(), "tile remains empty while construction is active")
 	var build_days := int(started["job"].get("projected_remaining_days", 0))
 	_check(build_days > 0, "construction has a positive duration")
 	var build_events: Array[Dictionary] = coordinator.advance_days(build_days, CITY_CONTEXT)
 	_check(_event_seen(build_events, "building_completed"), "construction completion emits building_completed")
-	var completed: Dictionary = coordinator.get_building_by_tile(12)
+	var completed: Dictionary = coordinator.get_building_by_tile(build_tile)
 	_check(not completed.is_empty(), "completed building occupies its tile")
 	_check(str(completed.get("building_name", "")) == "公園", "completed tile contains the requested building")
 
@@ -175,7 +193,7 @@ func _test_build_and_demolish_flow() -> void:
 	var expected_demolition_cost := int(demolition_quote.get("total_labor_cost", 0))
 	var balance_before_demolition: int = int(coordinator.treasury_balance())
 	var demolition_entries_before := _ledger_entries_for_reason(coordinator, "construction.demolition").size()
-	var demolition: Dictionary = coordinator.start_demolition(12, 20)
+	var demolition: Dictionary = coordinator.start_demolition(build_tile, 20)
 	_check(bool(demolition.get("ok", false)), "demolition starts for an occupied tile")
 	if not bool(demolition.get("ok", false)):
 		return
@@ -187,8 +205,8 @@ func _test_build_and_demolish_flow() -> void:
 		var demolition_entry: Dictionary = demolition_entries_after_start.back()
 		_check(int(demolition_entry.get("amount", 0)) == -expected_demolition_cost, "demolition ledger entry matches the quoted cost")
 		_check(str(demolition_entry.get("source_id", "")) == str(demolition.get("job", {}).get("id", "")), "demolition ledger entry is tied to the created job")
-	_check(not coordinator.get_building_by_tile(12).is_empty(), "building remains on tile during demolition")
-	_check(str(coordinator.get_building_by_tile(12).get("status", "")) == "demolition", "building is marked as under demolition")
+	_check(not coordinator.get_building_by_tile(build_tile).is_empty(), "building remains on tile during demolition")
+	_check(str(coordinator.get_building_by_tile(build_tile).get("status", "")) == "demolition", "building is marked as under demolition")
 	var balance_after_demolition_start: int = int(coordinator.treasury_balance())
 	var demolition_days := int(demolition["job"].get("projected_remaining_days", 0))
 	_check(demolition_days > 0, "demolition has a positive duration")
@@ -196,7 +214,7 @@ func _test_build_and_demolish_flow() -> void:
 	_check(_event_seen(demolition_events, "demolition_completed"), "demolition completion emits demolition_completed")
 	_check(coordinator.treasury_balance() == balance_after_demolition_start, "demolition completion does not charge labor a second time")
 	_check(_ledger_entries_for_reason(coordinator, "construction.demolition").size() == demolition_entries_before + 1, "demolition keeps exactly one ledger entry after completion")
-	_check(coordinator.get_building_by_tile(12).is_empty(), "demolition completion clears the tile")
+	_check(coordinator.get_building_by_tile(build_tile).is_empty(), "demolition completion clears the tile")
 	_check(coordinator.construction.available_workers() == 20, "shared construction workers return after demolition")
 
 
@@ -227,7 +245,7 @@ func _test_demolition_durability_interlock() -> void:
 	if residence_definition == null:
 		return
 	var building: Dictionary = coordinator.register_existing_building(
-		17, str(residence_definition.display_name)
+		17, str(residence_definition.display_name), {}, "medium"
 	)
 	_check(not building.is_empty(), "demolition durability fixture registers a populated building")
 	if building.is_empty():
@@ -309,12 +327,18 @@ func _test_population_building_lifecycle() -> void:
 		return
 	var review: Dictionary = submitted["review"]
 	coordinator.advance_days(int(review.get("review_days", 0)), CITY_CONTEXT)
-	var started: Dictionary = coordinator.start_approved_building("住宅", 13, 20)
+	var residence_tile: int = _find_valid_building_anchor(coordinator, "住宅", 20)
+	_check(residence_tile >= 0, "residence lifecycle fixture finds a legal complete footprint")
+	if residence_tile < 0:
+		return
+	var residence_quote: Dictionary = coordinator.placement_footprint_quote("住宅", residence_tile, 20)
+	_check(bool(residence_quote.get("ok", false)) and Array(residence_quote.get("occupied_tile_ids", [])).size() == 2, "residence lifecycle fixture quote preserves the complete footprint")
+	var started: Dictionary = coordinator.start_approved_building("住宅", residence_tile, 20)
 	_check(bool(started.get("ok", false)), "residence construction can start")
 	if not bool(started.get("ok", false)):
 		return
 	coordinator.advance_days(int(started.get("job", {}).get("projected_remaining_days", 0)), CITY_CONTEXT)
-	var completed: Dictionary = coordinator.get_building_by_tile(13)
+	var completed: Dictionary = coordinator.get_building_by_tile(residence_tile)
 	var resident_ids := PackedStringArray(completed.get("resident_ids", []))
 	_check(resident_ids.size() == 28, "residence completion stores all 28 added resident IDs")
 	_check(int(completed.get("population_delta", 0)) == 28, "residence completion records its actual population delta")
@@ -322,7 +346,7 @@ func _test_population_building_lifecycle() -> void:
 	for resident_id: String in resident_ids:
 		_check(coordinator.population.get_record(resident_id) != null, "completed residence owns canonical resident: %s" % resident_id)
 
-	var demolition: Dictionary = coordinator.start_demolition(13, 20)
+	var demolition: Dictionary = coordinator.start_demolition(residence_tile, 20)
 	_check(bool(demolition.get("ok", false)), "populated residence demolition can start")
 	if not bool(demolition.get("ok", false)):
 		return
@@ -407,7 +431,10 @@ func _test_justice_buildings_flow() -> void:
 			continue
 		var review: Dictionary = submitted["review"]
 		coordinator.advance_days(int(review["review_days"]), CITY_CONTEXT)
-		var build_tile := 22 + index
+		var build_tile := _find_valid_building_anchor(coordinator, building_name, 20)
+		_check(build_tile >= 0, "%s has a legal complete footprint" % building_name)
+		if build_tile < 0:
+			continue
 		var started: Dictionary = coordinator.start_approved_building(building_name, build_tile, 20)
 		_check(bool(started.get("ok", false)), "%s construction starts" % building_name)
 		if not bool(started.get("ok", false)):
@@ -430,6 +457,9 @@ func _test_save_round_trip() -> void:
 	var date_before: Dictionary = source.current_date()
 	var population_hash_before: String = source.population.stable_hash()
 	_check(source.save_game(TEST_SAVE_PATH) == OK, "versioned snapshot saves atomically")
+	var persisted_state: Dictionary = source.session.make_envelope().state
+	_check(not persisted_state.has("npcs"), "save JSON omits the runtime CityState NPC mirror")
+	_check(Array(persisted_state.get("metadata", {}).get("vertical_slice", {}).get("population", {}).get("records", [])).size() == 328, "save JSON keeps all records under canonical population only")
 	var hash_before: String = source.deterministic_hash()
 	var operation_sequence_before: int = source.next_operation_sequence
 	var event_sequence_before: int = source.session.kernel.event_sequence
@@ -543,6 +573,11 @@ func _check_population_mirror(coordinator, expected_count: int, label: String) -
 	_check(int(coordinator.session.state.metrics.get("population", -1)) == expected_count, "%s core population metric" % label)
 	_check(coordinator.session.state.npcs.size() == expected_count, "%s core NPC record count" % label)
 	_check(core_ids == population_ids, "%s core and canonical NPC IDs match" % label)
+	for npc_id: String in population_ids:
+		_check(
+			coordinator.session.state.npcs.get(npc_id, {}) == coordinator.population.get_record(npc_id).to_dict(),
+			"%s runtime and canonical NPC record match: %s" % [label, npc_id]
+		)
 
 
 func _check(condition: bool, label: String) -> void:
@@ -551,6 +586,14 @@ func _check(condition: bool, label: String) -> void:
 		return
 	_failed = true
 	push_error("Vertical slice test failed: %s" % label)
+
+
+func _find_valid_building_anchor(coordinator, building_name: String, worker_count: int) -> int:
+	for tile_id: int in coordinator.terrain_map.tile_ids_in_display_order():
+		var quote: Dictionary = coordinator.placement_footprint_quote(building_name, tile_id, worker_count)
+		if bool(quote.get("ok", false)):
+			return tile_id
+	return -1
 
 
 func _cleanup_test_save() -> void:

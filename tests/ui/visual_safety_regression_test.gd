@@ -28,6 +28,20 @@ func _run() -> void:
 	await process_frame
 	await process_frame
 	main.start_screen.hide()
+	_check(main.municipal_overlay == null, "municipal overlay remains lazy before the first municipal action")
+	var municipal_button := main.find_child("MunicipalButton", true, false) as Button
+	_check(municipal_button != null, "HUD MunicipalButton exists before first municipal action")
+	if municipal_button == null:
+		await TestCleanup.finish(self, [main], 1)
+		return
+	municipal_button.pressed.emit()
+	await _settle(4)
+	var municipal_overlay := main.get("municipal_overlay") as Control
+	_check(municipal_overlay != null and municipal_overlay.is_visible_in_tree(), "first municipal action creates and opens the overlay through the public HUD button")
+	_check(municipal_overlay != null and municipal_overlay.call("current_page") == "hub", "municipal overlay opens on hub")
+	if municipal_overlay == null:
+		await TestCleanup.finish(self, [main], 1)
+		return
 
 	await _validate_fixed_municipal_tooltip(main)
 	await _validate_companion_safe_margin(main)
@@ -45,7 +59,7 @@ func _validate_fixed_municipal_tooltip(main) -> void:
 	await process_frame
 	var hub := main.municipal_overlay.find_child("MunicipalHubRoot", true, false) as Control
 	var safe_label := hub.find_child("HubSafeTooltip", true, false) as Label if hub != null else null
-	var button := main.municipal_overlay.find_child("MunicipalCategory_governance", true, false) as Button
+	var button := main.municipal_overlay.find_child("GovernanceButton", true, false) as Button
 	_check(safe_label != null and button != null, "municipal safe tooltip controls exist")
 	if safe_label == null or button == null:
 		return
@@ -119,6 +133,11 @@ func _linear_channel(value: float) -> float:
 	if value <= 0.04045:
 		return value / 12.92
 	return pow((value + 0.055) / 1.055, 2.4)
+
+
+func _settle(frames: int) -> void:
+	for _frame in range(frames):
+		await process_frame
 
 
 func _check(condition: bool, message: String) -> void:

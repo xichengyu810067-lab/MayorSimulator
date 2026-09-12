@@ -10,8 +10,11 @@ extends RefCounted
 
 const TransportModesScript = preload("res://data/catalogs/transport_modes.gd")
 const CityTerrainMapScript = preload("res://scripts/world/city_terrain_map.gd")
+const SaveSchemaAuthorityScript = preload("res://scripts/core/save_schema_authority.gd")
 
-const SCHEMA_VERSION := 1
+const SCHEMA_VERSION := SaveSchemaAuthorityScript.TRANSPORT_NETWORK_CURRENT_SCHEMA_VERSION
+const MIN_SUPPORTED_SCHEMA_VERSION := SaveSchemaAuthorityScript.TRANSPORT_NETWORK_MIN_SUPPORTED_SCHEMA_VERSION
+const MAX_SUPPORTED_SCHEMA_VERSION := SaveSchemaAuthorityScript.TRANSPORT_NETWORK_MAX_SUPPORTED_SCHEMA_VERSION
 const TRACK_KINDS := ["metro_track", "rail_track"]
 const PROJECT_STATUS_PRIORITY := {
 	"": 0,
@@ -34,6 +37,182 @@ var crossings: Dictionary = {}
 var routes: Dictionary = {}
 
 var _topology_map = CityTerrainMapScript.new()
+
+
+## Classifies a requested route corridor without creating a project or mutating
+## the authoritative network. Reused segment references are sorted by ID, while
+## new runs retain the requested path order for a later construction owner.
+func classify_completed_corridor(
+	mode: String,
+	tile_path: Variant,
+	terrain_map: Variant,
+	occupied_tile_ids: Variant = [],
+	construction_tile_ids: Variant = []
+) -> Dictionary:
+	var mode_spec := TransportModesScript.route_spec(mode)
+	if mode_spec.is_empty():
+		return _error("invalid_corridor_mode")
+	if terrain_map == null:
+		return _error("terrain_map_required")
+	if not tile_path is Array:
+		return _error("invalid_corridor_path")
+	var path: Array = tile_path
+	if not _path_is_cardinally_contiguous(path, terrain_map):
+		return _error("invalid_corridor_path")
+
+	# A malformed persisted crossing or segment must not be treated as reusable.
+	var snapshot_before := to_dict()
+	var snapshot_validation := validate_snapshot(snapshot_before)
+	if not bool(snapshot_validation.get("valid", false)):
+		return {
+			"ok": false,
+			"error": "invalid_transport_network_snapshot",
+			"issues": Array(snapshot_validation.get("issues", [])).duplicate(),
+		}
+
+	var segment_kind := str(mode_spec.get("guideway_kind", ""))
+	if segment_kind not in TransportModesScript.SEGMENT_KINDS:
+		return _error("invalid_corridor_mode")
+	var occupied := _tile_set(occupied_tile_ids)
+	var construction := _tile_set(construction_tile_ids)
+	for tile_variant: Variant in _active_project_tile_set().keys():
+		construction[int(tile_variant)] = true
+	var completed_by_tile := _completed_segment_kinds_by_tile()
+	var reused_tile_set: Dictionary = {}
+	var reused_tile_ids: Array[int] = []
+	var new_tile_ids: Array[int] = []
+	var issues: Array[String] = []
+	for tile_variant: Variant in path:
+		var tile_id := int(tile_variant)
+		if not terrain_map.is_buildable(tile_id):
+			issues.append("terrain_not_flat:%d" % tile_id)
+		if construction.has(tile_id):
+			issues.append("corridor_tile_under_construction:%d" % tile_id)
+		var existing_kinds: Array = completed_by_tile.get(tile_id, [])
+		if existing_kinds.has(segment_kind):
+			reused_tile_set[tile_id] = true
+			reused_tile_ids.append(tile_id)
+			continue
+		if occupied.has(tile_id):
+			issues.append("tile_occupied:%d" % tile_id)
+		for existing_kind_variant: Variant in existing_kinds:
+			var existing_kind := str(existing_kind_variant)
+			if not _segment_overlap_allowed(existing_kind, segment_kind):
+				issues.append("incompatible_segment_overlap:%s:%s:%d" % [existing_kind, segment_kind, tile_id])
+		new_tile_ids.append(tile_id)
+	if not issues.is_empty():
+		return {
+			"ok": false,
+			"error": "invalid_corridor",
+			"issues": _unique_strings(issues),
+		}
+
+	var reused_segment_refs: Array[Dictionary] = []
+	for segment_id: String in _sorted_string_keys(segments):
+		var segment: Dictionary = segments[segment_id]
+		if str(segment.get("kind", "")) != segment_kind:
+			continue
+		var matched_tile_ids: Array[int] = []
+		for tile_variant: Variant in Array(segment.get("tile_path", [])):
+			var tile_id := int(tile_variant)
+			if reused_tile_set.has(tile_id):
+				matched_tile_ids.append(tile_id)
+		if not matched_tile_ids.is_empty():
+			reused_segment_refs.append({
+				"id": segment_id,
+				"kind": segment_kind,
+				"tile_ids": matched_tile_ids,
+			})
+
+	var new_runs: Array[Dictionary] = []
+	var current_new_run: Array[int] = []
+	for tile_variant: Variant in path:
+		var tile_id := int(tile_variant)
+		if reused_tile_set.has(tile_id):
+			if not current_new_run.is_empty():
+				new_runs.append({"kind": segment_kind, "tile_path": current_new_run.duplicate()})
+				current_new_run.clear()
+		else:
+			current_new_run.append(tile_id)
+	if not current_new_run.is_empty():
+		new_runs.append({"kind": segment_kind, "tile_path": current_new_run.duplicate()})
+
+	var classification := "mixed"
+	if reused_tile_ids.is_empty():
+		classification = "all_new"
+	elif new_tile_ids.is_empty():
+		classification = "all_reuse"
+	return {
+		"ok": true,
+		"mode": mode,
+		"segment_kind": segment_kind,
+		"classification": classification,
+		"reused_tile_ids": reused_tile_ids,
+		"new_tile_ids": new_tile_ids,
+		"reused_segment_refs": reused_segment_refs,
+		"new_runs": new_runs,
+	}
+
+
+## Produces a versioned, checksummed quote for only the unfinished runs in a
+## requested corridor. It is intentionally side-effect free; transaction and
+## construction ownership remain outside this schema/pricing batch.
+func quote_completed_corridor(
+	mode: String,
+	tile_path: Variant,
+	terrain_map: Variant,
+	occupied_tile_ids: Variant = [],
+	construction_tile_ids: Variant = []
+) -> Dictionary:
+	var classification := classify_completed_corridor(
+		mode, tile_path, terrain_map, occupied_tile_ids, construction_tile_ids
+	)
+	if not bool(classification.get("ok", false)):
+		return classification
+	var route_tile_ids := _int_array(tile_path)
+	var reused_segment_refs: Array = Array(classification.get("reused_segment_refs", [])).duplicate(true)
+	var new_runs: Array = Array(classification.get("new_runs", [])).duplicate(true)
+	var reused_units := Array(classification.get("reused_tile_ids", [])).size()
+	var new_units := Array(classification.get("new_tile_ids", [])).size()
+	var is_all_new := str(classification.get("classification", "")) == "all_new"
+	var corridor_contract := {
+		"schema_version": TransportModesScript.ROUTE_PACKAGE_CORRIDOR_SCHEMA_VERSION,
+		"mode": mode,
+		"segment_kind": str(classification.get("segment_kind", "")),
+		"classification": str(classification.get("classification", "")),
+		"route_tile_ids": route_tile_ids,
+		"reused_segment_refs": reused_segment_refs,
+		"new_runs": new_runs,
+		"total_units": route_tile_ids.size(),
+		"reused_units": reused_units,
+		"new_units": new_units,
+	}
+	var segments: Array[Dictionary] = []
+	var segment_spec := TransportModesScript.segment_spec(str(classification.get("segment_kind", "")))
+	for run_value: Variant in new_runs:
+		var run: Dictionary = run_value
+		var run_tiles := _int_array(run.get("tile_path", []))
+		segments.append({
+			"kind": str(run.get("kind", "")),
+			"tile_path": run_tiles,
+			"price_model": TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V2 if is_all_new else TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_MODEL,
+			"price_provenance": TransportModesScript.ROUTE_PACKAGE_PRICE_PROVENANCE if is_all_new else TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_PROVENANCE,
+			"route_construction_cost": int(segment_spec.get("build_cost_per_tile", 0)) * run_tiles.size(),
+			"route_monthly_maintenance": int(segment_spec.get("monthly_maintenance_per_tile", 0)) * run_tiles.size(),
+		})
+	var plan := {
+		"title": "交通走廊建設專案",
+		"source_decision_id": "",
+		"segments": segments,
+		"facilities": [],
+		"stations": [],
+	}
+	if not is_all_new:
+		plan["corridor_contract"] = corridor_contract
+	var result := quote_project("build", plan, terrain_map, occupied_tile_ids, construction_tile_ids)
+	if bool(result.get("ok", false)):
+		result["corridor_classification"] = str(classification.get("classification", ""))
+	return result
 
 
 func quote_project(
@@ -73,19 +252,28 @@ func quote_project(
 		}
 
 	var segment_cost := 0
+	var segment_maintenance := 0
 	for segment: Dictionary in normalized_plan["segments"]:
 		var spec := TransportModesScript.segment_spec(str(segment.get("kind", "")))
 		segment_cost += int(spec.get("build_cost_per_tile", 0)) * Array(segment.get("tile_path", [])).size()
+		segment_maintenance += int(spec.get("monthly_maintenance_per_tile", 0)) * Array(segment.get("tile_path", [])).size()
 	var facility_cost := 0
+	var facility_maintenance := 0
 	for facility: Dictionary in normalized_plan["facilities"]:
-		facility_cost += int(TransportModesScript.facility_spec(str(facility.get("kind", ""))).get("build_cost", 0))
+		var facility_spec := TransportModesScript.facility_spec(str(facility.get("kind", "")))
+		facility_cost += int(facility_spec.get("build_cost", 0))
+		facility_maintenance += int(facility_spec.get("monthly_maintenance", 0))
 	var station_cost := 0
+	var station_maintenance := 0
 	for station: Dictionary in normalized_plan["stations"]:
-		station_cost += int(TransportModesScript.station_spec(str(station.get("building_name", ""))).get("build_cost", 0))
+		var station_spec := TransportModesScript.station_spec(str(station.get("building_name", "")))
+		station_cost += int(station_spec.get("build_cost", 0))
+		station_maintenance += int(station_spec.get("monthly_maintenance", 0))
 	var new_crossing_tiles := _new_crossing_tiles_for_plan(normalized_plan)
 	var crossing_cost := new_crossing_tiles.size() * TransportModesScript.LEVEL_CROSSING_BUILD_COST
 	var total_cost := segment_cost + facility_cost + station_cost + crossing_cost
-	return {
+	var crossing_maintenance := new_crossing_tiles.size() * TransportModesScript.LEVEL_CROSSING_MONTHLY_MAINTENANCE
+	var result := {
 		"ok": true,
 		"operation": operation,
 		"plan": normalized_plan,
@@ -97,7 +285,31 @@ func quote_project(
 			"level_crossings": crossing_cost,
 		},
 		"total_cost": total_cost,
+		"maintenance_breakdown": {
+			"segments": segment_maintenance,
+			"facilities": facility_maintenance,
+			"stations": station_maintenance,
+			"level_crossings": crossing_maintenance,
+		},
+		"monthly_maintenance": segment_maintenance + facility_maintenance + station_maintenance + crossing_maintenance,
 	}
+	if normalized_plan.has("corridor_contract"):
+		var corridor_quote := TransportModesScript.route_package_corridor_price_quote(
+			normalized_plan.get("corridor_contract", {})
+		)
+		if not bool(corridor_quote.get("ok", false)):
+			return {
+				"ok": false,
+				"error": "invalid_corridor_contract",
+				"issues": Array(corridor_quote.get("issues", [])).duplicate(),
+			}
+		if (
+			int(corridor_quote.get("total_cost", -1)) != segment_cost
+			or int(corridor_quote.get("monthly_maintenance", -1)) != segment_maintenance
+		):
+			return _error("corridor_quote_price_mismatch")
+		result["corridor_quote"] = corridor_quote
+	return result
 
 
 func plan_project(
@@ -283,6 +495,57 @@ func delete_route(route_id: String) -> Dictionary:
 	return {"ok": true, "route": removed}
 
 
+func rollback_build_projects(project_ids: Array) -> Dictionary:
+	var ordered_ids: Array[String] = []
+	for project_id_value: Variant in project_ids:
+		if not project_id_value is String:
+			return _error("invalid_rollback_project_id")
+		var project_id := str(project_id_value)
+		if project_id.is_empty() or ordered_ids.has(project_id) or not projects.has(project_id):
+			return _error("invalid_rollback_project_id")
+		var project_value: Variant = projects[project_id]
+		if not project_value is Dictionary or str((project_value as Dictionary).get("operation", "")) != "build":
+			return _error("rollback_project_not_build")
+		ordered_ids.append(project_id)
+	for route_value: Variant in routes.values():
+		if not route_value is Dictionary:
+			continue
+		for project_id: String in ordered_ids:
+			if Array((route_value as Dictionary).get("new_project_ids", [])).has(project_id):
+				return _error("rollback_project_has_route")
+	var removed_entities: Array[String] = []
+	for project_id: String in ordered_ids:
+		var project: Dictionary = projects[project_id]
+		var plan: Dictionary = project.get("plan", {})
+		for collection_name: String in ["segments", "facilities", "stations"]:
+			var authority: Dictionary = segments
+			if collection_name == "facilities":
+				authority = facilities
+			elif collection_name == "stations":
+				authority = stations
+			for record_value: Variant in plan.get(collection_name, []):
+				if not record_value is Dictionary:
+					return _error("invalid_rollback_project_plan")
+				var record_id := str((record_value as Dictionary).get("id", ""))
+				if record_id.is_empty():
+					return _error("invalid_rollback_project_plan")
+				if authority.has(record_id):
+					var stored_value: Variant = authority[record_id]
+					if not stored_value is Dictionary or str((stored_value as Dictionary).get("project_id", "")) != project_id:
+						return _error("rollback_entity_owner_mismatch")
+					authority.erase(record_id)
+					removed_entities.append(record_id)
+		projects.erase(project_id)
+	_recompute_crossings()
+	revalidate_routes()
+	return {
+		"ok": true,
+		"project_ids": ordered_ids,
+		"removed_entity_ids": removed_entities,
+		"network": network_snapshot(),
+	}
+
+
 func revalidate_routes() -> Array[Dictionary]:
 	var changed: Array[Dictionary] = []
 	for route_id: String in _sorted_string_keys(routes):
@@ -362,19 +625,45 @@ func unregister_station(station_id: String) -> bool:
 func tile_visual_state(tile_id: int, terrain_map: Variant) -> Dictionary:
 	var visible_segments := _visible_segment_kinds_by_tile()
 	var visible_facilities := _visible_facility_kinds_by_tile()
+	return _tile_visual_state_from_sources(
+		tile_id,
+		terrain_map,
+		visible_segments,
+		visible_facilities,
+		_project_status_for_tile(tile_id)
+	)
+
+
+func completed_tile_visual_state(tile_id: int, terrain_map: Variant) -> Dictionary:
+	return _tile_visual_state_from_sources(
+		tile_id,
+		terrain_map,
+		_completed_segment_kinds_by_tile(),
+		_completed_facility_kinds_by_tile(),
+		""
+	)
+
+
+func _tile_visual_state_from_sources(
+	tile_id: int,
+	terrain_map: Variant,
+	segment_source: Dictionary,
+	facility_source: Dictionary,
+	project_status: String
+) -> Dictionary:
 	var segment_values: Array[String] = []
-	for value_variant: Variant in Array(visible_segments.get(tile_id, [])):
+	for value_variant: Variant in Array(segment_source.get(tile_id, [])):
 		segment_values.append(str(value_variant))
 	segment_values.sort()
 	var facility_values: Array[String] = []
-	for value_variant: Variant in Array(visible_facilities.get(tile_id, [])):
+	for value_variant: Variant in Array(facility_source.get(tile_id, [])):
 		facility_values.append(str(value_variant))
 	facility_values.sort()
 	var connections: Dictionary = {}
 	var neighbours: Dictionary = {}
 	for kind: String in segment_values:
 		var directions: Array[String] = []
-		var kind_tiles := _visible_tiles_for_kind(kind, visible_segments)
+		var kind_tiles := _visible_tiles_for_kind(kind, segment_source)
 		for direction: String in TransportModesScript.CONNECTION_DIRECTIONS:
 			var neighbor := _neighbor_in_direction(tile_id, direction, terrain_map)
 			if neighbor >= 0 and kind_tiles.has(neighbor):
@@ -382,7 +671,7 @@ func tile_visual_state(tile_id: int, terrain_map: Variant) -> Dictionary:
 				neighbours[direction] = neighbor
 		connections[kind] = directions
 	var crossing_kind := ""
-	if _tile_has_visible_crossing(tile_id, visible_segments):
+	if _tile_has_visible_crossing(tile_id, segment_source):
 		crossing_kind = TransportModesScript.CROSSING_KIND
 	return {
 		"segments": segment_values,
@@ -390,7 +679,7 @@ func tile_visual_state(tile_id: int, terrain_map: Variant) -> Dictionary:
 		"crossing": crossing_kind,
 		"connections": connections,
 		"neighbours": neighbours,
-		"project_status": _project_status_for_tile(tile_id),
+		"project_status": project_status,
 	}
 
 
@@ -398,6 +687,8 @@ func visual_runtime_snapshot(city_grid: Array, terrain_map: Variant) -> Dictiona
 	var tile_id_set: Dictionary = {}
 	var visible_segments := _visible_segment_kinds_by_tile()
 	var visible_facilities := _visible_facility_kinds_by_tile()
+	var completed_segments := _completed_segment_kinds_by_tile()
+	var completed_facilities := _completed_facility_kinds_by_tile()
 	for tile_variant: Variant in visible_segments.keys():
 		tile_id_set[int(tile_variant)] = true
 	for tile_variant: Variant in visible_facilities.keys():
@@ -412,14 +703,48 @@ func visual_runtime_snapshot(city_grid: Array, terrain_map: Variant) -> Dictiona
 			tile_ids.append(tile_id)
 	tile_ids.sort()
 	var tile_states: Dictionary = {}
+	var completed_tile_states: Dictionary = {}
 	for tile_id: int in tile_ids:
 		tile_states[str(tile_id)] = tile_visual_state(tile_id, terrain_map)
+		if completed_segments.has(tile_id) or completed_facilities.has(tile_id):
+			completed_tile_states[str(tile_id)] = _tile_visual_state_from_sources(
+				tile_id,
+				terrain_map,
+				completed_segments,
+				completed_facilities,
+				""
+			)
 	return {
 		"tile_states": tile_states,
+		"completed_tile_states": completed_tile_states,
 		"operational_lines": active_lines(),
 		"private_road_paths": private_road_paths(city_grid, terrain_map),
+		"station_access_edges": station_access_edges(terrain_map),
 		"crossings": crossings.duplicate(true),
 	}
+
+
+func station_access_edges(terrain_map: Variant = null) -> Array[Dictionary]:
+	# Access edges are a runtime view of completed stations and completed
+	# guideways. They are deliberately absent from to_dict(): loading the same
+	# authorities must always recompute them instead of trusting stale topology.
+	var topology = terrain_map if terrain_map != null else _topology_map
+	var result: Array[Dictionary] = []
+	for station_id: String in _sorted_string_keys(stations):
+		var station: Dictionary = stations[station_id]
+		if str(station.get("status", "completed")) != "completed":
+			continue
+		var station_tile_id := int(station.get("tile_id", -1))
+		for network_kind: String in _station_access_network_kinds(str(station.get("building_name", ""))):
+			var network_tiles := _tile_set_for_segment_kind(network_kind)
+			for network_tile_variant: Variant in _network_attachments(station_tile_id, network_tiles, topology):
+				result.append({
+					"station_id": station_id,
+					"station_tile_id": station_tile_id,
+					"network_tile_id": int(network_tile_variant),
+					"kind": network_kind,
+				})
+	return result
 
 
 func network_snapshot_per_tile(city_grid: Array, terrain_map: Variant) -> Dictionary:
@@ -461,8 +786,11 @@ func monthly_maintenance() -> int:
 	var total := 0
 	for record_variant: Variant in segments.values():
 		var segment: Dictionary = record_variant
-		var spec := TransportModesScript.segment_spec(str(segment.get("kind", "")))
-		total += int(spec.get("monthly_maintenance_per_tile", 0)) * Array(segment.get("tile_path", [])).size()
+		if TransportModesScript.is_route_package_price_model(str(segment.get("price_model", ""))):
+			total += int(segment.get("route_monthly_maintenance", 0))
+		else:
+			var spec := TransportModesScript.segment_spec(str(segment.get("kind", "")))
+			total += int(spec.get("monthly_maintenance_per_tile", 0)) * Array(segment.get("tile_path", [])).size()
 	for record_variant: Variant in facilities.values():
 		var facility: Dictionary = record_variant
 		total += int(TransportModesScript.facility_spec(str(facility.get("kind", ""))).get("monthly_maintenance", 0))
@@ -616,21 +944,32 @@ func to_dict() -> Dictionary:
 	}
 
 
-func load_dict(data: Dictionary) -> void:
-	next_project_sequence = maxi(1, int(data.get("next_project_sequence", 1)))
-	next_segment_sequence = maxi(1, int(data.get("next_segment_sequence", 1)))
-	next_facility_sequence = maxi(1, int(data.get("next_facility_sequence", 1)))
-	next_station_sequence = maxi(1, int(data.get("next_station_sequence", 1)))
-	next_route_sequence = maxi(1, int(data.get("next_route_sequence", 1)))
-	projects = _dictionary_copy(data.get("projects", {}))
-	segments = _dictionary_copy(data.get("segments", {}))
-	facilities = _dictionary_copy(data.get("facilities", {}))
-	stations = _dictionary_copy(data.get("stations", {}))
-	crossings = _dictionary_copy(data.get("crossings", {}))
-	routes = _dictionary_copy(data.get("routes", {}))
+func authority_revision() -> String:
+	# Bind a corridor quote to the complete transport authority, including
+	# sequences and in-flight projects. Canonical key ordering keeps the same
+	# logical snapshot stable across save/load and Dictionary insertion order.
+	return JSON.stringify(_canonicalize_revision_value(to_dict())).sha256_text()
+
+
+func load_dict(data: Dictionary) -> bool:
+	var migrated := migrate_snapshot(data)
+	if migrated.is_empty():
+		return false
+	next_project_sequence = maxi(1, int(migrated.get("next_project_sequence", 1)))
+	next_segment_sequence = maxi(1, int(migrated.get("next_segment_sequence", 1)))
+	next_facility_sequence = maxi(1, int(migrated.get("next_facility_sequence", 1)))
+	next_station_sequence = maxi(1, int(migrated.get("next_station_sequence", 1)))
+	next_route_sequence = maxi(1, int(migrated.get("next_route_sequence", 1)))
+	projects = _dictionary_copy(migrated.get("projects", {}))
+	segments = _dictionary_copy(migrated.get("segments", {}))
+	facilities = _dictionary_copy(migrated.get("facilities", {}))
+	stations = _dictionary_copy(migrated.get("stations", {}))
+	crossings = _dictionary_copy(migrated.get("crossings", {}))
+	routes = _dictionary_copy(migrated.get("routes", {}))
 	_canonicalize_loaded_state()
 	_recompute_crossings()
 	revalidate_routes()
+	return true
 
 
 static func create_from_dict(data: Dictionary):
@@ -638,8 +977,19 @@ static func create_from_dict(data: Dictionary):
 	# on Godot's editor-generated global class-name cache already containing this
 	# newly added type.
 	var instance = (load("res://scripts/systems/city/transport_network_system.gd") as Script).new()
-	instance.load_dict(data)
-	return instance
+	return instance if instance.load_dict(data) else null
+
+
+static func migrate_snapshot(data: Dictionary) -> Dictionary:
+	var schema_value: Variant = data.get("schema_version", null)
+	if not _is_integer_value(schema_value):
+		return {}
+	var source_version := int(schema_value)
+	if source_version < MIN_SUPPORTED_SCHEMA_VERSION or source_version > MAX_SUPPORTED_SCHEMA_VERSION:
+		return {}
+	var migrated := data.duplicate(true)
+	migrated["schema_version"] = SCHEMA_VERSION
+	return migrated if bool(validate_snapshot(migrated).get("valid", false)) else {}
 
 
 static func validate_snapshot(snapshot: Dictionary) -> Dictionary:
@@ -697,6 +1047,8 @@ static func validate_snapshot(snapshot: Dictionary) -> Dictionary:
 			issues.append("invalid_segment_status:%s" % str(id_variant))
 		if not record.get("project_id", null) is String or str(record.get("project_id", "")).is_empty():
 			issues.append("invalid_segment_project_id:%s" % str(id_variant))
+		if record.has("price_model"):
+			_append_route_package_segment_price_issues(issues, "segment", str(id_variant), record)
 	for id_variant: Variant in facility_records.keys():
 		var record_variant: Variant = facility_records[id_variant]
 		if not record_variant is Dictionary:
@@ -838,6 +1190,32 @@ static func validate_snapshot(snapshot: Dictionary) -> Dictionary:
 			topology_map,
 			route_semantic_network
 		)
+		if record.has("price_model"):
+			var price_model := str(record.get("price_model", ""))
+			if not TransportModesScript.is_route_package_price_model(price_model):
+				issues.append("invalid_route_price_model:%s" % str(id_variant))
+			elif price_model == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V2 and str(record.get("price_provenance", "")) != TransportModesScript.ROUTE_PACKAGE_PRICE_PROVENANCE:
+				issues.append("invalid_route_price_provenance:%s" % str(id_variant))
+			for field_name: String in ["route_tile_count", "route_construction_cost", "route_monthly_maintenance"]:
+				if not _is_integer_value(record.get(field_name, null)) or int(record.get(field_name, -1)) < 0:
+					issues.append("invalid_route_%s:%s" % [field_name, str(id_variant)])
+			if price_model == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V2:
+				var route_spec := TransportModesScript.route_spec(str(record.get("mode", "")))
+				var guideway_spec := TransportModesScript.segment_spec(str(route_spec.get("guideway_kind", "")))
+				var route_tile_count := int(record.get("route_tile_count", -1))
+				if (
+					int(record.get("route_construction_cost", -1)) != int(guideway_spec.get("build_cost_per_tile", 0)) * route_tile_count
+					or int(record.get("route_monthly_maintenance", -1)) != int(guideway_spec.get("monthly_maintenance_per_tile", 0)) * route_tile_count
+				):
+					issues.append("invalid_route_v2_price_parity:%s" % str(id_variant))
+			elif price_model == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V3:
+				_append_route_package_v3_issues(
+					issues,
+					str(id_variant),
+					record,
+					segment_records,
+					project_records
+				)
 	return {"valid": issues.is_empty(), "issues": issues, "schema_version": schema_version}
 
 
@@ -848,6 +1226,9 @@ func _canonicalize_loaded_state() -> void:
 	for segment_id: String in _sorted_string_keys(segments):
 		var segment: Dictionary = segments[segment_id]
 		segment["tile_path"] = _int_array(segment.get("tile_path", []))
+		if TransportModesScript.is_route_package_price_model(str(segment.get("price_model", ""))):
+			segment["route_construction_cost"] = int(segment.get("route_construction_cost", 0))
+			segment["route_monthly_maintenance"] = int(segment.get("route_monthly_maintenance", 0))
 		segments[segment_id] = segment
 	for facility_id: String in _sorted_string_keys(facilities):
 		var facility: Dictionary = facilities[facility_id]
@@ -872,6 +1253,15 @@ func _canonicalize_loaded_state() -> void:
 		for key: String in ["segments", "facilities", "stations", "level_crossings"]:
 			breakdown[key] = int(breakdown.get(key, 0))
 		quote["breakdown"] = breakdown
+		if quote.has("maintenance_breakdown"):
+			var maintenance_breakdown: Dictionary = quote.get("maintenance_breakdown", {})
+			for key: String in ["segments", "facilities", "stations", "level_crossings"]:
+				maintenance_breakdown[key] = int(maintenance_breakdown.get(key, 0))
+			quote["maintenance_breakdown"] = maintenance_breakdown
+		if quote.has("monthly_maintenance"):
+			quote["monthly_maintenance"] = int(quote.get("monthly_maintenance", 0))
+		if quote.has("corridor_quote") and quote.get("corridor_quote", null) is Dictionary:
+			quote["corridor_quote"] = _normalize_corridor_quote(quote.get("corridor_quote", {}))
 		project["quote"] = quote
 		projects[project_id] = project
 	for route_id: String in _sorted_string_keys(routes):
@@ -882,6 +1272,18 @@ func _canonicalize_loaded_state() -> void:
 		route["path_tile_ids"] = _int_array(route.get("path_tile_ids", []))
 		route["station_tile_ids"] = _int_array(route.get("station_tile_ids", []))
 		route["loop_seconds"] = float(route.get("loop_seconds", 10.0))
+		if TransportModesScript.is_route_package_price_model(str(route.get("price_model", ""))):
+			route["route_tile_count"] = int(route.get("route_tile_count", 0))
+			route["route_construction_cost"] = int(route.get("route_construction_cost", 0))
+			route["route_monthly_maintenance"] = int(route.get("route_monthly_maintenance", 0))
+		if str(route.get("price_model", "")) == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V3:
+			route["corridor_quote"] = _normalize_corridor_quote(route.get("corridor_quote", {}))
+			route["reused_segment_refs"] = _normalize_route_segment_refs(route.get("reused_segment_refs", []))
+			route["new_segment_refs"] = _normalize_route_segment_refs(route.get("new_segment_refs", []))
+			route["new_project_ids"] = _string_array(route.get("new_project_ids", []))
+			route["new_job_ids"] = _string_array(route.get("new_job_ids", []))
+			route["price_breakdown"] = _normalize_integer_dictionary(route.get("price_breakdown", {}))
+			route["maintenance_breakdown"] = _normalize_integer_dictionary(route.get("maintenance_breakdown", {}))
 		routes[route_id] = route
 
 
@@ -1023,11 +1425,19 @@ func _normalize_build_plan(plan: Dictionary) -> Dictionary:
 			normalized_segments.append({"kind": "", "tile_path": []})
 			continue
 		var record: Dictionary = record_variant
-		normalized_segments.append({
+		var normalized_segment := {
 			"id": str(record.get("id", record.get("segment_id", ""))),
 			"kind": str(record.get("kind", "")),
 			"tile_path": _int_array(record.get("tile_path", record.get("tile_ids", []))),
-		})
+		}
+		var price_model := str(record.get("price_model", ""))
+		if TransportModesScript.is_route_package_price_model(price_model):
+			normalized_segment["price_model"] = price_model
+			if record.has("price_provenance"):
+				normalized_segment["price_provenance"] = str(record.get("price_provenance", ""))
+			normalized_segment["route_construction_cost"] = int(record.get("route_construction_cost", 0))
+			normalized_segment["route_monthly_maintenance"] = int(record.get("route_monthly_maintenance", 0))
+		normalized_segments.append(normalized_segment)
 	var normalized_facilities: Array[Dictionary] = []
 	for record_variant: Variant in _array_value(plan.get("facilities", [])):
 		if not record_variant is Dictionary:
@@ -1050,13 +1460,16 @@ func _normalize_build_plan(plan: Dictionary) -> Dictionary:
 			"building_name": str(record.get("building_name", "")),
 			"tile_id": int(record.get("tile_id", -1)),
 		})
-	return {
+	var result := {
 		"title": str(plan.get("title", "交通建設專案")),
 		"source_decision_id": str(plan.get("source_decision_id", "")),
 		"segments": normalized_segments,
 		"facilities": normalized_facilities,
 		"stations": normalized_stations,
 	}
+	if plan.has("corridor_contract") and plan.get("corridor_contract", null) is Dictionary:
+		result["corridor_contract"] = _normalize_corridor_contract(plan.get("corridor_contract", {}))
+	return result
 
 
 func _normalize_demolition_plan(plan: Dictionary) -> Dictionary:
@@ -1070,7 +1483,7 @@ func _normalize_demolition_plan(plan: Dictionary) -> Dictionary:
 
 
 func _normalize_route(route_plan: Dictionary) -> Dictionary:
-	return {
+	var normalized := {
 		"id": str(route_plan.get("id", route_plan.get("route_id", ""))),
 		"name": str(route_plan.get("name", "交通路線")),
 		"mode": str(route_plan.get("mode", "")),
@@ -1080,6 +1493,32 @@ func _normalize_route(route_plan: Dictionary) -> Dictionary:
 		"fare": int(route_plan.get("fare", 0)),
 		"enabled": bool(route_plan.get("enabled", false)),
 	}
+	var price_model := str(route_plan.get("price_model", ""))
+	if TransportModesScript.is_route_package_price_model(price_model):
+		normalized["price_model"] = price_model
+		if route_plan.has("price_provenance"):
+			normalized["price_provenance"] = str(route_plan.get("price_provenance", ""))
+		normalized["route_tile_count"] = int(route_plan.get("route_tile_count", 0))
+		normalized["route_construction_cost"] = int(route_plan.get("route_construction_cost", 0))
+		normalized["route_monthly_maintenance"] = int(route_plan.get("route_monthly_maintenance", 0))
+		if price_model == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V3:
+			normalized["corridor_quote"] = _normalize_corridor_quote(route_plan.get("corridor_quote", {}))
+			normalized["quote_network_revision"] = str(route_plan.get("quote_network_revision", ""))
+			normalized["reused_segment_refs"] = _normalize_route_segment_refs(
+				route_plan.get("reused_segment_refs", [])
+			)
+			normalized["new_segment_refs"] = _normalize_route_segment_refs(
+				route_plan.get("new_segment_refs", [])
+			)
+			normalized["new_project_ids"] = _string_array(route_plan.get("new_project_ids", []))
+			normalized["new_job_ids"] = _string_array(route_plan.get("new_job_ids", []))
+			normalized["price_breakdown"] = _normalize_integer_dictionary(
+				route_plan.get("price_breakdown", {})
+			)
+			normalized["maintenance_breakdown"] = _normalize_integer_dictionary(
+				route_plan.get("maintenance_breakdown", {})
+			)
+	return normalized
 
 
 func _validate_build_plan(
@@ -1093,6 +1532,8 @@ func _validate_build_plan(
 	var existing_by_tile := _completed_segment_kinds_by_tile()
 	var reserved_entity_ids := _active_and_live_build_entity_ids()
 	var explicit_plan_ids: Dictionary = {}
+	if plan.has("corridor_contract"):
+		issues.append_array(_corridor_plan_issues(plan))
 	for segment: Dictionary in plan["segments"]:
 		_append_build_entity_id_issues(
 			str(segment.get("id", "")), "segment", reserved_entity_ids, explicit_plan_ids, issues
@@ -1151,7 +1592,11 @@ func _validate_build_plan(
 		if structure_tiles.has(tile_id) or planned_by_tile.has(tile_id):
 			issues.append("transport_structure_overlap:%d" % tile_id)
 		structure_tiles[tile_id] = true
-	if plan["segments"].is_empty() and plan["facilities"].is_empty() and plan["stations"].is_empty():
+	var all_reuse_corridor := (
+		plan.has("corridor_contract")
+		and str(Dictionary(plan.get("corridor_contract", {})).get("classification", "")) == "all_reuse"
+	)
+	if plan["segments"].is_empty() and plan["facilities"].is_empty() and plan["stations"].is_empty() and not all_reuse_corridor:
 		issues.append("project_items_required")
 	return _unique_strings(issues)
 
@@ -1503,6 +1948,8 @@ func _completed_segment_kinds_by_tile() -> Dictionary:
 	var result: Dictionary = {}
 	for record_variant: Variant in segments.values():
 		var segment: Dictionary = record_variant
+		if str(segment.get("status", "")) != "completed":
+			continue
 		var kind := str(segment.get("kind", ""))
 		for tile_variant: Variant in Array(segment.get("tile_path", [])):
 			var tile_id := int(tile_variant)
@@ -1510,6 +1957,25 @@ func _completed_segment_kinds_by_tile() -> Dictionary:
 			if not kinds.has(kind):
 				kinds.append(kind)
 			result[tile_id] = kinds
+	return result
+
+
+func _completed_facility_kinds_by_tile() -> Dictionary:
+	var result: Dictionary = {}
+	for record_variant: Variant in facilities.values():
+		if not record_variant is Dictionary:
+			continue
+		var facility: Dictionary = record_variant
+		if str(facility.get("status", "completed")) != "completed":
+			continue
+		var tile_id := int(facility.get("tile_id", -1))
+		if tile_id < 0:
+			continue
+		var kinds: Array = result.get(tile_id, [])
+		var kind := str(facility.get("kind", ""))
+		if not kind.is_empty() and not kinds.has(kind):
+			kinds.append(kind)
+		result[tile_id] = kinds
 	return result
 
 
@@ -1628,6 +2094,22 @@ func _tile_set_for_segment_kind(kind: String) -> Dictionary:
 		for tile_variant: Variant in Array(segment.get("tile_path", [])):
 			result[int(tile_variant)] = true
 	return result
+
+
+func _station_access_network_kinds(building_name: String) -> Array[String]:
+	var station_spec := TransportModesScript.station_spec(building_name)
+	var route_mode := str(station_spec.get("route_mode", ""))
+	match route_mode:
+		"bus":
+			return ["road"]
+		"metro":
+			return ["metro_track"]
+		"train":
+			return ["rail_track"]
+		"air":
+			# Airports need both public road access and their own air-side taxiway.
+			return ["road", "taxiway"]
+	return []
 
 
 func _network_attachments(tile_id: int, network_tiles: Dictionary, terrain_map: Variant) -> Array[int]:
@@ -2321,6 +2803,8 @@ static func _append_snapshot_build_item_shape_issues(
 			item.get("tile_path", null), issues, "build_segment_path:%s" % label,
 			false, true, true, topology_map
 		)
+		if item.has("price_model"):
+			_append_route_package_segment_price_issues(issues, "build_segment", label, item)
 	elif item_kind == "facility":
 		_append_missing_record_fields(issues, "build_facility", label, item, ["id", "kind", "tile_id"])
 		if not item.get("kind", null) is String or str(item.get("kind", "")) not in TransportModesScript.FACILITY_KINDS:
@@ -2331,6 +2815,33 @@ static func _append_snapshot_build_item_shape_issues(
 		if not item.get("building_name", null) is String or str(item.get("building_name", "")) not in TransportModesScript.STATION_KINDS:
 			issues.append("invalid_build_station_kind:%s" % label)
 		_append_snapshot_tile_id_issue(issues, "build_station", label, item.get("tile_id", null))
+
+
+static func _append_route_package_segment_price_issues(
+	issues: Array[String], issue_prefix: String, label: String, record: Dictionary
+) -> void:
+	var price_model := str(record.get("price_model", ""))
+	if not TransportModesScript.is_route_package_price_model(price_model):
+		issues.append("invalid_%s_price_model:%s" % [issue_prefix, label])
+		return
+	if price_model == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V2 and str(record.get("price_provenance", "")) != TransportModesScript.ROUTE_PACKAGE_PRICE_PROVENANCE:
+		issues.append("invalid_%s_price_provenance:%s" % [issue_prefix, label])
+	if price_model == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V3 and str(record.get("price_provenance", "")) != TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_PROVENANCE:
+		issues.append("invalid_%s_price_provenance:%s" % [issue_prefix, label])
+	for field_name: String in ["route_construction_cost", "route_monthly_maintenance"]:
+		if not _is_integer_value(record.get(field_name, null)) or int(record.get(field_name, -1)) < 0:
+			issues.append("invalid_%s_%s:%s" % [issue_prefix, field_name, label])
+	if price_model not in [TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V2, TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V3]:
+		return
+	var segment_spec := TransportModesScript.segment_spec(str(record.get("kind", "")))
+	var tile_count := Array(record.get("tile_path", [])).size() if record.get("tile_path", null) is Array else -1
+	if (
+		tile_count < 0
+		or int(record.get("route_construction_cost", -1)) != int(segment_spec.get("build_cost_per_tile", 0)) * tile_count
+		or int(record.get("route_monthly_maintenance", -1)) != int(segment_spec.get("monthly_maintenance_per_tile", 0)) * tile_count
+	):
+		var version_label := "v2" if price_model == TransportModesScript.ROUTE_PACKAGE_PRICE_MODEL_V2 else "v3"
+		issues.append("invalid_%s_%s_price_parity:%s" % [issue_prefix, version_label, label])
 
 
 static func _snapshot_build_item_matches_live(
@@ -2423,6 +2934,15 @@ static func _append_snapshot_project_quote_issues(
 	if operation != "build" or not project.get("plan", null) is Dictionary:
 		return
 	var plan: Dictionary = project.get("plan", {})
+	if plan.has("corridor_contract"):
+		var corridor_quote_value: Variant = quote.get("corridor_quote", null)
+		var corridor_quote_validation := TransportModesScript.validate_route_package_corridor_price_quote(
+			corridor_quote_value
+		)
+		if not bool(corridor_quote_validation.get("valid", false)):
+			issues.append("invalid_project_corridor_quote:%s" % project_label)
+		elif Dictionary(corridor_quote_value).get("corridor", null) != plan.get("corridor_contract", null):
+			issues.append("project_corridor_quote_plan_mismatch:%s" % project_label)
 	var expected := {"segments": 0, "facilities": 0, "stations": 0}
 	var expected_valid := true
 	var segment_values: Variant = plan.get("segments", null)
@@ -3065,6 +3585,288 @@ static func _snapshot_segment_tiles_for_kinds(segment_records: Dictionary, kinds
 	return result
 
 
+static func _append_route_package_v3_issues(
+	issues: Array[String],
+	route_id: String,
+	record: Dictionary,
+	segment_records: Dictionary,
+	project_records: Dictionary
+) -> void:
+	if str(record.get("price_provenance", "")) != TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_PROVENANCE:
+		issues.append("invalid_route_v3_price_provenance:%s" % route_id)
+	var revision := str(record.get("quote_network_revision", ""))
+	if revision.length() != 64 or not revision.is_valid_hex_number(false):
+		issues.append("invalid_route_v3_network_revision:%s" % route_id)
+	var quote_value: Variant = record.get("corridor_quote", null)
+	var quote_validation := TransportModesScript.validate_route_package_corridor_price_quote(quote_value)
+	if not bool(quote_validation.get("valid", false)):
+		issues.append("invalid_route_v3_corridor_quote:%s" % route_id)
+		return
+	var quote: Dictionary = quote_value
+	var corridor: Dictionary = quote.get("corridor", {})
+	if str(corridor.get("mode", "")) != str(record.get("mode", "")):
+		issues.append("route_v3_mode_mismatch:%s" % route_id)
+	if (
+		int(record.get("route_tile_count", -1)) != int(corridor.get("total_units", -2))
+		or int(record.get("route_construction_cost", -1)) != int(quote.get("total_cost", -2))
+		or int(record.get("route_monthly_maintenance", -1)) != int(quote.get("monthly_maintenance", -2))
+		or record.get("price_breakdown", null) != quote.get("price_breakdown", null)
+		or record.get("maintenance_breakdown", null) != quote.get("maintenance_breakdown", null)
+	):
+		issues.append("route_v3_price_breakdown_mismatch:%s" % route_id)
+	var route_tiles: Array = corridor.get("route_tile_ids", [])
+	var route_tile_set: Dictionary = {}
+	for route_tile_value: Variant in route_tiles:
+		route_tile_set[int(route_tile_value)] = true
+	var reused_refs: Array = record.get("reused_segment_refs", [])
+	if reused_refs != corridor.get("reused_segment_refs", []):
+		issues.append("route_v3_reused_refs_mismatch:%s" % route_id)
+	else:
+		for ref_value: Variant in reused_refs:
+			if not ref_value is Dictionary:
+				issues.append("invalid_route_v3_reused_ref:%s" % route_id)
+				continue
+			var ref: Dictionary = ref_value
+			var segment_id := str(ref.get("id", ""))
+			if not segment_records.has(segment_id) or not segment_records[segment_id] is Dictionary:
+				issues.append("route_v3_reused_segment_missing:%s:%s" % [route_id, segment_id])
+				continue
+			var segment: Dictionary = segment_records[segment_id]
+			var matched_tiles: Array[int] = []
+			for tile_value: Variant in segment.get("tile_path", []):
+				if route_tile_set.has(int(tile_value)):
+					matched_tiles.append(int(tile_value))
+			if (
+				str(segment.get("status", "")) != "completed"
+				or str(segment.get("kind", "")) != str(ref.get("kind", ""))
+				or matched_tiles != _int_array_static(ref.get("tile_ids", []))
+			):
+				issues.append("route_v3_reused_segment_changed:%s:%s" % [route_id, segment_id])
+	var new_refs_value: Variant = record.get("new_segment_refs", null)
+	if not new_refs_value is Array:
+		issues.append("invalid_route_v3_new_refs:%s" % route_id)
+		return
+	var new_refs: Array = new_refs_value
+	var new_runs: Array = corridor.get("new_runs", [])
+	if new_refs.size() != new_runs.size():
+		issues.append("route_v3_new_ref_count_mismatch:%s" % route_id)
+	var expected_project_ids: Array[String] = []
+	var expected_job_ids: Array[String] = []
+	for index: int in range(new_refs.size()):
+		if not new_refs[index] is Dictionary or index >= new_runs.size() or not new_runs[index] is Dictionary:
+			issues.append("invalid_route_v3_new_ref:%s:%d" % [route_id, index])
+			continue
+		var ref: Dictionary = new_refs[index]
+		var run: Dictionary = new_runs[index]
+		var segment_id := str(ref.get("id", ""))
+		var project_id := str(ref.get("project_id", ""))
+		var job_id := str(ref.get("job_id", ""))
+		if project_id.is_empty() or job_id.is_empty():
+			issues.append("invalid_route_v3_new_ref_identity:%s:%d" % [route_id, index])
+			continue
+		if not expected_project_ids.has(project_id):
+			expected_project_ids.append(project_id)
+		if not expected_job_ids.has(job_id):
+			expected_job_ids.append(job_id)
+		if (
+			str(ref.get("kind", "")) != str(run.get("kind", ""))
+			or ref.get("tile_ids", null) != run.get("tile_path", null)
+			or not segment_records.has(segment_id)
+			or not segment_records[segment_id] is Dictionary
+		):
+			issues.append("route_v3_new_segment_mismatch:%s:%s" % [route_id, segment_id])
+			continue
+		var segment: Dictionary = segment_records[segment_id]
+		if (
+			str(segment.get("status", "")) != "completed"
+			or str(segment.get("project_id", "")) != project_id
+			or str(segment.get("kind", "")) != str(ref.get("kind", ""))
+			or segment.get("tile_path", null) != ref.get("tile_ids", null)
+		):
+			issues.append("route_v3_new_segment_changed:%s:%s" % [route_id, segment_id])
+		if not project_records.has(project_id) or not project_records[project_id] is Dictionary:
+			issues.append("route_v3_new_project_missing:%s:%s" % [route_id, project_id])
+		elif str(Dictionary(project_records[project_id]).get("status", "")) != "completed":
+			issues.append("route_v3_new_project_not_completed:%s:%s" % [route_id, project_id])
+	var project_ids_value: Variant = record.get("new_project_ids", null)
+	if not project_ids_value is Array:
+		issues.append("invalid_route_v3_new_project_refs:%s" % route_id)
+	else:
+		var project_ids: Array = project_ids_value
+		var seen_project_ids: Array[String] = []
+		for project_id_value: Variant in project_ids:
+			if not project_id_value is String:
+				issues.append("invalid_route_v3_new_project_ref:%s" % route_id)
+				continue
+			var project_id := str(project_id_value)
+			if project_id.is_empty() or seen_project_ids.has(project_id):
+				issues.append("invalid_route_v3_new_project_ref:%s" % route_id)
+				continue
+			seen_project_ids.append(project_id)
+			if not project_records.has(project_id) or not project_records[project_id] is Dictionary:
+				issues.append("route_v3_new_project_missing:%s:%s" % [route_id, project_id])
+			elif str(Dictionary(project_records[project_id]).get("status", "")) != "completed":
+				issues.append("route_v3_new_project_not_completed:%s:%s" % [route_id, project_id])
+		for project_id: String in expected_project_ids:
+			if not seen_project_ids.has(project_id):
+				issues.append("route_v3_new_project_refs_mismatch:%s" % route_id)
+	var job_ids_value: Variant = record.get("new_job_ids", null)
+	if not job_ids_value is Array:
+		issues.append("invalid_route_v3_new_job_refs:%s" % route_id)
+	else:
+		var seen_job_ids: Array[String] = []
+		for job_id_value: Variant in job_ids_value:
+			if not job_id_value is String:
+				issues.append("invalid_route_v3_new_job_ref:%s" % route_id)
+				continue
+			var job_id := str(job_id_value)
+			if job_id.is_empty() or seen_job_ids.has(job_id):
+				issues.append("invalid_route_v3_new_job_ref:%s" % route_id)
+				continue
+			seen_job_ids.append(job_id)
+		for job_id: String in expected_job_ids:
+			if not seen_job_ids.has(job_id):
+				issues.append("route_v3_new_job_refs_mismatch:%s" % route_id)
+
+
+static func _normalize_route_segment_refs(value: Variant) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	if not value is Array:
+		return result
+	for ref_value: Variant in value:
+		if not ref_value is Dictionary:
+			continue
+		var ref: Dictionary = ref_value
+		var normalized := {
+			"id": str(ref.get("id", ref.get("segment_id", ""))),
+			"kind": str(ref.get("kind", "")),
+			"tile_ids": _int_array_static(ref.get("tile_ids", [])),
+		}
+		for field_name: String in ["project_id", "job_id"]:
+			if ref.has(field_name):
+				normalized[field_name] = str(ref.get(field_name, ""))
+		result.append(normalized)
+	return result
+
+
+static func _normalize_integer_dictionary(value: Variant) -> Dictionary:
+	var result: Dictionary = {}
+	if not value is Dictionary:
+		return result
+	for key_value: Variant in (value as Dictionary).keys():
+		result[str(key_value)] = int((value as Dictionary)[key_value])
+	return result
+
+
+static func _normalize_corridor_contract(value: Variant) -> Dictionary:
+	if not value is Dictionary:
+		return {}
+	var source: Dictionary = value
+	var refs: Array[Dictionary] = []
+	for ref_value: Variant in source.get("reused_segment_refs", []):
+		if not ref_value is Dictionary:
+			continue
+		var ref: Dictionary = ref_value
+		refs.append({
+			"id": str(ref.get("id", "")),
+			"kind": str(ref.get("kind", "")),
+			"tile_ids": _int_array_static(ref.get("tile_ids", [])),
+		})
+	var runs: Array[Dictionary] = []
+	for run_value: Variant in source.get("new_runs", []):
+		if not run_value is Dictionary:
+			continue
+		var run: Dictionary = run_value
+		runs.append({
+			"kind": str(run.get("kind", "")),
+			"tile_path": _int_array_static(run.get("tile_path", [])),
+		})
+	return {
+		"schema_version": int(source.get("schema_version", -1)),
+		"mode": str(source.get("mode", "")),
+		"segment_kind": str(source.get("segment_kind", "")),
+		"classification": str(source.get("classification", "")),
+		"route_tile_ids": _int_array_static(source.get("route_tile_ids", [])),
+		"reused_segment_refs": refs,
+		"new_runs": runs,
+		"total_units": int(source.get("total_units", -1)),
+		"reused_units": int(source.get("reused_units", -1)),
+		"new_units": int(source.get("new_units", -1)),
+	}
+
+
+static func _normalize_corridor_quote(value: Variant) -> Dictionary:
+	if not value is Dictionary:
+		return {}
+	var source: Dictionary = value
+	var price_breakdown: Dictionary = source.get("price_breakdown", {})
+	var maintenance_breakdown: Dictionary = source.get("maintenance_breakdown", {})
+	var result := {
+		"quote_schema_version": int(source.get("quote_schema_version", -1)),
+		"price_model": str(source.get("price_model", "")),
+		"price_provenance": str(source.get("price_provenance", "")),
+		"corridor": _normalize_corridor_contract(source.get("corridor", {})),
+		"price_breakdown": {
+			"reused_corridor": int(price_breakdown.get("reused_corridor", -1)),
+			"new_corridor": int(price_breakdown.get("new_corridor", -1)),
+		},
+		"maintenance_breakdown": {
+			"reused_corridor": int(maintenance_breakdown.get("reused_corridor", -1)),
+			"new_corridor": int(maintenance_breakdown.get("new_corridor", -1)),
+		},
+		"total_cost": int(source.get("total_cost", -1)),
+		"monthly_maintenance": int(source.get("monthly_maintenance", -1)),
+		"checksum_version": int(source.get("checksum_version", -1)),
+		"checksum": str(source.get("checksum", "")),
+	}
+	if source.has("ok"):
+		result["ok"] = bool(source.get("ok", false))
+	return result
+
+
+func _corridor_plan_issues(plan: Dictionary) -> Array[String]:
+	var issues: Array[String] = []
+	var contract_value: Variant = plan.get("corridor_contract", null)
+	var validation := TransportModesScript.validate_route_package_corridor_contract(contract_value)
+	if not bool(validation.get("valid", false)):
+		issues.append("invalid_corridor_contract")
+		return issues
+	if not Array(plan.get("facilities", [])).is_empty() or not Array(plan.get("stations", [])).is_empty():
+		issues.append("corridor_contract_has_structures")
+	var contract: Dictionary = contract_value
+	var runs: Array = contract.get("new_runs", [])
+	var segment_values: Array = plan.get("segments", [])
+	if segment_values.size() != runs.size():
+		issues.append("corridor_new_run_count_mismatch")
+		return issues
+	var segment_spec := TransportModesScript.segment_spec(str(contract.get("segment_kind", "")))
+	for index: int in range(runs.size()):
+		if not runs[index] is Dictionary or not segment_values[index] is Dictionary:
+			issues.append("corridor_new_run_shape_mismatch")
+			continue
+		var run: Dictionary = runs[index]
+		var segment: Dictionary = segment_values[index]
+		var tile_path: Array = segment.get("tile_path", [])
+		if str(segment.get("kind", "")) != str(run.get("kind", "")) or tile_path != run.get("tile_path", []):
+			issues.append("corridor_new_run_plan_mismatch")
+		if (
+			str(segment.get("price_model", "")) != TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_MODEL
+			or str(segment.get("price_provenance", "")) != TransportModesScript.ROUTE_PACKAGE_REUSE_PRICE_PROVENANCE
+			or int(segment.get("route_construction_cost", -1)) != int(segment_spec.get("build_cost_per_tile", 0)) * tile_path.size()
+			or int(segment.get("route_monthly_maintenance", -1)) != int(segment_spec.get("monthly_maintenance_per_tile", 0)) * tile_path.size()
+		):
+			issues.append("corridor_new_run_price_mismatch")
+	return issues
+
+
+static func _int_array_static(source: Variant) -> Array[int]:
+	var result: Array[int] = []
+	if source is Array:
+		for item: Variant in source:
+			result.append(int(item))
+	return result
+
+
 static func _is_integer_value(value: Variant) -> bool:
 	if value is int:
 		return true
@@ -3095,6 +3897,24 @@ static func _is_json_safe(value: Variant) -> bool:
 				return false
 		return true
 	return false
+
+
+static func _canonicalize_revision_value(value: Variant) -> Variant:
+	if value is Dictionary:
+		var result: Dictionary = {}
+		var keys: Array[String] = []
+		for key_value: Variant in (value as Dictionary).keys():
+			keys.append(str(key_value))
+		keys.sort()
+		for key: String in keys:
+			result[key] = _canonicalize_revision_value((value as Dictionary)[key])
+		return result
+	if value is Array:
+		var result: Array = []
+		for item: Variant in value:
+			result.append(_canonicalize_revision_value(item))
+		return result
+	return value
 
 
 static func _error(code: String) -> Dictionary:

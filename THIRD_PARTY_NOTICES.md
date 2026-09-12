@@ -1,4 +1,4 @@
-# Third-party notices
+# Third-party notices — 0.1.0-alpha.2
 
 This file records the third-party runtime component that is verifiably used by
 the current project tree. It is **not** a license for the project's own source
@@ -7,7 +7,7 @@ decision remains with the project owner.
 
 ## Godot Engine 4.7
 
-Mayor Simulator MVP is built with and distributed using Godot Engine 4.7.
+《城諾之音》 / CivicTale: Voice of Promise is built with and distributed using Godot Engine 4.7.
 Godot Engine is licensed under the MIT/Expat license. The official license and
 the exhaustive notices for components incorporated into the engine are:
 
@@ -54,7 +54,12 @@ SOFTWARE.
   `B968762C5F8756B26874D1B3610D889D2472B251C7E6F3D052B9C0533612E119`).
   The repository does not establish its author or license. Public distribution
   therefore requires the project owner to confirm the usage rights or approve
-  a replacement before release.
+  a replacement before public release. It is INTERNAL-ONLY in this RC.
+- The train-station runtime image is separately blocked: its exact runtime,
+  processed-source, and raw checksums, together with the required closure
+  material, are in `docs/release/ASSET_PROVENANCE.md` and
+  `docs/release/train_station_asset_provenance_blocker.md`. Do not infer its
+  provenance from the other Storybook building records.
 - The current tree contains no `addons/`, GDExtension, native DLL, bundled
   third-party font, or external runtime package. If any such dependency is
   added later, this notice must be updated before distribution.

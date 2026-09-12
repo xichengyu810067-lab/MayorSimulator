@@ -50,13 +50,26 @@ func refresh(snapshot: Dictionary) -> void:
 	# Treat caller-owned authority data as immutable. All presentation work uses a
 	# deep copy, so nested history, metrics, groups, and finance data stay intact.
 	var data: Dictionary = snapshot.duplicate(true)
-	var previous_month: Dictionary = _dictionary_value(data, "previous_month")
+	var monthly_history := _monthly_history_value(data)
+	var history_includes_current := bool(data.get("history_includes_current", false))
+	var current_period_index := _resolved_current_period_index(data, monthly_history, history_includes_current)
+	var comparison_history := _history_before_current_period(
+		monthly_history,
+		history_includes_current,
+		current_period_index
+	)
+	var history_previous_month := _previous_history_snapshot(comparison_history, current_period_index)
+	var previous_month: Dictionary = history_previous_month
+	if previous_month.is_empty() and not history_includes_current:
+		previous_month = _dictionary_value(data, "previous_month")
 	var metrics: Dictionary = _dictionary_value(data, "metrics")
 	var resident_groups: Dictionary = _dictionary_value(data, "resident_groups")
 	var finance: Dictionary = _dictionary_value(data, "finance")
-	var has_previous_month := bool(data.get("has_previous_month", false))
+	var has_previous_month := not history_previous_month.is_empty() or bool(data.get("has_previous_month", false))
+	if history_includes_current:
+		has_previous_month = not history_previous_month.is_empty()
 
-	_update_monthly_data_charts(data, previous_month, metrics, finance, has_previous_month)
+	_update_monthly_data_charts(data, previous_month, metrics, finance, comparison_history, has_previous_month, current_period_index)
 	for group_name in _resident_group_names:
 		_update_group_visual(group_name, int(resident_groups.get(group_name, 0)))
 	_update_finance_rows(finance)
@@ -107,7 +120,7 @@ func _build_dashboard() -> void:
 	)
 	overview_intro.name = "MonthlyDataComparisonRule"
 	overview_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	overview_intro.custom_minimum_size = Vector2(0, 36)
+	overview_intro.custom_minimum_size = Vector2(0, 56)
 	overview_header.add_child(overview_intro)
 	overview_stack.add_child(overview_panel)
 	var overview_grid := GridContainer.new()
@@ -226,15 +239,17 @@ func _monthly_data_kpi_card(card_key: String, icon_key: String, title_text: Stri
 	stack.add_child(header)
 	var value := _label("—", 23, _theme_text())
 	value.name = "MonthlyDataKpiValue_%s" % card_key
-	value.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	value.clip_text = true
+	value.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	value.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+	value.clip_text = false
 	labels["monthly_data_kpi_%s_value" % card_key] = value
 	value.visible = false
 	stack.add_child(value)
 	var detail := _label("", 13, _theme_muted())
 	detail.name = "MonthlyDataKpiDetail_%s" % card_key
-	detail.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	detail.clip_text = true
+	detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	detail.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+	detail.clip_text = false
 	labels["monthly_data_kpi_%s_detail" % card_key] = detail
 	stack.add_child(detail)
 	var chart = BenchmarkDeltaChartScript.new()
@@ -315,8 +330,9 @@ func _finance_visual_row(label_key: String, title_text: String) -> VBoxContainer
 	var value := _label("", 18, _theme_accent_text())
 	value.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	value.custom_minimum_size = Vector2(108, 0)
-	value.clip_text = true
-	value.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	value.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	value.clip_text = false
+	value.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
 	labels[label_key] = value
 	row.add_child(value)
 	box.add_child(row)
@@ -336,7 +352,9 @@ func _update_monthly_data_charts(
 		previous_month: Dictionary,
 		metrics: Dictionary,
 		finance: Dictionary,
-		has_previous_month: bool
+		monthly_history: Array,
+		has_previous_month: bool,
+		current_period_index: int
 ) -> void:
 	var total_income := int(finance.get("total_income", 0))
 	var total_expense := int(finance.get("total_expense", 0))
@@ -351,12 +369,13 @@ func _update_monthly_data_charts(
 		"↑ %s  ·  ↓ %s" % [_format_currency(total_income), _format_currency(total_expense)],
 		COLOR_SUCCESS if net_income >= 0 else COLOR_WARNING
 	)
+	var coverage_warning := _monthly_warning_state(coverage_rate, 100.0, "coverage_rate", monthly_history, current_period_index)
 	_set_monthly_data_chart(
 		"net", coverage_rate, coverage_baseline, 100.0, 0.0, coverage_max,
 		L10n.text("收入覆蓋支出 %.0f%%") % coverage_rate,
 		_report_baseline_text(coverage_baseline, 100.0, "收支安全線", 0, has_previous_month),
 		_report_comparison_text(coverage_rate, coverage_baseline, "收支安全線", 0, has_previous_month),
-		_report_safety_warning_text(coverage_rate, 100.0, "收支安全線", 0),
+		str(coverage_warning["text"]), str(coverage_warning["severity"]),
 		"0%", "%.0f%%" % coverage_max
 	)
 
@@ -372,12 +391,13 @@ func _update_monthly_data_charts(
 		L10n.text("目前人口 %s 人") % _format_grouped_int(population),
 		COLOR_INFO if population_rate >= 0.0 else COLOR_WARNING
 	)
+	var population_warning := _monthly_warning_state(population_rate, 0.0, "population_rate", monthly_history, current_period_index)
 	_set_monthly_data_chart(
 		"population", population_rate, population_baseline, 0.0, -population_range, population_range,
 		L10n.text("本月人口 %+.1f%%") % population_rate,
 		_report_baseline_text(population_baseline, 0.0, "零成長線", 1, has_previous_month),
 		_report_comparison_text(population_rate, population_baseline, "零成長線", 1, has_previous_month),
-		_report_safety_warning_text(population_rate, 0.0, "零成長線", 1),
+		str(population_warning["text"]), str(population_warning["severity"]),
 		"−%.0f%%" % population_range, "+%.0f%%" % population_range
 	)
 
@@ -386,35 +406,39 @@ func _update_monthly_data_charts(
 	_set_monthly_data_kpi(
 		"satisfaction", "%d%%" % satisfaction, L10n.text(_score_state(satisfaction)), _score_color(satisfaction)
 	)
+	var satisfaction_warning := _monthly_warning_state(float(satisfaction), 60.0, "satisfaction", monthly_history, current_period_index)
 	_set_monthly_data_chart(
 		"satisfaction", float(satisfaction), satisfaction_baseline, 60.0, 0.0, 100.0,
 		L10n.text("居民滿意 %d%%") % satisfaction,
 		_report_baseline_text(satisfaction_baseline, 60.0, "安全線", 0, has_previous_month),
 		_report_comparison_text(float(satisfaction), satisfaction_baseline, "安全線", 0, has_previous_month),
-		_report_safety_warning_text(float(satisfaction), 60.0, "安全線", 0),
+		str(satisfaction_warning["text"]), str(satisfaction_warning["severity"]),
 		"0%", "100%"
 	)
 
 	var score := clampi(int(data.get("score", 0)), 0, 100)
 	var score_baseline := float(previous_month.get("score", 60.0))
 	_set_monthly_data_kpi("score", "%d%%" % score, L10n.text(str(data.get("rating", ""))), COLOR_GOLD)
+	var score_warning := _monthly_warning_state(float(score), 60.0, "score", monthly_history, current_period_index)
 	_set_monthly_data_chart(
 		"score", float(score), score_baseline, 60.0, 0.0, 100.0,
 		L10n.text("城市評分 %d%%") % score,
 		_report_baseline_text(score_baseline, 60.0, "安全線", 0, has_previous_month),
 		_report_comparison_text(float(score), score_baseline, "安全線", 0, has_previous_month),
-		_report_safety_warning_text(float(score), 60.0, "安全線", 0),
+		str(score_warning["text"]), str(score_warning["severity"]),
 		"0%", "100%"
 	)
 
-	_update_monthly_data_service_charts(metrics, previous_month, has_previous_month)
+	_update_monthly_data_service_charts(metrics, previous_month, monthly_history, has_previous_month, current_period_index)
 	_update_finance_coverage_chart(total_income, total_expense)
 
 
 func _update_monthly_data_service_charts(
 		metrics: Dictionary,
 		previous_month: Dictionary,
-		has_previous_month: bool
+		monthly_history: Array,
+		has_previous_month: bool,
+		current_period_index: int
 ) -> void:
 	for spec in _metric_specs:
 		var metric_id := str(spec["id"])
@@ -425,6 +449,7 @@ func _update_monthly_data_service_charts(
 			labels[value_key].text = "%d%%" % value
 			labels[value_key].add_theme_color_override("font_color", _score_color(value))
 		var baseline := float(previous_month.get(metric_id, 60.0))
+		var warning := _monthly_warning_state(float(value), 60.0, metric_id, monthly_history, current_period_index)
 		var delta_text := _report_comparison_text(float(value), baseline, "安全線", 0, has_previous_month)
 		if labels.has(delta_label_key):
 			labels[delta_label_key].text = delta_text
@@ -438,7 +463,8 @@ func _update_monthly_data_service_charts(
 				"maximum": 100.0,
 				"current_text": "%s %d%%" % [L10n.text(str(spec["label"])), value],
 				"difference_text": delta_text,
-				"safety_warning_text": _report_safety_warning_text(float(value), 60.0, "安全線", 0),
+				"safety_warning_text": str(warning["text"]),
+				"safety_warning_severity": str(warning["severity"]),
 				"minimum_text": "0%",
 				"baseline_text": _report_baseline_text(baseline, 60.0, "安全線", 0, has_previous_month),
 				"maximum_text": "100%",
@@ -469,6 +495,7 @@ func _set_monthly_data_chart(
 		baseline_text: String,
 		difference_text: String,
 		safety_warning_text: String,
+		safety_warning_severity: String,
 		minimum_text: String,
 		maximum_text: String
 ) -> void:
@@ -484,6 +511,7 @@ func _set_monthly_data_chart(
 		"baseline_text": baseline_text,
 		"difference_text": difference_text,
 		"safety_warning_text": safety_warning_text,
+		"safety_warning_severity": safety_warning_severity,
 		"minimum_text": minimum_text,
 		"maximum_text": maximum_text,
 		"tooltip": "%s｜%s" % [current_text, difference_text],
@@ -599,6 +627,85 @@ func _report_safety_warning_text(current: float, safety: float, safety_name: Str
 		return ""
 	var magnitude := _report_percentage_number(absf(current - safety), decimals)
 	return L10n.text("⚠ 安全線警告：低於%s −%s 個百分點") % [L10n.text(safety_name), magnitude]
+
+
+func _monthly_history_value(data: Dictionary) -> Array:
+	var history_variant: Variant = data.get("monthly_report_history", [])
+	return history_variant.duplicate(true) if history_variant is Array else []
+
+
+func _latest_history_snapshot(monthly_history: Array) -> Dictionary:
+	if monthly_history.is_empty():
+		return {}
+	var candidate: Variant = monthly_history[monthly_history.size() - 1]
+	return candidate.duplicate(true) if candidate is Dictionary else {}
+
+
+func _resolved_current_period_index(data: Dictionary, monthly_history: Array, history_includes_current: bool) -> int:
+	var explicit_period := int(data.get("current_period_index", 0))
+	if explicit_period > 0:
+		return explicit_period
+	var latest := _latest_history_snapshot(monthly_history)
+	var latest_period := int(latest.get("period_index", 0))
+	if latest_period <= 0:
+		return 0
+	return latest_period if history_includes_current else latest_period + 1
+
+
+func _history_before_current_period(monthly_history: Array, history_includes_current: bool, current_period_index: int) -> Array:
+	var comparison_history: Array = []
+	for index in monthly_history.size():
+		var snapshot_variant: Variant = monthly_history[index]
+		if not snapshot_variant is Dictionary:
+			continue
+		var snapshot: Dictionary = (snapshot_variant as Dictionary).duplicate(true)
+		var period_index := int(snapshot.get("period_index", 0))
+		var is_current := false
+		if history_includes_current:
+			is_current = (
+				period_index >= current_period_index
+				if current_period_index > 0 and period_index > 0
+				else index == monthly_history.size() - 1
+			)
+		if not is_current:
+			comparison_history.append(snapshot)
+	return comparison_history
+
+
+func _previous_history_snapshot(comparison_history: Array, current_period_index: int) -> Dictionary:
+	var previous := _latest_history_snapshot(comparison_history)
+	if previous.is_empty() or current_period_index <= 0:
+		return previous
+	var previous_period := int(previous.get("period_index", 0))
+	if previous_period > 0 and previous_period != current_period_index - 1:
+		return {}
+	return previous
+
+
+func _monthly_warning_state(current: float, safety: float, metric_key: String, monthly_history: Array, current_period_index: int = 0) -> Dictionary:
+	if current >= safety:
+		return {"text": "", "severity": "", "streak": 0}
+	var streak := 1
+	var expected_period := current_period_index - 1 if current_period_index > 0 else 0
+	for index in range(monthly_history.size() - 1, -1, -1):
+		var snapshot_variant: Variant = monthly_history[index]
+		if not snapshot_variant is Dictionary:
+			break
+		var snapshot := snapshot_variant as Dictionary
+		var snapshot_period := int(snapshot.get("period_index", 0))
+		if expected_period > 0 and snapshot_period > 0 and snapshot_period != expected_period:
+			break
+		if float(snapshot.get(metric_key, safety)) >= safety:
+			break
+		streak += 1
+		if expected_period > 0:
+			expected_period = snapshot_period - 1 if snapshot_period > 0 else expected_period - 1
+	var severity := "critical" if streak >= 3 else "caution"
+	return {
+		"text": "%s（連續 %d 月）" % [_report_safety_warning_text(current, safety, "安全線", 0), streak],
+		"severity": severity,
+		"streak": streak,
+	}
 
 
 func _benchmark_gap_text(current: float, baseline: float, baseline_name: String = "安全線", decimals: int = 0) -> String:

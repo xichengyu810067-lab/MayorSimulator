@@ -18,12 +18,14 @@ const RESULT_FILENAME := "capture-result.json"
 const NATIVE_RESULT_FILENAME := "native-result.json"
 const NATIVE_OUTPUTS := {
 	"start": "native-start-screen.png",
+	"tutorial": "native-tutorial-dialogue-strip.png",
 	"main": "native-main.png",
 	"settings": "native-settings.png",
 	"municipal_overlay": "native-municipal-overlay.png",
 }
 const NATIVE_LANDMARKS := {
 	"start": "start_actions",
+	"tutorial": "tutorial_dialogue_strip",
 	"main": "status_hud",
 	"settings": "settings_panel",
 	"municipal_overlay": "municipal_overlay",
@@ -42,7 +44,7 @@ const OUTPUTS := {
 	"settings_dark_en": "fullscreen-settings-dark-en.png",
 	"building_context": "fullscreen-building-context.png",
 	"hub": "fullscreen-municipal-hub.png",
-	"hub_development": "fullscreen-municipal-development.png",
+	"finance_draft": "fullscreen-finance-draft.png",
 	"buildings": "fullscreen-buildings.png",
 	"governance": "fullscreen-governance.png",
 	"governance_review": "fullscreen-governance-review.png",
@@ -257,17 +259,9 @@ func _capture_states() -> void:
 	scene.call("_open_municipal_center")
 	await _settle()
 	var overlay = scene.get("municipal_overlay")
-	if not _validate_overlay(overlay, "hub") or not _save_capture(OUTPUTS["hub"]):
+	if not _validate_overlay(scene, overlay, "hub") or not _save_capture(OUTPUTS["hub"]):
 		quit(1)
 		return
-	var development_button := overlay.find_child("MunicipalCategory_development", true, false) as Button
-	development_button.emit_signal("pressed")
-	await _settle()
-	if not _validate_hub_group(overlay, "development") or not _save_capture(OUTPUTS["hub_development"]):
-		quit(1)
-		return
-	overlay.call("open_hub")
-	await _settle()
 
 	# Seed representative player-facing cases so the judicial and oversight
 	# captures exercise the actual defense states instead of only empty screens.
@@ -296,11 +290,10 @@ func _capture_states() -> void:
 		overlay.call("open_page", page_id)
 		await _settle()
 		if page_id == "finance":
-			var fiscal_tabs := overlay.find_child("FiscalCategoryTabs", true, false) as TabContainer
 			var fiscal_scroll_contract: Dictionary = await FiscalScrollContract.validate(
 				self,
 				overlay,
-				fiscal_tabs,
+				null,
 				_expected_fiscal_slider_names
 			)
 			if not bool(fiscal_scroll_contract.get("ok", false)):
@@ -308,9 +301,24 @@ func _capture_states() -> void:
 				quit(1)
 				return
 			print("FINANCE_RESPONSIVE_SCROLL_CONTRACT %s" % JSON.stringify(fiscal_scroll_contract))
-		if not _validate_overlay(overlay, page_id) or not _save_capture(OUTPUTS[page_id]):
+		if not _validate_overlay(scene, overlay, page_id) or not _save_capture(OUTPUTS[page_id]):
 			quit(1)
 			return
+		if page_id == "finance":
+			scene.call("_on_tax_changed", float(int(scene.tax_rates["income"]) + 3), "income")
+			scene.call("_on_utility_fee_changed", float(int(scene.utility_fees["water"]) + 7), "water")
+			scene.call("_on_service_fee_changed", float(int(scene.service_fees["stadium"]) + 9), "stadium")
+			await _settle()
+			var fiscal_preview_button := scene.get("fiscal_preview_button") as Button
+			if fiscal_preview_button == null or fiscal_preview_button.disabled:
+				push_error("Finance draft changes did not enable the preview action.")
+				quit(1)
+				return
+			fiscal_preview_button.emit_signal("pressed")
+			await _settle()
+			if not _validate_fiscal_draft_capture(scene, overlay) or not _save_capture(OUTPUTS["finance_draft"]):
+				quit(1)
+				return
 
 	overlay.call("open_page", "blueprint")
 	var blueprint_submit := overlay.find_child("SubmitCustomBlueprintButton", true, false) as Button
@@ -332,7 +340,7 @@ func _capture_states() -> void:
 		push_error("Governance review capture could not move the submitted bill to review.")
 		quit(1)
 		return
-	if not _validate_overlay(overlay, "governance") or not _save_capture(OUTPUTS["governance_review"]):
+	if not _validate_overlay(scene, overlay, "governance") or not _save_capture(OUTPUTS["governance_review"]):
 		quit(1)
 		return
 
@@ -351,7 +359,7 @@ func _capture_states() -> void:
 		push_error("Governance implemented capture could not move the active bill to implemented.")
 		quit(1)
 		return
-	if not _validate_overlay(overlay, "governance") or not _save_capture(OUTPUTS["governance_implemented"]):
+	if not _validate_overlay(scene, overlay, "governance") or not _save_capture(OUTPUTS["governance_implemented"]):
 		quit(1)
 		return
 
@@ -375,7 +383,7 @@ func _capture_states() -> void:
 		push_error("City-data benchmark chart did not settle on its authoritative target.")
 		quit(1)
 		return
-	if not _validate_overlay(overlay, "city_data") or not _save_capture(OUTPUTS["city_data"]):
+	if not _validate_overlay(scene, overlay, "city_data") or not _save_capture(OUTPUTS["city_data"]):
 		quit(1)
 		return
 	var city_tabs_for_capture := overlay.find_child("城市數據", true, false) as TabContainer
@@ -394,6 +402,10 @@ func _capture_states() -> void:
 	overlay.call("close_overlay")
 	scene.call("_next_month")
 	scene.set("security", 45)
+	# The report history includes the period just settled. Advance a second
+	# period before asking for an actual prior-month comparison; one settlement
+	# is still the first-period safety-line state.
+	scene.call("_next_month")
 	scene.call("_update_ui")
 	scene.call("_open_city_data")
 	await _settle()
@@ -401,7 +413,7 @@ func _capture_states() -> void:
 	if not _validate_monthly_data_mode(scene, true):
 		quit(1)
 		return
-	if not _validate_overlay(overlay, "city_data") or not _save_capture(OUTPUTS["city_data_previous_month"]):
+	if not _validate_overlay(scene, overlay, "city_data") or not _save_capture(OUTPUTS["city_data_previous_month"]):
 		quit(1)
 		return
 	var city_data_tabs := overlay.find_child("城市數據", true, false) as TabContainer
@@ -433,7 +445,7 @@ func _capture_states() -> void:
 	if not _validate_monthly_report_scope(scene):
 		quit(1)
 		return
-	if not _validate_overlay(overlay, "report") or not _save_capture(OUTPUTS["report"]):
+	if not _validate_overlay(scene, overlay, "report") or not _save_capture(OUTPUTS["report"]):
 		quit(1)
 		return
 	var report_scroll := overlay.find_child("月度報告", true, false) as ScrollContainer
@@ -452,7 +464,7 @@ func _capture_states() -> void:
 	overlay = scene.get("municipal_overlay")
 	overlay.call("open_page", "blueprint")
 	await _settle()
-	if not _validate_overlay(overlay, "blueprint") or not _save_capture(OUTPUTS["dark_blueprint"]):
+	if not _validate_overlay(scene, overlay, "blueprint") or not _save_capture(OUTPUTS["dark_blueprint"]):
 		quit(1)
 		return
 
@@ -653,6 +665,13 @@ func _capture_native_gui_states(scene) -> bool:
 	if tutorial == null or not tutorial.is_open():
 		push_error("Native GUI new game did not expose the story tutorial.")
 		return false
+	await _settle_frames(24)
+	var tutorial_panel := tutorial.get("story_panel") as Control
+	if tutorial_panel == null or not tutorial_panel.is_visible_in_tree():
+		push_error("Native GUI tutorial dialogue strip is not visibly rendered after settling.")
+		return false
+	if not _save_native_capture(NATIVE_OUTPUTS["tutorial"], tutorial_panel):
+		return false
 	tutorial.skip_button.emit_signal("pressed")
 	await _settle_frames(24)
 	if tutorial.is_open() or not _validate_main_hud(scene):
@@ -677,7 +696,7 @@ func _capture_native_gui_states(scene) -> bool:
 	scene.call("_open_municipal_center")
 	await _settle_frames(18)
 	var overlay = scene.get("municipal_overlay")
-	if not _validate_overlay(overlay, "hub"):
+	if not _validate_overlay(scene, overlay, "hub"):
 		return false
 	if not _save_native_capture(NATIVE_OUTPUTS["municipal_overlay"], overlay as Control):
 		return false
@@ -791,7 +810,7 @@ func _settle_frames(frame_count: int) -> void:
 	await RenderingServer.frame_post_draw
 
 
-func _validate_overlay(overlay, expected_page: String) -> bool:
+func _validate_overlay(scene, overlay, expected_page: String) -> bool:
 	if overlay == null or not is_instance_valid(overlay):
 		push_error("Readability capture could not find the municipal overlay.")
 		return false
@@ -802,7 +821,7 @@ func _validate_overlay(overlay, expected_page: String) -> bool:
 	if current_page != expected_page:
 		push_error("Expected municipal page '%s', got '%s'." % [expected_page, current_page])
 		return false
-	if not _validate_visual_data(overlay, expected_page):
+	if not _validate_visual_data(scene, overlay, expected_page):
 		return false
 	return true
 
@@ -909,25 +928,6 @@ func _validate_city_data_tabs(overlay) -> bool:
 		print("City data tab validation '%s': cards=%d bars=%d labels=%d." % [expected_title, visible_metric_cards, visible_bars, visible_labels.size()])
 	tabs.current_tab = 0
 	await _settle()
-	return true
-
-
-func _validate_hub_group(overlay, group_id: String) -> bool:
-	if str(overlay.call("current_page")) != "hub:%s" % group_id:
-		push_error("Municipal category '%s' did not open." % group_id)
-		return false
-	var page := overlay.find_child("MunicipalHubGroup_%s" % group_id, true, false) as Control
-	var choices := page.find_child("MenuChoices", true, false) as GridContainer if page != null else null
-	if choices == null or choices.get_child_count() != 3:
-		push_error("Municipal category '%s' must expose exactly three destinations." % group_id)
-		return false
-	var visible_pictures := 0
-	for picture_variant in page.find_children("*", "TextureRect", true, false):
-		if (picture_variant as TextureRect).is_visible_in_tree():
-			visible_pictures += 1
-	if visible_pictures != 3:
-		push_error("Municipal category '%s' must expose three illustrated destinations; found %d." % [group_id, visible_pictures])
-		return false
 	return true
 
 
@@ -1060,6 +1060,25 @@ func _validate_settings(settings) -> bool:
 	if panel == null or not Rect2(Vector2.ZERO, _capture_logical_size()).encloses(panel.get_global_rect()):
 		push_error("Settings panel is outside the logical viewport.")
 		return false
+	var tutorial_row := settings.find_child("TutorialSettingsRow", true, false) as HBoxContainer
+	var music_row := settings.find_child("MusicVolumeRow", true, false) as HBoxContainer
+	var sfx_row := settings.find_child("SfxVolumeRow", true, false) as HBoxContainer
+	if tutorial_row == null or music_row == null or sfx_row == null or panel.custom_minimum_size != Vector2(680, 432):
+		push_error("Settings panel did not preserve the compact aligned layout.")
+		return false
+	var music_slider_rect: Rect2 = settings.music_volume_slider.get_global_rect()
+	var sfx_slider_rect: Rect2 = settings.sfx_volume_slider.get_global_rect()
+	var music_percent_rect: Rect2 = settings.music_volume_label.get_global_rect()
+	var sfx_percent_rect: Rect2 = settings.sfx_volume_label.get_global_rect()
+	if (
+		not is_equal_approx(music_slider_rect.position.x, sfx_slider_rect.position.x)
+		or not is_equal_approx(music_slider_rect.end.x, sfx_slider_rect.end.x)
+		or not is_equal_approx(music_percent_rect.position.x, sfx_percent_rect.position.x)
+		or not is_equal_approx(music_percent_rect.end.x, sfx_percent_rect.end.x)
+		or panel.get_global_rect().end.y - tutorial_row.get_global_rect().end.y > 24.0
+	):
+		push_error("Settings audio rows are misaligned or the old bottom gap returned.")
+		return false
 	return true
 
 
@@ -1127,14 +1146,21 @@ func _validate_blueprint_review(overlay) -> bool:
 	return true
 
 
-func _validate_visual_data(overlay, expected_page: String) -> bool:
+func _validate_visual_data(scene, overlay, expected_page: String) -> bool:
 	if expected_page == "hub":
+		var layout: Dictionary = overlay.call("debug_hub_layout_state")
+		var destinations: Array = layout.get("destinations", [])
 		var hub_pictures: Array = []
-		for node in overlay.find_children("*", "TextureRect", true, false):
+		for node in overlay.find_children("CardIcon", "TextureRect", true, false):
 			if node.is_visible_in_tree():
 				hub_pictures.append(node)
-		if hub_pictures.size() != 3:
-			push_error("Picture-first municipal hub must expose 3 broad illustrated choices; found %d." % hub_pictures.size())
+		if (
+			destinations != ["buildings", "governance", "judicial", "oversight", "finance", "public_affairs", "city_data"]
+			or int(layout.get("unique_destination_count", 0)) != 7
+			or int(layout.get("filler_count", -1)) != 0
+			or hub_pictures.size() != 7
+		):
+			push_error("Municipal hub must expose seven direct illustrated destinations with no filler: %s" % layout)
 			return false
 		return true
 	var visible_bars: Array = []
@@ -1183,9 +1209,24 @@ func _validate_visual_data(overlay, expected_page: String) -> bool:
 		if visual_controls.size() < 4:
 			push_error("Picture-first blueprint must expose its hero and current parameter illustrations; found %d." % visual_controls.size())
 			return false
-		var parameter_cards: Array[Node] = overlay.find_children("BlueprintCard_*", "PanelContainer", true, false)
-		if parameter_cards.size() != 5:
-			push_error("Blueprint must expose exactly five illustrated parameter cards; found %d." % parameter_cards.size())
+		var workspace := overlay.find_child("BlueprintDesignWorkspace", true, false) as HBoxContainer
+		var parameter_groups: Array[Node] = overlay.find_children("BlueprintGroup_*", "PanelContainer", true, false)
+		if workspace == null or parameter_groups.size() != 2 or int(workspace.get_meta("design_control_count", 0)) != 5:
+			push_error("Blueprint must combine exactly five controls into two task-oriented groups; groups=%d controls=%d." % [parameter_groups.size(), 0 if workspace == null else int(workspace.get_meta("design_control_count", 0))])
+			return false
+		var quote_card := overlay.find_child("BlueprintQuoteCard", true, false) as PanelContainer
+		var quote_label := overlay.find_child("BlueprintPlacementQuote", true, false) as Label
+		if quote_card == null or quote_label == null or not quote_label.is_visible_in_tree() or quote_label.text.strip_edges().is_empty():
+			push_error("Blueprint live quote must remain visible beside the current design controls.")
+			return false
+		if not (quote_label.text.contains("總額 $") and quote_label.text.contains("工期") and quote_label.text.contains("占地")):
+			push_error("Blueprint live quote must expose total, duration, and footprint in the first-view summary: %s" % quote_label.text)
+			return false
+		var quote_clip := quote_card.get_parent()
+		while quote_clip != null and not quote_clip is ScrollContainer:
+			quote_clip = quote_clip.get_parent()
+		if quote_clip == null or not (quote_clip as ScrollContainer).get_global_rect().encloses(quote_card.get_global_rect()):
+			push_error("Blueprint live quote card must be fully visible before scrolling: card=%s clip=%s." % [quote_card.get_global_rect(), Rect2() if quote_clip == null else (quote_clip as ScrollContainer).get_global_rect()])
 			return false
 	if expected_page == "buildings":
 		if overlay.find_child("DemolishSelectedBuildingButton", true, false) != null:
@@ -1213,8 +1254,21 @@ func _validate_visual_data(overlay, expected_page: String) -> bool:
 				if card.icon == null:
 					push_error("Visible building card '%s' has no illustration." % card.name)
 					return false
-		if visible_building_cards < 1 or visible_building_cards > 3:
-			push_error("Building selector should show one concise category page; visible cards=%d." % visible_building_cards)
+		if visible_building_cards < 1 or visible_building_cards > 6:
+			push_error("Building selector should balance at most six cards before paging; visible cards=%d." % visible_building_cards)
+			return false
+		var visible_pager = null
+		for pager_variant in overlay.find_children("BuildingChoices_*", "VBoxContainer", true, false):
+			if pager_variant.is_visible_in_tree() and pager_variant.has_method("debug_layout_state"):
+				visible_pager = pager_variant
+				break
+		if visible_pager == null:
+			push_error("Building selector has no visible count-balanced pager.")
+			return false
+		var pager_layout: Dictionary = visible_pager.call("debug_layout_state")
+		var expected_rows := {1: [1], 2: [2], 3: [3], 4: [2, 2], 5: [3, 2], 6: [3, 3]}
+		if Array(pager_layout.get("row_counts", [])) != Array(expected_rows.get(visible_building_cards, [])):
+			push_error("Building selector row balance is stale: %s" % pager_layout)
 			return false
 	if expected_page == "governance":
 		var governance_tabs := overlay.find_child("GovernanceStatusTabs", true, false) as TabContainer
@@ -1250,14 +1304,18 @@ func _validate_visual_data(overlay, expected_page: String) -> bool:
 		if not has_status_chip:
 			push_error("Finance page has no visual low/recommended/high status chip.")
 			return false
-		var fiscal_tabs := overlay.find_child("FiscalCategoryTabs", true, false) as TabContainer
-		if fiscal_tabs == null or fiscal_tabs.get_tab_count() != 3:
-			push_error("Finance page must expose three broad categories.")
+		if overlay.find_child("FiscalCategoryTabs", true, false) != null:
+			push_error("Finance page must not retain the old nested fiscal TabContainer.")
 			return false
-		for fiscal_category_variant in fiscal_tabs.get_children():
-			var subcategories := fiscal_category_variant as TabContainer
-			if subcategories == null or subcategories.get_tab_count() != 2:
-				push_error("Each finance category must reveal two subcategories.")
+		var fiscal_state: Dictionary = scene.call("debug_fiscal_draft_state")
+		var fiscal_ui: Dictionary = fiscal_state.get("ui", {})
+		if Array(fiscal_ui.get("category_ids", [])).size() != 6 or Array(fiscal_ui.get("plan_ids", [])).size() != 3:
+			push_error("Finance page must expose six category cards and three plan cards per category.")
+			return false
+		for category_id_variant in Array(fiscal_ui.get("category_ids", [])):
+			var category_card := overlay.find_child("FiscalCategoryCard_%s" % str(category_id_variant), true, false) as Button
+			if category_card == null or category_card.custom_minimum_size.y < 44.0:
+				push_error("Finance category card '%s' is missing or below the 44px target." % str(category_id_variant))
 				return false
 		var fiscal_scroll := overlay.find_child("稅率與公共事業費", true, false) as ScrollContainer
 		if fiscal_scroll == null:
@@ -1324,12 +1382,12 @@ func _validate_visual_data(overlay, expected_page: String) -> bool:
 				push_error("Judicial page must expose one layered courtroom scene; found %d." % courtroom_scenes.size())
 				return false
 		else:
-			var function_pictures: Array = []
-			for node in overlay.find_children("FunctionIllustration", "TextureRect", true, false):
+			var oversight_scenes: Array = []
+			for node in overlay.find_children("OversightHearingStage", "Control", true, false):
 				if node.is_visible_in_tree():
-					function_pictures.append(node)
-			if function_pictures.size() != 1:
-				push_error("Page '%s' must expose one dominant function illustration; found %d." % [expected_page, function_pictures.size()])
+					oversight_scenes.append(node)
+			if oversight_scenes.size() != 1:
+				push_error("Oversight page must expose one layered hearing scene; found %d." % oversight_scenes.size())
 				return false
 		var defense_actions: Node = null
 		for node in overlay.find_children("DefenseActions", "HBoxContainer", true, false):
@@ -1363,6 +1421,24 @@ func _validate_visual_data(overlay, expected_page: String) -> bool:
 			push_error("Page '%s' has no directional visual effect tokens." % expected_page)
 			return false
 	print("Visual data validation '%s': bars=%d buttons=%d labels=%d." % [expected_page, visible_bars.size(), visible_buttons.size(), visible_labels.size()])
+	return true
+
+
+func _validate_fiscal_draft_capture(scene, overlay) -> bool:
+	var state: Dictionary = scene.call("debug_fiscal_draft_state")
+	var apply_button := overlay.find_child("FiscalApplyAllButton", true, false) as Button
+	var discard_button := overlay.find_child("FiscalDiscardButton", true, false) as Button
+	var status := overlay.find_child("FiscalDraftStatus", true, false) as Label
+	if (
+		int(state.get("dirty_count", -1)) != 3
+		or int(state.get("projected_net", 0)) == int(state.get("authoritative_net", 0))
+		or apply_button == null or discard_button == null or status == null
+		or apply_button.disabled or discard_button.disabled
+		or not apply_button.is_visible_in_tree() or not discard_button.is_visible_in_tree()
+		or not apply_button.text.contains("3") or not status.text.contains("3")
+	):
+		push_error("Finance draft capture did not expose the three-item apply/discard workflow: %s" % state)
+		return false
 	return true
 
 
@@ -1604,7 +1680,7 @@ func _native_state_for_filename(filename: String) -> String:
 func _save_native_capture(filename: String, landmark: Control) -> bool:
 	var state := _native_state_for_filename(filename)
 	if state.is_empty():
-		push_error("Native UI capture filename is not part of the four-state contract: %s" % filename)
+		push_error("Native UI capture filename is not part of the five-state contract: %s" % filename)
 		return false
 	if _native_captured_states.has(state):
 		push_error("Native UI capture state was written more than once: %s" % state)
@@ -1768,7 +1844,7 @@ func _publish_native_capture_result() -> bool:
 	if publish_error != OK:
 		push_error("Could not atomically publish native UI capture result %s: %d" % [result_path, publish_error])
 		return false
-	print("Native GUI acceptance result published with four direct-root states.")
+	print("Native GUI acceptance result published with %d direct-root states." % NATIVE_OUTPUTS.size())
 	return true
 
 

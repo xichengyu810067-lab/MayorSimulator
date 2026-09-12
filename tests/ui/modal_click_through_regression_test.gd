@@ -18,6 +18,8 @@ func _run() -> void:
 	root.add_child(main)
 	await _settle(3)
 	main.start_screen.hide()
+	main.set("_game_started", true)
+	main.call("_sync_map_interaction_for_ui")
 	for tile_variant in main.grid_buttons:
 		var tile := tile_variant as Button
 		if tile != null:
@@ -56,6 +58,10 @@ func _run() -> void:
 	_check(_hovered_grid_count(main) == 0, "exit X exposed a white hover marker before pointer movement")
 	await _release_guard(exit_close_guard)
 
+	await _verify_transport_planning_npc_barrier(main)
+	await _verify_npc_dialogue_keyboard_dismiss_keeps_building_placement(main)
+	await _verify_npc_dialogue_timeout_boundary(main)
+
 	var exit_code := 1 if _failed else 0
 	if not _failed:
 		print("Modal click-through regression passed. GridPresses=%d Cancels=%d" % [_grid_press_count, _cancel_count])
@@ -63,6 +69,11 @@ func _run() -> void:
 
 
 func _click(button: Button) -> void:
+	await _click_without_post_settle(button)
+	await _settle(2)
+
+
+func _click_without_post_settle(button: Button) -> void:
 	var center := button.get_global_rect().get_center()
 	var motion := InputEventMouseMotion.new()
 	motion.position = center
@@ -87,7 +98,6 @@ func _click(button: Button) -> void:
 	up.position = center
 	up.global_position = center
 	root.push_input(up, true)
-	await _settle(2)
 
 
 func _release_guard(guard: Control) -> void:
@@ -101,6 +111,264 @@ func _release_guard(guard: Control) -> void:
 	root.push_input(motion, true)
 	await _settle(2)
 	_check(not is_instance_valid(guard), "pointer guard did not release after real pointer movement")
+
+
+func _verify_transport_planning_npc_barrier(main) -> void:
+	main.call("_on_transport_infrastructure_requested", "road", "build")
+	await _settle(2)
+	_check(main.map_action_mode == "transport_infrastructure", "road planning did not enter map mode")
+	_check(main.transport_plan_tiles.is_empty(), "road planning did not start with an empty tile intent")
+
+	var target_tile_index := _first_quoteable_road_tile(main)
+	_check(target_tile_index >= 0, "could not find a quoteable road tile under the map")
+	if target_tile_index < 0:
+		return
+	var actor := main.get_visible_npc_actor(0) as Button
+	var target_tile := main.grid_buttons[target_tile_index] as Button
+	_check(actor != null and target_tile != null, "NPC actor or planning tile is unavailable")
+	if actor == null or target_tile == null:
+		return
+	_check(actor.mouse_filter == Control.MOUSE_FILTER_IGNORE, "planning did not disable NPC pointer capture")
+	_check(actor.tooltip_text.is_empty(), "planning did not disable NPC tooltip")
+	_check(target_tile.mouse_filter == Control.MOUSE_FILTER_STOP, "planning disabled its tile input")
+	var selected_npc_before := str(main.vertical_slice.selected_npc_id)
+	var treasury_before := int(main.funds)
+	var construction_before: Dictionary = main.vertical_slice.construction.to_dict()
+	var transport_before: Dictionary = main.vertical_slice.transport.to_dict()
+	var planning_before: Dictionary = main.call("_transport_session_snapshot")
+	var autosaves_before := int(main._autosave_count)
+	var shell_before: Dictionary = main.vertical_slice.get_player_shell_state()
+	main.debug_show_npc_dialogue(0)
+	await _settle(2)
+	var card := main.get_npc_dialogue_card_control() as Control
+	_check(card != null and not card.visible, "planning allowed a programmatic NPC dialogue route")
+	main.call("_open_selected_npc_request")
+	_check(main.municipal_overlay == null or not main.municipal_overlay.is_open(), "planning allowed the stale public-affairs action")
+	main.call("_on_grid_pressed", target_tile_index)
+	_check(main.transport_plan_tiles.has(target_tile_index), "planning tile intent was unavailable while NPC input was disabled")
+	_check(str(main.vertical_slice.selected_npc_id) == selected_npc_before, "planning input changed the selected NPC")
+	_check(int(main.funds) == treasury_before, "planning input deducted treasury funds")
+	_check(main.vertical_slice.construction.to_dict() == construction_before, "planning input started construction")
+	_check(main.vertical_slice.transport.to_dict() == transport_before, "planning input changed authoritative transport state")
+	_check(main.call("_transport_session_snapshot") == planning_before, "planning input changed the authoritative planning session")
+	_check(int(main._autosave_count) == autosaves_before, "planning input triggered autosave")
+	_check(main.vertical_slice.get_player_shell_state() == shell_before, "planning input changed saved shell state")
+	main.call("_clear_transport_map_action")
+	await _settle(2)
+	_check(actor.mouse_filter == Control.MOUSE_FILTER_STOP and not actor.tooltip_text.is_empty(), "leaving planning did not restore NPC interaction")
+
+	main.call("_on_transport_infrastructure_requested", "road", "build")
+	main.call("_on_transport_infrastructure_requested", "road", "build")
+	await _settle(2)
+	_check(actor.mouse_filter == Control.MOUSE_FILTER_IGNORE and actor.tooltip_text.is_empty(), "re-entering planning was not idempotently isolated")
+	_check(int(main.funds) == treasury_before, "re-entering planning changed treasury")
+	_check(main.vertical_slice.construction.to_dict() == construction_before, "re-entering planning changed construction")
+	_check(main.vertical_slice.transport.to_dict() == transport_before, "re-entering planning changed transport authority")
+	_check(int(main._autosave_count) == autosaves_before, "re-entering planning triggered autosave")
+	main.call("_clear_transport_map_action")
+	await _settle(2)
+
+
+func _verify_npc_dialogue_keyboard_dismiss_keeps_building_placement(main) -> void:
+	const BUILDING_NAME := "加油站"
+	main.call("_enter_building_placement", BUILDING_NAME)
+	await _settle(2)
+	_check(main.placement_mode_active, "gas-station building placement did not start")
+	_check(main.placement_banner.visible, "gas-station building placement banner did not open")
+	var target_tile_index := _first_placeable_building_tile(main, BUILDING_NAME)
+	_check(target_tile_index >= 0, "could not find a placeable gas-station tile for keyboard dismissal")
+	if target_tile_index < 0:
+		return
+	var target_tile := main.grid_buttons[target_tile_index] as Button
+	_check(target_tile != null, "keyboard dismissal target tile is unavailable")
+	if target_tile == null:
+		return
+	main.debug_show_npc_dialogue(0)
+	await _settle(3)
+	var card := main.get_npc_dialogue_card_control() as Control
+	_check(card != null and card.visible, "NPC dialogue did not open for keyboard dismissal")
+	if card == null or not card.visible:
+		return
+
+	var click_position := target_tile.get_global_rect().get_center()
+	_push_mouse_motion(click_position)
+	await process_frame
+	var escape := InputEventKey.new()
+	escape.keycode = KEY_ESCAPE
+	escape.pressed = true
+	root.push_input(escape, true)
+	_check(not card.visible, "Escape did not close the NPC dialogue")
+	_check(main.get_node_or_null("ModalPointerGuard") == null, "Escape incorrectly armed a pointer guard")
+	await _settle(4)
+	# One physical key lifecycle must be idempotent if the same pressed event is
+	# delivered again before its release reaches Main.
+	root.push_input(escape, true)
+	await _settle(4)
+	_check(main.placement_mode_active, "Escape dismissal cancelled building placement on a later process frame")
+	_check(main.placement_banner.visible, "Escape dismissal hid the building placement banner on a later process frame")
+	var grid_presses_before := _grid_press_count
+	await _click_at_without_motion(click_position)
+	_check(_grid_press_count == grid_presses_before + 1, "Escape swallowed the unmoved pointer's next tile click")
+	_check(int(main.get("_pending_construction_tile")) == target_tile_index, "the tile click after Escape did not select the real building site")
+	_check(main.construction_confirmation.is_open(), "the tile click after Escape did not open the building confirmation")
+
+	var escape_release := InputEventKey.new()
+	escape_release.keycode = KEY_ESCAPE
+	escape_release.pressed = false
+	root.push_input(escape_release, true)
+	main.call("_cancel_building_placement", false)
+	await _settle(2)
+
+	main.call("_enter_building_placement", BUILDING_NAME)
+	await _settle(2)
+	_check(main.placement_mode_active, "building placement did not restart after normal Escape key-up")
+	var fresh_escape_after_release := InputEventKey.new()
+	fresh_escape_after_release.keycode = KEY_ESCAPE
+	fresh_escape_after_release.pressed = true
+	root.push_input(fresh_escape_after_release, true)
+	await _settle(2)
+	_check(not main.placement_mode_active, "normal key-up left the next fresh Escape blocked")
+	var fresh_escape_release := InputEventKey.new()
+	fresh_escape_release.keycode = KEY_ESCAPE
+	fresh_escape_release.pressed = false
+	root.push_input(fresh_escape_release, true)
+
+	main.call("_enter_building_placement", BUILDING_NAME)
+	await _settle(2)
+	main.debug_show_npc_dialogue(0)
+	await _settle(3)
+	card = main.get_npc_dialogue_card_control() as Control
+	_check(card != null and card.visible, "NPC dialogue did not reopen for focus-loss dismissal")
+	if card == null or not card.visible:
+		return
+	var focus_escape := InputEventKey.new()
+	focus_escape.keycode = KEY_ESCAPE
+	focus_escape.pressed = true
+	root.push_input(focus_escape, true)
+	_check(not card.visible, "Escape did not close the NPC dialogue before focus loss")
+	main.notification(NOTIFICATION_APPLICATION_FOCUS_OUT)
+	await _settle(2)
+	main.notification(NOTIFICATION_APPLICATION_FOCUS_IN)
+	await _settle(2)
+	# The old key-up is intentionally absent: focus loss is the lifecycle boundary.
+	var fresh_escape_after_focus := InputEventKey.new()
+	fresh_escape_after_focus.keycode = KEY_ESCAPE
+	fresh_escape_after_focus.pressed = true
+	root.push_input(fresh_escape_after_focus, true)
+	await _settle(2)
+	_check(not main.placement_mode_active, "focus loss without the old key-up left the next fresh Escape blocked")
+	var focus_escape_release := InputEventKey.new()
+	focus_escape_release.keycode = KEY_ESCAPE
+	focus_escape_release.pressed = false
+	root.push_input(focus_escape_release, true)
+	await _settle(2)
+
+
+func _click_at_without_motion(position: Vector2) -> void:
+	var down := InputEventMouseButton.new()
+	down.button_index = MOUSE_BUTTON_LEFT
+	down.button_mask = MOUSE_BUTTON_MASK_LEFT
+	down.pressed = true
+	down.position = position
+	down.global_position = position
+	root.push_input(down, true)
+	await process_frame
+
+	var up := InputEventMouseButton.new()
+	up.button_index = MOUSE_BUTTON_LEFT
+	up.button_mask = 0
+	up.pressed = false
+	up.position = position
+	up.global_position = position
+	root.push_input(up, true)
+	await _settle(2)
+
+
+func _verify_npc_dialogue_timeout_boundary(main) -> void:
+	const BUILDING_NAME := "加油站"
+	var timeout_delta := float(main.NPC_DIALOGUE_DURATION_SECONDS) + 0.1
+
+	main.debug_show_npc_dialogue(0)
+	await _settle(2)
+	var card := main.get_npc_dialogue_card_control() as Control
+	_check(card != null and card.visible, "NPC dialogue did not open for idle timeout verification")
+	if card == null or not card.visible:
+		return
+	main.call("_update_ambient", timeout_delta)
+	_check(not card.visible, "NPC dialogue no longer auto-times out outside a map action")
+
+	main.call("_enter_building_placement", BUILDING_NAME)
+	await _settle(2)
+	main.debug_show_npc_dialogue(0)
+	await _settle(2)
+	card = main.get_npc_dialogue_card_control() as Control
+	_check(card != null and card.visible, "NPC dialogue did not open above building placement for timeout verification")
+	if card == null or not card.visible:
+		return
+	main.call("_update_ambient", timeout_delta)
+	_check(card.visible, "NPC dialogue auto-timed out during active building placement")
+	await _press_escape_once()
+	_check(not card.visible, "Escape did not close the retained NPC dialogue above building placement")
+	_check(main.placement_mode_active, "Escape reached building placement after retained NPC dialogue dismissal")
+	_check(main.placement_banner.visible, "Escape hid the building placement banner after retained NPC dialogue dismissal")
+	main.call("_cancel_building_placement", false)
+	await _settle(2)
+
+	main.call("_on_transport_infrastructure_requested", "road", "build")
+	await _settle(2)
+	main.debug_show_npc_dialogue(0)
+	await _settle(2)
+	card = main.get_npc_dialogue_card_control() as Control
+	_check(card != null and not card.visible, "transport planning accepted an NPC dialogue that should be unreachable")
+	_check(main.map_action_mode == "transport_infrastructure", "NPC isolation changed transport planning mode")
+	_check(main.transport_plan_kind == "road" and main.transport_plan_operation == "build", "NPC isolation changed the retained transport planning action")
+	main.call("_clear_transport_map_action")
+	await _settle(2)
+
+
+func _press_escape_once() -> void:
+	var down := InputEventKey.new()
+	down.keycode = KEY_ESCAPE
+	down.pressed = true
+	root.push_input(down, true)
+	var up := InputEventKey.new()
+	up.keycode = KEY_ESCAPE
+	up.pressed = false
+	root.push_input(up, true)
+	await _settle(2)
+
+
+func _first_quoteable_road_tile(main) -> int:
+	for tile_index in main.grid_buttons.size():
+		if not bool(main.call("_is_tile_inside_hud_safe_area", tile_index)):
+			continue
+		var quote: Dictionary = main.vertical_slice.transport_project_quote(
+			"road", "build", [tile_index], 5, main.city_grid
+		)
+		if bool(quote.get("ok", false)):
+			return tile_index
+	return -1
+
+
+func _first_placeable_building_tile(main, building_name: String) -> int:
+	var workers := 5
+	if main.vertical_slice_panel != null:
+		workers = int(main.vertical_slice_panel.selected_worker_count())
+	for tile_index in main.grid_buttons.size():
+		if not bool(main.call("_is_tile_inside_hud_safe_area", tile_index)):
+			continue
+		var quote: Dictionary = main.vertical_slice.placement_footprint_quote(building_name, tile_index, workers)
+		if bool(quote.get("ok", false)) and bool(quote.get("can_afford", false)):
+			return tile_index
+	return -1
+
+
+func _push_mouse_motion(position: Vector2) -> void:
+	var event := InputEventMouseMotion.new()
+	event.position = position
+	event.global_position = position
+	event.relative = Vector2.ZERO
+	root.push_input(event, true)
 
 
 func _hovered_grid_count(main) -> int:

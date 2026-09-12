@@ -3,6 +3,7 @@ extends Control
 
 const BACKGROUND = preload("res://assets/images/tutorial/story-intro-background.png")
 const UiIconCatalog = preload("res://ui/theme/ui_icon_catalog.gd")
+const ContentRegistry = preload("res://data/catalogs/content_registry.gd")
 
 signal completed(skipped: bool)
 signal audio_cue(cue: String)
@@ -18,7 +19,7 @@ const PAGES := [
 	{
 		"kicker": "第一步｜興建",
 		"title": "先從官方入門藍圖開始",
-		"body": "選擇建築後，遊戲已替 26 種建築準備核准的入門藍圖。你不必先理解材質、樓層與工期，就能直接回到地圖選空地施工。",
+		"body": "選擇建築後，遊戲已替 %d 種建築準備核准的入門藍圖。你不必先理解材質、樓層與工期，就能直接回到地圖選空地施工。",
 		"bullets": ["建築卡使用逐棟專屬圖像，圖像與名稱一致", "綠色加號表示可施工；紅色叉號表示地塊受阻"],
 		"icon": "buildings",
 	},
@@ -94,11 +95,17 @@ func _process(delta: float) -> void:
 	atmosphere.modulate.a = 0.34 + sin(_ambient_time * 0.65) * 0.06
 
 
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_RESIZED and is_instance_valid(story_panel):
+		_layout_dialogue_strip()
+
+
 func open(reset_to_start: bool = true) -> void:
 	_closing = false
 	if reset_to_start:
 		current_page = 0
 	_refresh_page(false)
+	_layout_dialogue_strip()
 	modulate.a = 0.0
 	show()
 	move_to_front()
@@ -138,79 +145,87 @@ func _build() -> void:
 
 	var shade := ColorRect.new()
 	shade.name = "TutorialStoryShade"
-	shade.color = Color(0.02, 0.05, 0.07, 0.25)
+	shade.color = Color(0.06, 0.08, 0.07, 0.12)
 	shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(shade)
 	atmosphere = ColorRect.new()
 	atmosphere.name = "TutorialDawnPulse"
-	atmosphere.color = Color(1.0, 0.74, 0.30, 0.15)
+	atmosphere.color = Color(1.0, 0.78, 0.38, 0.10)
 	atmosphere.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	atmosphere.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(atmosphere)
 
 	story_panel = PanelContainer.new()
 	story_panel.name = "TutorialStoryPanel"
-	story_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
-	story_panel.anchor_left = 0.53
-	story_panel.anchor_top = 0.09
-	story_panel.anchor_right = 0.95
-	story_panel.anchor_bottom = 0.91
-	story_panel.offset_left = 0
-	story_panel.offset_top = 0
-	story_panel.offset_right = 0
-	story_panel.offset_bottom = 0
+	story_panel.anchor_left = 0.0
+	story_panel.anchor_top = 1.0
+	story_panel.anchor_right = 1.0
+	story_panel.anchor_bottom = 1.0
 	story_panel.add_theme_stylebox_override("panel", _panel_style())
 	add_child(story_panel)
+	_layout_dialogue_strip()
 
 	var margin := MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 34)
-	margin.add_theme_constant_override("margin_top", 30)
-	margin.add_theme_constant_override("margin_right", 34)
-	margin.add_theme_constant_override("margin_bottom", 28)
+	margin.add_theme_constant_override("margin_left", 24)
+	margin.add_theme_constant_override("margin_top", 16)
+	margin.add_theme_constant_override("margin_right", 24)
+	margin.add_theme_constant_override("margin_bottom", 14)
 	story_panel.add_child(margin)
 	var content := VBoxContainer.new()
-	content.add_theme_constant_override("separation", 15)
+	content.add_theme_constant_override("separation", 7)
 	margin.add_child(content)
 	var top_row := HBoxContainer.new()
-	top_row.add_theme_constant_override("separation", 16)
+	top_row.add_theme_constant_override("separation", 14)
 	content.add_child(top_row)
+	var portrait_badge := PanelContainer.new()
+	portrait_badge.name = "TutorialSpeakerBadge"
+	portrait_badge.custom_minimum_size = Vector2(88, 88)
+	portrait_badge.add_theme_stylebox_override("panel", _speaker_badge_style())
+	top_row.add_child(portrait_badge)
 	page_icon = TextureRect.new()
-	page_icon.custom_minimum_size = Vector2(96, 96)
+	page_icon.custom_minimum_size = Vector2(78, 78)
 	page_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	page_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	page_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	top_row.add_child(page_icon)
+	portrait_badge.add_child(page_icon)
 	var heading := VBoxContainer.new()
 	heading.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	heading.add_theme_constant_override("separation", 4)
+	heading.add_theme_constant_override("separation", 2)
 	top_row.add_child(heading)
-	kicker_label = _label("", 19, Color(0.95, 0.73, 0.30))
+	kicker_label = _label("", 16, Color(0.10, 0.43, 0.42))
 	kicker_label.name = "TutorialKicker"
 	heading.add_child(kicker_label)
-	title_label = _label("", 34, Color(0.98, 0.97, 0.91))
+	title_label = _label("", 28, Color(0.25, 0.19, 0.13))
 	title_label.name = "TutorialTitle"
 	title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	title_label.custom_minimum_size = Vector2(0, 92)
+	title_label.custom_minimum_size = Vector2(0, 38)
 	heading.add_child(title_label)
-	body_label = _label("", 22, Color(0.91, 0.94, 0.94))
+	body_label = _label("", 18, Color(0.24, 0.29, 0.29))
 	body_label.name = "TutorialBody"
 	body_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	body_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	body_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	content.add_child(body_label)
+	body_label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
+	heading.add_child(body_label)
 	bullets_box = VBoxContainer.new()
 	bullets_box.name = "TutorialBullets"
-	bullets_box.add_theme_constant_override("separation", 8)
+	bullets_box.add_theme_constant_override("separation", 2)
 	content.add_child(bullets_box)
+	var footer := HBoxContainer.new()
+	footer.name = "TutorialDialogueFooter"
+	footer.add_theme_constant_override("separation", 8)
+	content.add_child(footer)
 	progress_box = HBoxContainer.new()
 	progress_box.name = "TutorialProgress"
 	progress_box.alignment = BoxContainer.ALIGNMENT_CENTER
-	progress_box.add_theme_constant_override("separation", 8)
-	content.add_child(progress_box)
+	progress_box.add_theme_constant_override("separation", 6)
+	footer.add_child(progress_box)
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	footer.add_child(spacer)
 	var actions := HBoxContainer.new()
-	actions.add_theme_constant_override("separation", 10)
-	content.add_child(actions)
+	actions.name = "TutorialDialogueActions"
+	actions.add_theme_constant_override("separation", 8)
+	footer.add_child(actions)
 	skip_button = _button("TutorialSkipButton", "跳過教學", false)
 	skip_button.tooltip_text = "略過後仍可從設定頁重播。"
 	skip_button.pressed.connect(func() -> void:
@@ -218,9 +233,6 @@ func _build() -> void:
 		close_as_completed(true)
 	)
 	actions.add_child(skip_button)
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	actions.add_child(spacer)
 	back_button = _button("TutorialBackButton", "上一步", false)
 	back_button.pressed.connect(_go_back)
 	actions.add_child(back_button)
@@ -247,13 +259,16 @@ func _apply_page_content() -> void:
 	var page: Dictionary = PAGES[current_page]
 	kicker_label.text = _l10n_text(str(page["kicker"]))
 	title_label.text = _l10n_text(str(page["title"]))
-	body_label.text = _l10n_text(str(page["body"]))
+	var localized_body := _l10n_text(str(page["body"]))
+	if localized_body.contains("%d"):
+		localized_body = localized_body % ContentRegistry.BUILDING_IDS.size()
+	body_label.text = localized_body
 	page_icon.texture = UiIconCatalog.texture(str(page["icon"]))
 	for child in bullets_box.get_children():
 		bullets_box.remove_child(child)
 		child.queue_free()
 	for bullet in page["bullets"]:
-		var label := _label("◆  %s" % _l10n_text(str(bullet)), 19, Color(0.83, 0.90, 0.90))
+		var label := _label("◆  %s" % _l10n_text(str(bullet)), 16, Color(0.27, 0.37, 0.36))
 		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		bullets_box.add_child(label)
 	for child in progress_box.get_children():
@@ -262,8 +277,8 @@ func _apply_page_content() -> void:
 	for index in PAGES.size():
 		var dot := Label.new()
 		dot.text = "●" if index == current_page else "○"
-		dot.add_theme_font_size_override("font_size", 18)
-		dot.add_theme_color_override("font_color", Color(0.98, 0.75, 0.31) if index == current_page else Color(0.68, 0.75, 0.76))
+		dot.add_theme_font_size_override("font_size", 16)
+		dot.add_theme_color_override("font_color", Color(0.93, 0.57, 0.18) if index == current_page else Color(0.55, 0.64, 0.62))
 		progress_box.add_child(dot)
 	back_button.disabled = current_page == 0
 	next_button.text = _l10n_text("進入城市") if current_page == PAGES.size() - 1 else _l10n_text("下一步")
@@ -323,28 +338,56 @@ func _button(node_name: String, text: String, primary: bool) -> Button:
 	var button := Button.new()
 	button.name = node_name
 	button.text = text
-	button.custom_minimum_size = Vector2(150, 54)
-	button.add_theme_font_size_override("font_size", 19)
-	button.add_theme_stylebox_override("normal", _button_style(Color(0.06, 0.45, 0.71) if primary else Color(0.15, 0.23, 0.27, 0.96)))
-	button.add_theme_stylebox_override("hover", _button_style(Color(0.09, 0.57, 0.86) if primary else Color(0.23, 0.34, 0.39, 0.98)))
-	button.add_theme_stylebox_override("pressed", _button_style(Color(0.03, 0.31, 0.52)))
-	button.add_theme_stylebox_override("disabled", _button_style(Color(0.24, 0.29, 0.31, 0.88)))
+	button.custom_minimum_size = Vector2(128, 48)
+	button.add_theme_font_size_override("font_size", 16)
+	button.add_theme_stylebox_override("normal", _button_style(Color(0.08, 0.54, 0.66) if primary else Color(0.39, 0.48, 0.46, 0.96)))
+	button.add_theme_stylebox_override("hover", _button_style(Color(0.12, 0.66, 0.76) if primary else Color(0.48, 0.57, 0.54, 0.98)))
+	button.add_theme_stylebox_override("pressed", _button_style(Color(0.05, 0.39, 0.50)))
+	button.add_theme_stylebox_override("disabled", _button_style(Color(0.65, 0.67, 0.62, 0.90)))
 	button.add_theme_color_override("font_color", Color.WHITE)
 	button.add_theme_color_override("font_hover_color", Color.WHITE)
 	button.add_theme_color_override("font_pressed_color", Color.WHITE)
-	button.add_theme_color_override("font_disabled_color", Color(0.62, 0.68, 0.69))
+	button.add_theme_color_override("font_disabled_color", Color(0.86, 0.86, 0.81))
 	return button
 
 
 func _panel_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.035, 0.09, 0.12, 0.92)
-	style.border_color = Color(0.88, 0.69, 0.30, 0.92)
+	style.bg_color = Color(0.98, 0.95, 0.85, 0.97)
+	style.border_color = Color(0.93, 0.60, 0.24, 0.96)
 	style.set_border_width_all(2)
-	style.set_corner_radius_all(24)
-	style.shadow_color = Color(0, 0, 0, 0.48)
-	style.shadow_size = 18
+	style.set_corner_radius_all(22)
+	style.shadow_color = Color(0.12, 0.09, 0.05, 0.34)
+	style.shadow_size = 14
 	return style
+
+
+func _speaker_badge_style() -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(1.0, 0.82, 0.45, 0.72)
+	style.border_color = Color(0.92, 0.55, 0.18, 0.88)
+	style.set_border_width_all(2)
+	style.set_corner_radius_all(18)
+	style.content_margin_left = 5
+	style.content_margin_top = 5
+	style.content_margin_right = 5
+	style.content_margin_bottom = 5
+	return style
+
+
+func _layout_dialogue_strip() -> void:
+	if not is_instance_valid(story_panel):
+		return
+	var bounds := size
+	if bounds.x <= 0.0 or bounds.y <= 0.0:
+		return
+	var horizontal_margin := clampf(bounds.x * 0.045, 24.0, 88.0)
+	var bottom_margin := clampf(bounds.y * 0.035, 20.0, 56.0)
+	var panel_height := clampf(bounds.y * 0.31, 240.0, 330.0)
+	story_panel.offset_left = horizontal_margin
+	story_panel.offset_top = -bottom_margin - panel_height
+	story_panel.offset_right = -horizontal_margin
+	story_panel.offset_bottom = -bottom_margin
 
 
 func _button_style(color: Color) -> StyleBoxFlat:

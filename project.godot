@@ -10,8 +10,9 @@ config_version=5
 
 [application]
 
-config/name="Mayor Simulator MVP"
+config/name="CivicTale: Voice of Promise"
 run/main_scene="res://scenes/Main.tscn"
+run/max_fps=60
 config/features=PackedStringArray("4.7")
 
 [autoload]
@@ -28,5 +29,5 @@ window/stretch/aspect="expand"
 
 [rendering]
 
-renderer/rendering_method="gl_compatibility"
-renderer/rendering_method.mobile="gl_compatibility"
+renderer/rendering_method="mobile"
+renderer/rendering_method.mobile="mobile"

@@ -29,6 +29,31 @@ func _capture() -> void:
 		push_error("NPC live capture could not enter the map")
 		quit(1)
 		return
+	var tutorial: Node = scene.get("tutorial_overlay")
+	if tutorial == null:
+		push_error("NPC live capture could not access TutorialStoryOverlay after game start")
+		quit(1)
+		return
+	if not tutorial.is_open():
+		push_error("NPC live capture did not receive an open tutorial overlay after new game")
+		quit(1)
+		return
+	var skip_button: Button = tutorial.get("skip_button") as Button
+	if skip_button == null:
+		push_error("NPC live capture could not use tutorial skip button")
+		quit(1)
+		return
+	skip_button.emit_signal("pressed")
+	await _settle_frames(24)
+	if tutorial.is_open():
+		push_error("NPC live capture failed to close tutorial via skip button")
+		quit(1)
+		return
+	var map_viewport: Node = scene.get("map_viewport")
+	if map_viewport == null or not bool(map_viewport.is_visible_in_tree()):
+		push_error("NPC live capture did not reach a visible map viewport after tutorial skip")
+		quit(1)
+		return
 
 	for _frame in LIVE_MOTION_FRAMES:
 		await process_frame
@@ -79,6 +104,11 @@ func _capture() -> void:
 		OUTPUT_PATH,
 	])
 	quit(0)
+
+
+func _settle_frames(frames: int) -> void:
+	for _frame in range(max(0, frames)):
+		await process_frame
 
 
 func _enter_stable_fullscreen() -> bool:

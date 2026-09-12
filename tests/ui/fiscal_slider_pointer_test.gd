@@ -24,13 +24,28 @@ func _run() -> void:
 		if not main.start_screen.is_loading():
 			break
 	main.tutorial_overlay.close_as_completed(false)
-	main.tutorial_overlay._transition.custom_step(1.0)
+	await process_frame
+	# Keep the real pointer fixture outside the deferred onboarding input mask.
+	main.onboarding_progress.restore_from_shell_state({"schema_version": 8, "tutorial_completed": true})
+	main.call("_refresh_onboarding_guide")
+	main.call("_sync_map_interaction_for_ui")
+	await process_frame
+	main._open_municipal_center()
 	await process_frame
 	main.municipal_overlay.open_page("finance")
-	var tabs := main.find_child("FiscalCategoryTabs", true, false) as TabContainer
-	tabs.current_tab = 2
-	var service_tabs := tabs.get_child(2) as TabContainer
-	service_tabs.current_tab = 1
+	var category_card := main.find_child("FiscalCategoryCard_education_leisure", true, false) as Button
+	if category_card == null:
+		push_error("education/leisure fiscal category card is missing")
+		await TestCleanup.finish(self, [main], 1)
+		return
+	category_card.pressed.emit()
+	await process_frame
+	var custom_plan := main.find_child("FiscalPlanCard_custom", true, false) as Button
+	if custom_plan == null:
+		push_error("custom fiscal plan card is missing")
+		await TestCleanup.finish(self, [main], 1)
+		return
+	custom_plan.pressed.emit()
 	await process_frame
 	await process_frame
 
@@ -39,6 +54,7 @@ func _run() -> void:
 		push_error("stadium slider is missing or hidden")
 		await TestCleanup.finish(self, [main], 1)
 		return
+	var authoritative_stadium := int(main.service_fees["stadium"])
 	var rect := slider.get_global_rect()
 	var start := rect.position + Vector2(rect.size.x * 0.5, rect.size.y * 0.5)
 	var finish := Vector2(rect.end.x - 6.0, start.y)
@@ -71,9 +87,15 @@ func _run() -> void:
 	up.global_position = finish
 	root.push_input(up, true)
 	await process_frame
-	if int(main.service_fees["stadium"]) <= 80:
-		push_error("stadium slider did not respond to a viewport-routed pointer drag; value=%d" % int(main.service_fees["stadium"]))
+	var draft_state: Dictionary = main.call("debug_fiscal_draft_state")
+	var drafted_stadium := int(draft_state.get("service", {}).get("stadium", authoritative_stadium))
+	if drafted_stadium <= authoritative_stadium:
+		push_error("stadium slider did not respond to a viewport-routed pointer drag; draft=%d" % drafted_stadium)
 		await TestCleanup.finish(self, [main], 1)
 		return
-	print("Fiscal stadium pointer test passed. value=%d" % int(main.service_fees["stadium"]))
+	if int(main.service_fees["stadium"]) != authoritative_stadium:
+		push_error("stadium pointer drag bypassed the fiscal draft; authoritative=%d" % int(main.service_fees["stadium"]))
+		await TestCleanup.finish(self, [main], 1)
+		return
+	print("Fiscal stadium pointer test passed. draft=%d authoritative=%d" % [drafted_stadium, authoritative_stadium])
 	await TestCleanup.finish(self, [main], 0)

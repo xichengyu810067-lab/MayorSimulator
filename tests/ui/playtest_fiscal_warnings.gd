@@ -40,9 +40,8 @@ func _run() -> void:
 	finance_button.emit_signal("pressed")
 	await _settle()
 
-	var tabs := overlay.find_child("FiscalCategoryTabs", true, false) as TabContainer
-	if tabs == null or tabs.get_tab_count() != 3:
-		_fail("Expected three focused fiscal categories.")
+	if overlay.find_child("FiscalCategoryTabs", true, false) != null:
+		_fail("Legacy FiscalCategoryTabs must not coexist with fiscal category cards.")
 		return
 	var fiscal_scroll := overlay.find_child("稅率與公共事業費", true, false) as ScrollContainer
 	if fiscal_scroll == null:
@@ -53,32 +52,16 @@ func _run() -> void:
 	var fiscal_scroll_contract: Dictionary = await FiscalScrollContract.validate(
 		self,
 		overlay,
-		tabs,
+		null,
 		expected_slider_names
 	)
 	if not bool(fiscal_scroll_contract.get("ok", false)):
 		_fail("Fiscal responsive scroll contract failed: %s" % "; ".join(fiscal_scroll_contract.get("errors", [])))
 		return
-	var max_visible_rows := 0
-	var leaf_category_count := 0
-	for tab_index in range(tabs.get_tab_count()):
-		tabs.current_tab = tab_index
-		var subcategories := tabs.get_child(tab_index) as TabContainer
-		if subcategories == null or subcategories.get_tab_count() != 2:
-			_fail("Fiscal category %d must contain two subcategories." % tab_index)
-			return
-		for sub_index in range(subcategories.get_tab_count()):
-			subcategories.current_tab = sub_index
-			leaf_category_count += 1
-			await _settle()
-			var visible_rows := 0
-			for node in tabs.find_children("FiscalRow_*", "VBoxContainer", true, false):
-				if node.is_visible_in_tree():
-					visible_rows += 1
-			max_visible_rows = maxi(max_visible_rows, visible_rows)
-			if visible_rows < 2 or visible_rows > 3:
-				_fail("Fiscal category %d:%d exposes %d rows; expected 2–3." % [tab_index, sub_index, visible_rows])
-				return
+	var fiscal_ui: Dictionary = Dictionary(scene.call("debug_fiscal_draft_state")).get("ui", {})
+	if Array(fiscal_ui.get("category_ids", [])).size() != 6 or Array(fiscal_ui.get("plan_ids", [])).size() != 3:
+		_fail("Fiscal card workflow must expose six category choices and three plan choices.")
+		return
 
 	var tax_sliders: Dictionary = scene.get("tax_sliders")
 	var utility_sliders: Dictionary = scene.get("utility_sliders")
@@ -86,8 +69,8 @@ func _run() -> void:
 	_set_all_sliders(tax_sliders, 0)
 	_set_all_sliders(utility_sliders, 0)
 	_set_all_sliders(service_sliders, 0)
-	tabs.current_tab = 1
-	(tabs.get_child(1) as TabContainer).current_tab = 0
+	if not await _show_category_custom(overlay, "education_leisure"):
+		return
 	await _settle(5)
 	var low_counts := _state_counts([tax_sliders, utility_sliders, service_sliders])
 	if int(low_counts.get("low", 0)) < 1:
@@ -95,12 +78,14 @@ func _run() -> void:
 		return
 	if not _save_capture(LOW_CAPTURE):
 		return
-	var low_net := int(scene.call("_projected_net_income"))
-	var low_buffer := int(scene.call("_fiscal_safety_buffer"))
+	var low_draft: Dictionary = scene.call("debug_fiscal_draft_state")
+	var low_net := int(low_draft.get("projected_net", 0))
+	var low_projection: Dictionary = scene.call("_fiscal_projection_snapshot", true)
+	var low_buffer := int(low_projection.get("safety_buffer", 0))
 
 	_set_recommended_values(scene, tax_sliders, utility_sliders, service_sliders)
-	tabs.current_tab = 0
-	(tabs.get_child(0) as TabContainer).current_tab = 0
+	if not await _show_category_custom(overlay, "resident_tax"):
+		return
 	await _settle(5)
 	var normal_counts := _state_counts([tax_sliders, utility_sliders, service_sliders])
 	if int(normal_counts.get("low", 0)) != 0 or int(normal_counts.get("high", 0)) != 0:
@@ -112,8 +97,8 @@ func _run() -> void:
 	_set_all_sliders_to_max(tax_sliders)
 	_set_all_sliders_to_max(utility_sliders)
 	_set_all_sliders_to_max(service_sliders)
-	tabs.current_tab = 0
-	(tabs.get_child(0) as TabContainer).current_tab = 0
+	if not await _show_category_custom(overlay, "resident_tax"):
+		return
 	await _settle(5)
 	var high_counts := _state_counts([tax_sliders, utility_sliders, service_sliders])
 	if int(high_counts.get("high", 0)) != expected_slider_count:
@@ -129,9 +114,8 @@ func _run() -> void:
 
 	var result := {
 		"result": "passed",
-		"root_category_count": tabs.get_tab_count(),
-		"leaf_category_count": leaf_category_count,
-		"max_visible_rows": max_visible_rows,
+		"category_card_count": Array(fiscal_ui.get("category_ids", [])).size(),
+		"plan_card_count": Array(fiscal_ui.get("plan_ids", [])).size(),
 		"expected_slider_count": expected_slider_count,
 		"expected_slider_names": expected_slider_names,
 		"responsive_scroll_contract": fiscal_scroll_contract,
@@ -155,6 +139,22 @@ func _run() -> void:
 func _set_all_sliders(sliders: Dictionary, value: int) -> void:
 	for slider in sliders.values():
 		(slider as HSlider).value = value
+
+
+func _show_category_custom(overlay: Control, category_id: String) -> bool:
+	var category_card := overlay.find_child("FiscalCategoryCard_%s" % category_id, true, false) as Button
+	if category_card == null:
+		_fail("Fiscal category card '%s' is missing." % category_id)
+		return false
+	category_card.pressed.emit()
+	await _settle()
+	var custom_plan := overlay.find_child("FiscalPlanCard_custom", true, false) as Button
+	if custom_plan == null:
+		_fail("Fiscal custom plan card is missing for '%s'." % category_id)
+		return false
+	custom_plan.pressed.emit()
+	await _settle()
+	return true
 
 
 func _set_all_sliders_to_max(sliders: Dictionary) -> void:

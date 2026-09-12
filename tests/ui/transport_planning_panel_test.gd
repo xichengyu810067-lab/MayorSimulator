@@ -11,8 +11,8 @@ func _initialize() -> void:
 
 
 func _run() -> void:
-	root.content_scale_size = Vector2i(1280, 720)
-	root.size = Vector2i(1280, 720)
+	root.content_scale_size = Vector2i(1440, 900)
+	root.size = Vector2i(1440, 900)
 	var PanelScript = load("res://ui/shell/transport_planning_panel.gd")
 	if PanelScript == null:
 		push_error("Transport planning panel script could not be loaded.")
@@ -23,15 +23,25 @@ func _run() -> void:
 	panel.size = Vector2(1180, 680)
 	root.add_child(panel)
 	await process_frame
+	_check_transport_pager_columns(panel, 3, "wide transport panel")
+	root.content_scale_size = Vector2i(1280, 720)
+	root.size = Vector2i(1280, 720)
+	await process_frame
+	_check_transport_pager_columns(panel, 2, "narrow viewport transport panel")
+	root.content_scale_size = Vector2i(1440, 900)
+	root.size = Vector2i(1440, 900)
+	await process_frame
+	_check_transport_pager_columns(panel, 3, "restored viewport transport panel")
 
-	var station_events: Array[String] = []
 	var infrastructure_events: Array[Dictionary] = []
 	var route_events: Array[Dictionary] = []
 	var toggle_events: Array[Dictionary] = []
 	var delete_events: Array[String] = []
-	panel.station_requested.connect(
-		func(building_name: String) -> void: station_events.append(building_name)
-	)
+	var session_continue_events: Array[String] = []
+	var session_close_events: Array[String] = []
+	_check(not panel.has_signal("station_requested"), "transport panel still exposes a second new-station session signal")
+	_check(panel.find_child("TransportStationPager", true, false) == null, "transport panel still exposes a station pager")
+	_check(panel.find_child("TransportStationSection", true, false) == null, "transport panel still exposes a station creation section")
 	panel.infrastructure_requested.connect(
 		func(kind: String, operation: String) -> void:
 			infrastructure_events.append({"kind": kind, "operation": operation})
@@ -52,15 +62,12 @@ func _run() -> void:
 	panel.route_delete_requested.connect(
 		func(route_id: String) -> void: delete_events.append(route_id)
 	)
+	panel.session_continue_requested.connect(func() -> void: session_continue_events.append("continue"))
+	panel.session_close_requested.connect(func() -> void: session_close_events.append("close"))
 
-	_check_station_controls(panel)
 	_check_infrastructure_controls(panel)
 	_check_route_mode_controls(panel)
 	_check_readability(panel)
-
-	_press(panel, "StationAction_bus_station")
-	_press(panel, "StationAction_airport")
-	_check(station_events == ["公車站", "機場"], "station actions emitted incorrect building names")
 
 	_press(panel, "InfrastructureAdd_road")
 	_press(panel, "InfrastructureRemove_metro_track")
@@ -158,6 +165,7 @@ func _run() -> void:
 	_check(snapshot.get("route_count", 0) == 2, "debug snapshot route count is incorrect")
 	_check(str(snapshot.get("live_summary", "")).contains("車輛只會") and str(snapshot.get("live_summary", "")).contains("任一條件未完成"), "live summary does not explain the no-random-vehicles rule")
 	_check(str(snapshot.get("live_summary", "")).contains("平交道或號誌") and str(snapshot.get("live_summary", "")).contains("車庫"), "live summary omits infrastructure prerequisites")
+	_check(not snapshot.has("station_choices"), "transport panel debug surface still exposes new-station choices")
 	_check_progressive_groups(snapshot)
 
 	var hero := panel.find_child("TransportPlanningHero", true, false) as PanelContainer
@@ -174,31 +182,196 @@ func _run() -> void:
 	_check(dark_input_style != null and dark_input_style.bg_color != light_input_background, "route inputs did not refresh for dark mode")
 	_check(bool(panel.debug_snapshot().get("dark_mode", false)), "debug snapshot does not expose dark mode")
 
-	panel.set_view_model({"planning_unlocked": false, "routes": []})
+	panel.set_view_model({
+		"planning_unlocked": true,
+		"planning_session": {
+			"id": "transport_plan_ui_1",
+			"state": "network_placement",
+			"mode": "train",
+			"station_blueprint_name": "火車站",
+			"station_refs": [
+				{"job_id": "station_1", "status": "completed"},
+				{"job_id": "station_2", "status": "active"},
+			],
+			"network_refs": [{"job_id": "track_1", "status": "active"}],
+			"route_refs": [],
+		},
+		"routes": [],
+	})
 	await process_frame
-	var station_action := panel.find_child("StationAction_bus_station", true, false) as Button
+	var session_card := panel.find_child("TransportPlanningSessionCard", true, false) as PanelContainer
+	var session_status := panel.find_child("TransportPlanningSessionStatus", true, false) as Label
+	var session_detail := panel.find_child("TransportPlanningSessionDetail", true, false) as Label
+	var session_continue := panel.find_child("TransportPlanningSessionContinue", true, false) as Button
+	var session_close := panel.find_child("TransportPlanningSessionClose", true, false) as Button
+	var infrastructure_section := panel.find_child("TransportInfrastructureSection", true, false) as PanelContainer
+	var operations_section := panel.find_child("TransportOperationsSection", true, false) as PanelContainer
+	var route_list_section := panel.find_child("TransportRouteListSection", true, false) as PanelContainer
+	var sections_ready := infrastructure_section != null and operations_section != null and route_list_section != null
+	_check(sections_ready, "transport planning sections are missing")
+	_check(session_card != null and session_card.visible, "active planning session summary is not visible")
+	_check(session_status != null and session_status.text.contains("火車站") and session_status.text.contains("2/3"), "session summary omits its player-facing station or phase")
+	_check(session_status != null and not session_status.text.contains("transport_plan_ui_1"), "session summary exposes an internal planning identity to the player")
+	_check(session_detail != null and _contains_all(session_detail.text, ["火車站", "站點 2", "完工 1", "路網工程 1"]), "session summary omits authoritative reference counts")
+	_check(session_continue != null and not session_continue.disabled and session_continue.text.contains("規劃路線"), "network session does not expose the explicit route-step CTA")
+	_check(session_close != null and not session_close.disabled, "active session does not expose explicit close")
+	_check(infrastructure_section != null and infrastructure_section.visible, "network phase hides its required infrastructure controls")
+	_check(operations_section != null and not operations_section.visible, "network phase still exposes the unrelated route step")
+	_check(route_list_section != null and not route_list_section.visible, "active network phase is diluted by the historical route list")
+	_press(panel, "TransportPlanningSessionContinue")
+	_press(panel, "TransportPlanningSessionClose")
+	_check(session_continue_events == ["continue"] and session_close_events == ["close"], "session CTAs did not emit their explicit commands")
+	var heavy_rail_add := panel.find_child("InfrastructureAdd_heavy_rail", true, false) as Button
+	var rail_signal_add := panel.find_child("InfrastructureAdd_rail_signal", true, false) as Button
+	var metro_add := panel.find_child("InfrastructureAdd_metro_track", true, false) as Button
+	_check(heavy_rail_add != null and not heavy_rail_add.disabled, "train session cannot add its guideway")
+	_check(rail_signal_add != null and not rail_signal_add.disabled, "train session cannot add mode-compatible rail signals")
+	_check(heavy_rail_add != null and heavy_rail_add.is_visible_in_tree(), "train session hides its matching infrastructure card")
+	_check(rail_signal_add != null and rail_signal_add.is_visible_in_tree(), "train session hides its matching signal card")
+	_check(metro_add != null and not metro_add.is_visible_in_tree(), "train session still renders cross-mode metro infrastructure")
+	panel.set_view_model({
+		"planning_unlocked": true,
+		"planning_session": {
+			"id": "transport_plan_ui_1",
+			"state": "route_edit",
+			"mode": "train",
+			"station_blueprint_name": "火車站",
+			"station_refs": [
+				{"job_id": "station_1", "status": "completed"},
+				{"job_id": "station_2", "status": "active"},
+			],
+			"network_refs": [{"job_id": "track_1", "status": "active"}],
+			"route_refs": [],
+		},
+		"routes": [],
+	})
+	await process_frame
+	var matching_train_route_button_edit := panel.find_child("PlanRoute_train", true, false) as Button
+	_check(matching_train_route_button_edit != null and matching_train_route_button_edit.is_inside_tree() and matching_train_route_button_edit.is_visible_in_tree(), "train session hides its matching route card during route edit")
+	var foreign_train_route_button_edit := panel.find_child("PlanRoute_bus", true, false) as Button
+	_check(foreign_train_route_button_edit != null and foreign_train_route_button_edit.is_inside_tree() and not foreign_train_route_button_edit.is_visible_in_tree(), "train session still renders a foreign bus route card during route edit")
+	panel.set_view_model({
+		"planning_unlocked": true,
+		"planning_session": {
+			"id": "transport_plan_air_1",
+			"state": "network_placement",
+			"mode": "air",
+			"station_blueprint_name": "機場",
+			"station_refs": [{"job_id": "airport_1", "status": "completed"}],
+			"network_refs": [],
+			"route_refs": [],
+		},
+		"routes": [],
+	})
+	await process_frame
+	var runway_add := panel.find_child("InfrastructureAdd_runway", true, false) as Button
+	var taxiway_add := panel.find_child("InfrastructureAdd_taxiway", true, false) as Button
+	var road_add := panel.find_child("InfrastructureAdd_road", true, false) as Button
+	_check(runway_add != null and not runway_add.disabled, "air session cannot add its runway guideway")
+	_check(taxiway_add != null and not taxiway_add.disabled, "air session cannot add taxiway in the same network phase")
+	_check(road_add != null and not road_add.is_visible_in_tree(), "air session still renders a cross-mode road project")
+	panel.set_view_model({
+		"planning_unlocked": true,
+		"planning_session": {
+			"id": "transport_plan_air_1",
+			"state": "route_edit",
+			"mode": "air",
+			"station_blueprint_name": "機場",
+			"station_refs": [{"job_id": "airport_1", "status": "completed"}],
+			"network_refs": [],
+			"route_refs": [],
+		},
+		"routes": [],
+	})
+	await process_frame
+	var matching_air_route_button := panel.find_child("PlanRoute_air", true, false) as Button
+	_check(matching_air_route_button != null and matching_air_route_button.is_inside_tree() and matching_air_route_button.is_visible_in_tree(), "air session hides its matching route card during route edit")
+	var foreign_air_route_button := panel.find_child("PlanRoute_train", true, false) as Button
+	_check(foreign_air_route_button != null and foreign_air_route_button.is_inside_tree() and not foreign_air_route_button.is_visible_in_tree(), "air session still renders a foreign train route card during route edit")
+	await _check_mode_scoped_catalogs(panel)
+	panel.set_view_model({
+		"planning_unlocked": true,
+		"planning_session": {
+			"id": "transport_plan_reuse_1",
+			"workflow": "route_package_v1",
+			"state": "station_placement",
+			"mode": "bus",
+			"station_blueprint_name": "公車站",
+			"station_refs": [],
+			"network_refs": [],
+			"route_refs": [],
+			"route_draft": {
+				"station_placements": [
+					{"anchor_tile_id": 10, "reuse_existing_station": true, "existing_station_id": "station_1"},
+					{"anchor_tile_id": 12, "reuse_existing_station": true, "existing_station_id": "station_2"},
+				],
+			},
+		},
+		"routes": [],
+	})
+	await process_frame
+	_check(session_detail != null and _contains_all(session_detail.text, ["公車站", "站點 2", "完工 2", "沿用完成 2"]), "pre-confirmation reuse summary presents completed stations as unfinished: %s" % (session_detail.text if session_detail != null else "missing summary"))
+
+	panel.set_view_model({
+		"planning_unlocked": true,
+		"planning_session": {
+			"id": "transport_plan_ui_1",
+			"state": "waiting_construction",
+			"mode": "train",
+			"station_blueprint_name": "火車站",
+			"station_refs": [{"job_id": "station_1", "status": "active"}],
+			"network_refs": [],
+			"route_refs": [],
+		},
+		"routes": [],
+	})
+	await process_frame
+	_check(session_continue.disabled and session_continue.text.contains("等待施工"), "waiting session exposes a premature continue command")
+	_check(sections_ready and not infrastructure_section.visible and not operations_section.visible and not route_list_section.visible, "waiting phase exposes controls the player cannot use")
+
+	panel.set_view_model({
+		"planning_unlocked": false,
+		"planning_session": {"state": "inactive"},
+		"routes": [],
+	})
+	await process_frame
 	var plan_action := panel.find_child("PlanRoute_bus", true, false) as Button
 	var empty_label := panel.find_child("TransportRouteEmpty", true, false) as Label
-	_check(station_action != null and station_action.disabled, "locked planning still allows station siting")
+	_check(panel.find_child("StationAction_bus_station", true, false) == null, "locked planning resurrected a station creation action")
 	_check(plan_action != null and plan_action.disabled, "locked planning still allows route creation")
 	_check(empty_label != null and empty_label.visible, "empty route state is not rendered")
+	_check(sections_ready and infrastructure_section.visible and operations_section.visible and route_list_section.visible, "inactive planning does not restore the network and route surfaces")
 	_check(int(panel.debug_snapshot().get("route_count", -1)) == 0, "route cards were not cleared with an empty snapshot")
+	for infra_id: String in ["road", "metro_track", "heavy_rail", "runway", "taxiway", "bus_depot", "metro_depot", "rail_depot", "rail_signal"]:
+		var infra_button := panel.find_child("InfrastructureAdd_%s" % infra_id, true, false) as Button
+		_check(infra_button != null and infra_button.is_inside_tree(), "inactive management surface does not restore infrastructure card: %s" % infra_id)
+	for route_mode: String in ["bus", "metro", "train", "air"]:
+		var route_button := panel.find_child("PlanRoute_%s" % route_mode, true, false) as Button
+		_check(route_button != null and route_button.is_inside_tree(), "inactive management surface does not restore all route modes: %s" % route_mode)
 
+	var panel_resize_callable := Callable(panel, "_on_layout_resized")
+	var viewport: Viewport = panel.get_viewport()
+	panel.queue_free()
+	await process_frame
+	_check(viewport != null and not viewport.size_changed.is_connected(panel_resize_callable), "freed transport panel disconnects its viewport resize callback")
+	root.size = Vector2i(1280, 720)
+	await process_frame
+	root.size = Vector2i(1440, 900)
+	await process_frame
 	var exit_code := 1 if _failed else 0
 	if not _failed:
 		print("Transport planning panel test passed. Checks=%d" % _checks)
-	await TestCleanup.finish(self, [panel], exit_code)
+	await TestCleanup.finish(self, [], exit_code)
 
 
-func _check_station_controls(panel: Control) -> void:
-	for choice: Dictionary in [
-		{"id": "bus_station", "label": "公車站"},
-		{"id": "metro_station", "label": "捷運站"},
-		{"id": "rail_station", "label": "火車站"},
-		{"id": "airport", "label": "機場"},
-	]:
-		var button := panel.find_child("StationAction_%s" % choice["id"], true, false) as Button
-		_check(button != null and button.text.contains(str(choice["label"])), "missing semantic station action: %s" % choice["label"])
+func _check_transport_pager_columns(panel: Control, expected_columns: int, label: String) -> void:
+	for pager_name in ["TransportInfrastructurePager", "TransportRouteModePager"]:
+		var pager := panel.find_child(pager_name, true, false) as Control
+		_check(pager != null, "%s exposes %s" % [label, pager_name])
+		if pager == null or not pager.has_method("choice_grid"):
+			continue
+		var grid := pager.call("choice_grid") as GridContainer
+		_check(grid != null and grid.columns == expected_columns, "%s uses %d columns for %s" % [label, expected_columns, pager_name])
 
 
 func _check_infrastructure_controls(panel: Control) -> void:
@@ -238,14 +411,86 @@ func _check_readability(panel: Control) -> void:
 		_check(input != null and input.get_line_edit().get_theme_font_size("font_size") >= 18, "route input is not readable: %s" % input_name)
 
 
+func _check_mode_scoped_catalogs(panel: Control) -> void:
+	var expected_infrastructure := {
+		"bus": ["road", "bus_depot"],
+		"metro": ["metro_track", "metro_depot"],
+		"train": ["rail_track", "rail_depot", "rail_signal"],
+		"air": ["runway", "taxiway"],
+	}
+	for mode: String in ["bus", "metro", "train", "air"]:
+		panel.set_view_model({
+			"planning_unlocked": true,
+			"planning_session": {
+				"id": "transport_mode_scope_%s" % mode,
+				"workflow": "route_package_v1" if mode != "air" else "",
+				"state": "network_placement",
+				"mode": mode,
+				"station_blueprint_name": {"bus": "公車站", "metro": "捷運站", "train": "火車站", "air": "機場"}[mode],
+				"station_refs": [],
+				"network_refs": [],
+				"route_refs": [],
+			},
+			"routes": [],
+		})
+		await process_frame
+		var snapshot: Dictionary = panel.debug_snapshot()
+		var actual_infrastructure: Array = snapshot.get("scoped_infrastructure_choice_ids", [])
+		var actual_routes: Array = snapshot.get("scoped_route_mode_ids", [])
+		_check(actual_infrastructure == expected_infrastructure[mode], "%s session infrastructure catalog leaked another mode: %s" % [mode, actual_infrastructure])
+		_check(actual_routes == [mode], "%s session route catalog leaked another mode: %s" % [mode, actual_routes])
+		for foreign_mode: String in ["bus", "metro", "train", "air"]:
+			var route_button := panel.find_child("PlanRoute_%s" % foreign_mode, true, false) as Button
+			_check(route_button != null and route_button.is_inside_tree(), "%s session lost a route card from tree: %s" % [mode, foreign_mode])
+			_check(not route_button.is_visible_in_tree(), "%s session rendered a non-editable route card: %s" % [mode, foreign_mode])
+		for infra_id: String in ["road", "metro_track", "heavy_rail", "runway", "taxiway", "bus_depot", "metro_depot", "rail_depot", "rail_signal"]:
+			var infra_button := panel.find_child("InfrastructureAdd_%s" % infra_id, true, false) as Button
+			var normalized_infra_id := "rail_track" if infra_id == "heavy_rail" else infra_id
+			if infra_id in expected_infrastructure[mode]:
+				_check(infra_button != null and infra_button.is_inside_tree(), "%s session moved required infrastructure card out of tree: %s" % [mode, infra_id])
+				_check(infra_button.is_visible_in_tree(), "%s session hid the correct infrastructure card: %s" % [mode, infra_id])
+			else:
+				if normalized_infra_id in expected_infrastructure[mode]:
+					_check(infra_button != null and infra_button.is_inside_tree(), "%s session moved a required alias out of tree: %s" % [mode, infra_id])
+					_check(infra_button.is_visible_in_tree(), "%s session hid the corrected infrastructure alias: %s" % [mode, infra_id])
+				else:
+					_check(infra_button != null and infra_button.is_inside_tree(), "%s session dropped a non-applicable infrastructure card: %s" % [mode, infra_id])
+					_check(not infra_button.is_visible_in_tree(), "%s session rendered the wrong infrastructure card: %s" % [mode, infra_id])
+		panel.set_view_model({
+			"planning_unlocked": true,
+			"planning_session": {
+				"id": "transport_mode_scope_%s_route_edit" % mode,
+				"workflow": "route_package_v1" if mode != "air" else "",
+				"state": "route_edit",
+				"mode": mode,
+				"station_blueprint_name": {"bus": "公車站", "metro": "捷運站", "train": "火車站", "air": "機場"}[mode],
+				"station_refs": [],
+				"network_refs": [],
+				"route_refs": [],
+			},
+			"routes": [],
+		})
+		await process_frame
+		var matching_route_button := panel.find_child("PlanRoute_%s" % mode, true, false) as Button
+		_check(matching_route_button != null and matching_route_button.is_inside_tree(), "%s route-edit session dropped its matching route card from tree: %s" % [mode, mode])
+		_check(matching_route_button.is_visible_in_tree(), "%s route-edit session hid its matching route card: %s" % [mode, mode])
+		for foreign_mode: String in ["bus", "metro", "train", "air"]:
+			if foreign_mode == mode:
+				continue
+			var route_button := panel.find_child("PlanRoute_%s" % foreign_mode, true, false) as Button
+			_check(route_button != null and route_button.is_inside_tree(), "%s session dropped a foreign route card from tree: %s" % [mode, foreign_mode])
+			_check(not route_button.is_visible_in_tree(), "%s session rendered the wrong route card: %s" % [mode, foreign_mode])
+
+
 func _check_progressive_groups(snapshot: Dictionary) -> void:
 	var groups_variant: Variant = snapshot.get("progressive_groups", {})
 	_check(groups_variant is Dictionary, "debug snapshot does not expose progressive groups")
 	if not groups_variant is Dictionary:
 		return
 	var groups := groups_variant as Dictionary
-	for expected_name: String in ["TransportStationPager", "TransportInfrastructurePager", "TransportRouteModePager", "TransportRoutePager"]:
+	for expected_name: String in ["TransportInfrastructurePager", "TransportRouteModePager", "TransportRoutePager"]:
 		_check(groups.has(expected_name), "missing progressive group: %s" % expected_name)
+	_check(not groups.has("TransportStationPager"), "progressive groups still expose a station pager")
 	for group_name: Variant in groups:
 		var group_variant: Variant = groups[group_name]
 		if not group_variant is Dictionary:
@@ -253,7 +498,6 @@ func _check_progressive_groups(snapshot: Dictionary) -> void:
 			continue
 		var group := group_variant as Dictionary
 		_check(int(group.get("visible_choice_count", 0)) <= 3, "progressive group displays more than three choices: %s" % group_name)
-	_check(int((groups.get("TransportStationPager", {}) as Dictionary).get("choice_count", 0)) == 4, "station pager does not contain all four station choices")
 	_check(int((groups.get("TransportInfrastructurePager", {}) as Dictionary).get("choice_count", 0)) == 9, "infrastructure pager does not contain all nine choices")
 	_check(int((groups.get("TransportRouteModePager", {}) as Dictionary).get("choice_count", 0)) == 4, "route mode pager does not contain all four modes")
 	_check(int((groups.get("TransportRoutePager", {}) as Dictionary).get("choice_count", 0)) == 2, "route pager does not contain the supplied routes")

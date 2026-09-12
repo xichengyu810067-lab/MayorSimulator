@@ -34,9 +34,14 @@ func _run() -> void:
 	_check(int(main.GRID_SIZE) == 10, "map grid is not 10x10")
 	_check(int(main.CELL_COUNT) == 100, "map does not expose 100 logical tiles")
 	_check(main.grid_buttons.size() == 100 and main.city_grid.size() == 100, "visual and city grids are not both 100 cells")
-	_check(main.ISO_TILE_SIZE.x < 128.0 and main.ISO_TILE_STEP.x < 72.0, "expanded map did not reduce individual tile dimensions")
+	_check(main.GRID_CELL_SIZE.x == main.GRID_CELL_SIZE.y, "visible map cells are not square")
+	_check(main.GRID_CELL_SIZE == Vector2(70, 70), "visible map does not use the canonical square cell size")
 	_check(main.vertical_slice.terrain_map.coordinate_for_tile_id(0) == Vector2i(1, 1), "legacy tile 0 did not keep its stable central coordinate")
 	_check(main.vertical_slice.terrain_map.coordinate_for_tile_id(64) == Vector2i(0, 0), "new outer-ring tile 64 is not mapped to the expanded edge")
+	_check(main.vertical_slice.terrain_map.coordinate_for_tile_id(12) == Vector2i(5, 2), "stable tile 12 coordinate changed")
+	_check(main.vertical_slice.terrain_map.base_kind(12) == "river_lake", "new city tile 12 did not use square backdrop classification")
+	_check(not main.vertical_slice.terrain_map.is_buildable(12) and not main.vertical_slice.terrain_map.is_walkable(12), "new city tile 12 is not blocked")
+	_check(str(main.vertical_slice.terrain_snapshot().get("classification_provenance", "")) == "backdrop_square_layout_4", "new city terrain lacks square-layout provenance")
 	for kind: String in ["trees", "hill_cliff", "river_lake"]:
 		var found := false
 		for state_variant: Variant in main.vertical_slice.terrain_map.all_tile_states():
@@ -103,6 +108,20 @@ func _run() -> void:
 			break
 	_check(terrain_tile >= 0, "no buildable-grid plot overlaps modeled backdrop scenery")
 	var terrain_before: Dictionary = main.vertical_slice.terrain_state_for_tile(terrain_tile)
+	var other_non_flat_tile := -1
+	for other_state_variant: Variant in main.vertical_slice.terrain_map.all_tile_states():
+		var other_state: Dictionary = other_state_variant
+		var other_tile_id := int(other_state.get("tile_id", -1))
+		if other_tile_id != terrain_tile and not bool(other_state.get("walkable", true)):
+			other_non_flat_tile = other_tile_id
+			break
+	_check(other_non_flat_tile >= 0, "square terrain fixture lacks an independent non-flat control tile")
+	main.debug_sync_npc_navigation_obstacles()
+	var terrain_center: Vector2 = main._iso_tile_center(terrain_tile)
+	var other_terrain_center: Vector2 = main._iso_tile_center(other_non_flat_tile)
+	var npc_navigation = main.get_npc_navigation_grid()
+	_check(not npc_navigation.is_position_walkable(terrain_center), "non-flat square center is walkable before earthworks")
+	_check(not npc_navigation.is_position_walkable(other_terrain_center), "independent non-flat square center is unexpectedly walkable")
 	_check(
 		str(terrain_before.get("source_asset", "")).ends_with("city-map-background.png")
 		and not Array(terrain_before.get("backdrop_feature_ids", [])).is_empty(),
@@ -154,6 +173,8 @@ func _run() -> void:
 	_check(main.vertical_slice.treasury_balance() == funds_before - int(quote.get("total_cost", 0)), "terrain progression charged the prepaid quote more than once")
 	main.debug_sync_npc_navigation_obstacles()
 	_check(not main.npc_map_controller._blocked_tiles.has(terrain_tile), "completed terrain remained blocked in the live NPC controller")
+	_check(npc_navigation.is_position_walkable(terrain_center), "flattened square center remains unwalkable after live synchronization")
+	_check(not npc_navigation.is_position_walkable(other_terrain_center), "flattening one square center opened another non-flat tile")
 	var post_flat_start: Dictionary = main.vertical_slice.start_approved_building("住宅", terrain_tile, 5)
 	_check(bool(post_flat_start.get("ok", false)) or str(post_flat_start.get("error", "")) != "terrain_not_flat", "flattened tile did not advance to the normal blueprint/construction pipeline")
 

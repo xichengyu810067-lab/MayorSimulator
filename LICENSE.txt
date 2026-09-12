@@ -1,5 +1,5 @@
-Mayor Simulator MVP Internal Pre-Release License
+《城諾之音》 / CivicTale: Voice of Promise Internal Pre-Release License
 ------------------------------------------------
-This repository and binary package contain internal pre-release software (Version 0.1.0-alpha.1).
-All rights reserved by the Civonance project team.
+This repository and binary package contain internal pre-release software (Version 0.1.0-alpha.2).
+All rights reserved by the CivicTale: Voice of Promise project team.
 For internal access-controlled testing only. Commercial distribution or public release is strictly prohibited.

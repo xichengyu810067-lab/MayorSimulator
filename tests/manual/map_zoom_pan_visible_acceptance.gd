@@ -12,6 +12,7 @@ var _output_directory := ""
 var _records: Array[Dictionary] = []
 var _hashes: Dictionary = {}
 var _failed := false
+var _tile_press_count := 0
 
 
 func _initialize() -> void:
@@ -66,6 +67,11 @@ func _run() -> void:
 		return
 	main._layout_map_stage()
 	await _settle(3)
+	var target_button := _first_visible_tile_button(main)
+	if target_button == null:
+		_fail("No visible map tile was available for native short-click and left-drag acceptance.")
+		return
+	target_button.pressed.connect(_on_target_tile_pressed)
 
 	var hud_before := _rect_record(main.status_hud)
 	var zoom_before := float(main.map_zoom)
@@ -92,34 +98,57 @@ func _run() -> void:
 		_fail("Could not capture native map-zoomed state.")
 		return
 
-	var press := InputEventMouseButton.new()
-	press.button_index = MOUSE_BUTTON_MIDDLE
-	press.pressed = true
-	press.position = cursor
-	press.global_position = cursor
-	main._input(press)
-	var motion := InputEventMouseMotion.new()
-	motion.position = cursor + Vector2(160, -96)
-	motion.global_position = motion.position
-	motion.relative = Vector2(160, -96)
-	main._input(motion)
+	# At enlarged scale, a normal left click on a tile must stay a tile click.
+	var click_position := target_button.get_global_rect().get_center()
+	if not main.map_viewport.get_global_rect().has_point(click_position):
+		_fail("The native short-click target moved outside the map viewport.")
+		return
+	root.push_input(_mouse_motion(click_position, Vector2.ZERO, 0), true)
+	root.push_input(_mouse_button(MOUSE_BUTTON_LEFT, true, click_position, MOUSE_BUTTON_MASK_LEFT), true)
+	await process_frame
+	root.push_input(_mouse_button(MOUSE_BUTTON_LEFT, false, click_position, 0), true)
+	await _settle(3)
+	if _tile_press_count != 1:
+		_fail("A native short left click did not preserve exactly one tile click.")
+		return
+
+	# The same pointer begins a pan only after it deliberately exceeds the
+	# map's drag threshold; the captured gesture must not click through.
+	_tile_press_count = 0
+	var pan_start: Vector2 = target_button.get_global_rect().get_center()
+	root.push_input(_mouse_motion(pan_start, Vector2.ZERO, 0), true)
+	root.push_input(_mouse_button(MOUSE_BUTTON_LEFT, true, pan_start, MOUSE_BUTTON_MASK_LEFT), true)
+	await process_frame
+	var short_motion_position := pan_start + Vector2(3, 2)
+	root.push_input(_mouse_motion(short_motion_position, Vector2(3, 2), MOUSE_BUTTON_MASK_LEFT), true)
+	await process_frame
+	if not main.map_pan_offset.is_equal_approx(pan_before):
+		_fail("A native left move below the drag threshold changed map pan.")
+		return
+	var drag_position := pan_start + Vector2(160, -96)
+	root.push_input(_mouse_motion(drag_position, drag_position - short_motion_position, MOUSE_BUTTON_MASK_LEFT), true)
 	await _settle(3)
 	var pan_after: Vector2 = main.map_pan_offset
 	if pan_after.is_equal_approx(pan_before):
-		_fail("Middle-button motion InputEvent did not change map pan offset.")
+		_fail("Native enlarged left-drag did not change map pan offset.")
 		return
-	var release := InputEventMouseButton.new()
-	release.button_index = MOUSE_BUTTON_MIDDLE
-	release.pressed = false
-	release.position = motion.position
-	release.global_position = motion.global_position
-	main._input(release)
+	root.push_input(_mouse_button(MOUSE_BUTTON_LEFT, false, drag_position, 0), true)
 	await _settle(3)
 	if main._map_pan_drag_active:
-		_fail("Middle-button release left map dragging active.")
+		_fail("Native left-drag release left map dragging active.")
+		return
+	if _tile_press_count != 0:
+		_fail("Native captured left-drag clicked through to its source tile.")
 		return
 	if not _capture("panned", main):
 		_fail("Could not capture native map-panned state.")
+		return
+	# Right click is a direct exact reset when the camera differs from its
+	# original view. It is delivered through the root so GUI dispatch is covered.
+	root.push_input(_mouse_button(MOUSE_BUTTON_RIGHT, true, main.map_viewport.get_global_rect().get_center(), MOUSE_BUTTON_MASK_RIGHT), true)
+	await _settle(3)
+	if not is_equal_approx(main.map_zoom, 1.0) or not main.map_pan_offset.is_equal_approx(Vector2.ZERO):
+		_fail("Native right click did not restore exact 100% zoom and original pan.")
 		return
 	var hud_after := _rect_record(main.status_hud)
 	if not _rect_matches(hud_before, hud_after):
@@ -135,12 +164,14 @@ func _run() -> void:
 		"status": "PASS",
 		"capture_surface_kind": "native_fullscreen_root",
 		"scene_parent": "root_window",
-		"scripted_input": "InputEventMouseButton wheel + MOUSE_BUTTON_MIDDLE press/release and InputEventMouseMotion(relative non-zero) delivered to Main._input; not physical mouse hardware",
+		"scripted_input": "InputEventMouseButton wheel + root-dispatched MOUSE_BUTTON_LEFT short-click/threshold drag/release + MOUSE_BUTTON_RIGHT exact reset; not physical mouse hardware",
 		"window_size": _vector2i_record(DisplayServer.window_get_size()),
 		"root_texture_size": _vector2i_record(Vector2i(root.get_texture().get_width(), root.get_texture().get_height())),
 		"logical_size": _vector2_record(root.get_visible_rect().size),
-		"zoom": {"before": zoom_before, "after": float(main.map_zoom)},
-		"pan_offset": {"before": _vector2_record(pan_before), "after": _vector2_record(pan_after)},
+		"zoom": {"before": zoom_before, "zoomed": main.MAP_ZOOM_MAX, "after_right_reset": float(main.map_zoom)},
+		"pan_offset": {"before": _vector2_record(pan_before), "after_left_drag": _vector2_record(pan_after), "after_right_reset": _vector2_record(main.map_pan_offset)},
+		"short_click_tile_presses": 1,
+		"drag_source_tile_presses": _tile_press_count,
 		"dragging_after_release": main._map_pan_drag_active,
 		"hud": {"before": hud_before, "after": hud_after, "unchanged": true},
 		"map_stage": _transform_record(main.map_stage),
@@ -190,6 +221,38 @@ func _capture(state: String, main) -> bool:
 		"map_stage": _transform_record(main.map_stage),
 	})
 	return true
+
+
+func _first_visible_tile_button(main) -> Button:
+	var viewport_rect: Rect2 = main.map_viewport.get_global_rect()
+	for candidate in main.grid_buttons:
+		var button := candidate as Button
+		if button != null and button.visible and viewport_rect.has_point(button.get_global_rect().get_center()):
+			return button
+	return null
+
+
+func _mouse_button(button_index: int, pressed: bool, position: Vector2, button_mask: int) -> InputEventMouseButton:
+	var event := InputEventMouseButton.new()
+	event.button_index = button_index
+	event.button_mask = button_mask
+	event.pressed = pressed
+	event.position = position
+	event.global_position = position
+	return event
+
+
+func _mouse_motion(position: Vector2, relative: Vector2, button_mask: int) -> InputEventMouseMotion:
+	var event := InputEventMouseMotion.new()
+	event.position = position
+	event.global_position = position
+	event.relative = relative
+	event.button_mask = button_mask
+	return event
+
+
+func _on_target_tile_pressed() -> void:
+	_tile_press_count += 1
 
 
 func _layer_records(main) -> Dictionary:

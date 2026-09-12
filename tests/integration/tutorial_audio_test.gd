@@ -2,6 +2,7 @@ extends SceneTree
 
 const TutorialStoryOverlayScript = preload("res://ui/tutorial/tutorial_story_overlay.gd")
 const AudioDirectorScript = preload("res://scripts/audio/audio_director.gd")
+const ContentRegistry = preload("res://data/catalogs/content_registry.gd")
 const TestCleanup := preload("res://tests/helpers/scene_tree_test_cleanup.gd")
 
 const AUDIO_PATHS := [
@@ -16,6 +17,7 @@ const AUDIO_PATHS := [
 var _failed := false
 var _completed_count := 0
 var _page_turn_cue_count := 0
+var _audio_tree_exited := false
 
 
 func _initialize() -> void:
@@ -43,6 +45,13 @@ func _run() -> void:
 	overlay.open(true)
 	await process_frame
 	_check(overlay.next_button.has_focus(), "tutorial gives keyboard focus to the next action")
+	var dialogue_rect: Rect2 = overlay.story_panel.get_global_rect()
+	_check(dialogue_rect.position.y >= 900.0 * 0.55, "tutorial uses a bottom dialogue strip instead of a tall side board")
+	_check(dialogue_rect.size.x >= 1440.0 * 0.88, "tutorial dialogue strip spans the readable safe width")
+	_check(dialogue_rect.size.y <= 900.0 * 0.38, "tutorial dialogue strip keeps most of the story artwork visible")
+	_check(overlay.story_panel.find_child("TutorialSpeakerBadge", true, false) != null, "tutorial presents each page as a friendly speaker badge")
+	_check(overlay.story_panel.find_child("TutorialDialogueFooter", true, false) != null, "tutorial keeps progress and actions in one compact footer")
+	_check(overlay.next_button.get_global_rect().end.y <= dialogue_rect.end.y + 0.5, "tutorial actions stay inside the dialogue strip")
 	var initial_left: float = overlay.background_picture.offset_left
 	overlay.call("_process", 8.0)
 	_check(not is_equal_approx(initial_left, overlay.background_picture.offset_left), "story background animates while visible")
@@ -60,6 +69,16 @@ func _run() -> void:
 	overlay._transition.custom_step(1.0)
 	await process_frame
 	_check(overlay.current_page == 1 and overlay.title_label.text != first_title, "one Enter key press advances exactly one tutorial page")
+	_check(overlay.body_label.text.contains(str(ContentRegistry.BUILDING_IDS.size())), "tutorial building count follows the authoritative content registry")
+	var localization = root.get_node_or_null("L10n")
+	_check(localization != null, "tutorial count test can access the localization authority")
+	if localization != null:
+		for locale in localization.SUPPORTED_LOCALES:
+			_check(bool(localization.set_locale(locale, false)), "tutorial supports locale %s" % locale)
+			overlay.call("_apply_page_content")
+			_check(overlay.body_label.text.contains(str(ContentRegistry.BUILDING_IDS.size())) and not overlay.body_label.text.contains("%d"), "tutorial renders the authoritative building count in %s" % locale)
+		localization.set_locale(localization.SOURCE_LOCALE, false)
+		overlay.call("_apply_page_content")
 	_check(_page_turn_cue_count == 1, "one Enter key press emits exactly one page-turn cue")
 	while overlay.current_page < overlay.PAGES.size() - 1:
 		overlay.next_button.emit_signal("pressed")
@@ -105,12 +124,26 @@ func _run() -> void:
 	_check(not audio.music_enabled and not audio.music_player.playing, "music can be disabled independently")
 	audio.set_sfx_enabled(false)
 	_check(not audio.sfx_enabled, "sound effects can be disabled independently")
+	audio.set_music_enabled(true)
+	await process_frame
+	_check(audio.music_player.playing, "music can resume before graceful shutdown")
+	audio.tree_exited.connect(func() -> void: _audio_tree_exited = true)
+	await audio.settle_for_shutdown(self)
+	_check(not audio.music_player.playing, "graceful shutdown stops background music")
+	_check(audio.music_player.stream == null, "graceful shutdown releases the music stream")
+	for player: AudioStreamPlayer in audio.sfx_players:
+		_check(player.stream == null, "graceful shutdown releases every SFX stream")
+	audio.free()
+	audio = null
+	for _frame in range(AudioDirectorScript.SHUTDOWN_FREE_SETTLE_FRAMES):
+		await process_frame
+	_check(_audio_tree_exited, "audio director exits the scene tree before process shutdown")
 
 	if _failed:
-		await TestCleanup.finish(self, [audio, overlay], 1)
+		await TestCleanup.finish(self, [overlay], 1)
 	else:
 		print("Tutorial animation and original audio test passed. Pages=6 AudioAssets=%d" % AUDIO_PATHS.size())
-		await TestCleanup.finish(self, [audio, overlay], 0)
+		await TestCleanup.finish(self, [overlay], 0)
 
 
 func _check(condition: bool, message: String) -> void:

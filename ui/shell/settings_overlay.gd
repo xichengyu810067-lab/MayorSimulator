@@ -125,19 +125,22 @@ func _ensure_built() -> void:
 
 	_panel = PanelContainer.new()
 	_panel.name = "SettingsPanel"
-	_panel.custom_minimum_size = Vector2(700, 640)
+	# Six compact settings rows plus the header fit this bounded sheet without
+	# leaving a billboard-sized blank field below the tutorial action.
+	_panel.custom_minimum_size = Vector2(680, 432)
 	_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	center.add_child(_panel)
 
 	var margin := MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 28)
-	margin.add_theme_constant_override("margin_top", 22)
-	margin.add_theme_constant_override("margin_right", 22)
-	margin.add_theme_constant_override("margin_bottom", 24)
+	margin.add_theme_constant_override("margin_left", 26)
+	margin.add_theme_constant_override("margin_top", 20)
+	margin.add_theme_constant_override("margin_right", 26)
+	margin.add_theme_constant_override("margin_bottom", 22)
 	_panel.add_child(margin)
 
 	var content := VBoxContainer.new()
-	content.add_theme_constant_override("separation", 18)
+	content.name = "SettingsContent"
+	content.add_theme_constant_override("separation", 12)
 	margin.add_child(content)
 
 	var header := HBoxContainer.new()
@@ -160,6 +163,7 @@ func _ensure_built() -> void:
 	header.add_child(close_button)
 
 	var language_row := _setting_row("介面語言")
+	language_row.name = "LanguageSettingsRow"
 	content.add_child(language_row)
 	language_selector = ProgressiveOptionButtonScript.new()
 	language_selector.name = "SettingsLanguageSelector"
@@ -178,6 +182,7 @@ func _ensure_built() -> void:
 	language_row.add_child(language_selector)
 
 	var appearance_row := _setting_row("顯示模式")
+	appearance_row.name = "AppearanceSettingsRow"
 	content.add_child(appearance_row)
 	var theme_picture := TextureRect.new()
 	theme_picture.name = "ThemeModeIcon"
@@ -188,7 +193,7 @@ func _ensure_built() -> void:
 	theme_picture.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	appearance_row.add_child(theme_picture)
 	var appearance_actions := HBoxContainer.new()
-	appearance_actions.add_theme_constant_override("separation", 10)
+	appearance_actions.add_theme_constant_override("separation", 12)
 	appearance_row.add_child(appearance_actions)
 	light_button = _mode_button("LightThemeButton", "淺色")
 	dark_button = _mode_button("DarkThemeButton", "深色")
@@ -197,8 +202,9 @@ func _ensure_built() -> void:
 	appearance_actions.add_child(light_button)
 	appearance_actions.add_child(dark_button)
 
-	var audio_row := _setting_row("聲音")
-	content.add_child(audio_row)
+	var audio_toggles := _setting_row("聲音")
+	audio_toggles.name = "AudioToggleRow"
+	content.add_child(audio_toggles)
 	var audio_picture := TextureRect.new()
 	audio_picture.name = "AudioSettingsIcon"
 	audio_picture.texture = UiIconCatalog.texture("settings")
@@ -206,14 +212,7 @@ func _ensure_built() -> void:
 	audio_picture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	audio_picture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	audio_picture.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	audio_row.add_child(audio_picture)
-	var audio_actions := VBoxContainer.new()
-	audio_actions.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	audio_actions.add_theme_constant_override("separation", 8)
-	audio_row.add_child(audio_actions)
-	var audio_toggles := HBoxContainer.new()
-	audio_toggles.add_theme_constant_override("separation", 10)
-	audio_actions.add_child(audio_toggles)
+	audio_toggles.add_child(audio_picture)
 	music_button = _mode_button("MusicToggleButton", "配樂")
 	music_button.toggle_mode = true
 	music_button.set_pressed_no_signal(_music_enabled)
@@ -234,6 +233,7 @@ func _ensure_built() -> void:
 	audio_toggles.add_child(sfx_button)
 
 	var music_volume_controls := _volume_row("配樂音量", "MusicVolumeSlider", _music_volume)
+	(music_volume_controls["row"] as HBoxContainer).name = "MusicVolumeRow"
 	music_volume_slider = music_volume_controls["slider"]
 	music_volume_label = music_volume_controls["value_label"]
 	music_volume_slider.value_changed.connect(func(value: float) -> void:
@@ -241,9 +241,10 @@ func _ensure_built() -> void:
 		_refresh_volume_labels()
 		music_volume_selected.emit(_music_volume)
 	)
-	audio_actions.add_child(music_volume_controls["row"])
+	content.add_child(music_volume_controls["row"])
 
 	var sfx_volume_controls := _volume_row("音效音量", "SfxVolumeSlider", _sfx_volume)
+	(sfx_volume_controls["row"] as HBoxContainer).name = "SfxVolumeRow"
 	sfx_volume_slider = sfx_volume_controls["slider"]
 	sfx_volume_label = sfx_volume_controls["value_label"]
 	sfx_volume_slider.value_changed.connect(func(value: float) -> void:
@@ -251,9 +252,10 @@ func _ensure_built() -> void:
 		_refresh_volume_labels()
 		sfx_volume_selected.emit(_sfx_volume)
 	)
-	audio_actions.add_child(sfx_volume_controls["row"])
+	content.add_child(sfx_volume_controls["row"])
 
 	var tutorial_row := _setting_row("新手引導")
+	tutorial_row.name = "TutorialSettingsRow"
 	content.add_child(tutorial_row)
 	var tutorial_picture := TextureRect.new()
 	tutorial_picture.name = "TutorialSettingsIcon"
@@ -280,11 +282,12 @@ func _ensure_built() -> void:
 
 func _setting_row(label_text: String) -> HBoxContainer:
 	var row := HBoxContainer.new()
-	row.custom_minimum_size = Vector2(0, 70)
-	row.add_theme_constant_override("separation", 18)
+	row.custom_minimum_size = Vector2(0, 44)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_theme_constant_override("separation", 12)
 	var label := Label.new()
 	label.text = label_text
-	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	label.custom_minimum_size = Vector2(148, 44)
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.add_theme_font_size_override("font_size", 21)
 	_section_labels.append(label)
@@ -296,17 +299,31 @@ func _mode_button(node_name: String, label_text: String) -> Button:
 	var button := Button.new()
 	button.name = node_name
 	button.text = label_text
-	button.custom_minimum_size = Vector2(112, 50)
+	button.tooltip_text = label_text
+	button.custom_minimum_size = Vector2(150, 44)
+	button.clip_text = true
+	button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	button.add_theme_font_size_override("font_size", 18)
 	return button
 
 
 func _volume_row(label_text: String, node_name: String, value: float) -> Dictionary:
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 10)
+	row.custom_minimum_size = Vector2(0, 44)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_theme_constant_override("separation", 12)
 	var label := Label.new()
 	label.text = label_text
-	label.custom_minimum_size = Vector2(118, 42)
+	# Keep both rails on one fixed axis in every locale. Without clipping, a
+	# longer translation expands one label's intrinsic minimum and shifts only
+	# that slider to the right.
+	# Volume captions need a wider shared column than the short section labels;
+	# 196px keeps the complete English "Sound effects volume" visible while the
+	# slider still has ample room inside the compact 680px sheet.
+	label.custom_minimum_size = Vector2(196, 44)
+	label.clip_text = true
+	label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	label.tooltip_text = label_text
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.add_theme_font_size_override("font_size", 18)
 	_section_labels.append(label)
@@ -323,7 +340,7 @@ func _volume_row(label_text: String, node_name: String, value: float) -> Diction
 	slider.tooltip_text = "%s（0–100%%）" % label_text
 	row.add_child(slider)
 	var value_label := Label.new()
-	value_label.custom_minimum_size = Vector2(68, 42)
+	value_label.custom_minimum_size = Vector2(72, 44)
 	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	value_label.add_theme_font_size_override("font_size", 18)

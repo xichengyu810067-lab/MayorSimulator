@@ -62,20 +62,160 @@ func _run() -> void:
 	fresh.set_runtime_snapshot(reload_snapshot, _centers())
 	if fresh.active_vehicle_count() >= initial_count: _fail("suspended route did not withdraw actors after reload"); return
 	fresh.free()
+	var synthetic_transform := native_stage.get_global_transform_with_canvas()
+	native_stage.queue_free()
+	viewport.queue_free()
+	await _settle(6)
+	var entry_flow: Dictionary = await _actual_main_entry_flow()
+	if failed or entry_flow.is_empty(): return
 	var result := {
 		"schema_version": 1, "suite": "mayor-simulator-transport-current-native-visible-acceptance", "status": "PASS",
 		"commit": OS.get_environment("MAYOR_ACCEPTANCE_COMMIT"), "display_server": DisplayServer.get_name(),
 		"window_mode": DisplayServer.window_get_mode(), "window_size": _v2i(DisplayServer.window_get_size()),
 		"native_root": {"surface_kind":"native_fullscreen_root", "size":_v2i(Vector2i(root.get_texture().get_width(), root.get_texture().get_height()))},
 		"viewport": {"surface_kind":"offscreen_subviewport", "size":[2880,1800], "mirrored":false},
-		"scripted_input": "none; no physical mouse claim", "captures": records, "actor_kinds": ["car","motorcycle","bus","metro_train","train","plane"], "crossing_interlock": interlock_evidence,
+		"scripted_input": "programmatic button signals; no physical mouse claim", "captures": records, "actor_kinds": ["car","motorcycle","bus","metro_train","train","plane"], "crossing_interlock": interlock_evidence,
 		"reload": {"fresh_controller":true, "mixed_actor_count":6, "suspended_route_actor_count":0, "suspended_route_revenue":0},
-		"map_stage_transform": native_stage.get_global_transform_with_canvas(),
+		"map_stage_transform": synthetic_transform,
+		"actual_main_entry_flow": entry_flow,
 	}
 	var file := FileAccess.open(output_dir.path_join("transport-current-result.json"), FileAccess.WRITE)
 	file.store_string(JSON.stringify(result, "\t")); file.close()
-	print("TRANSPORT_CURRENT_NATIVE_VISIBLE_ACCEPTANCE_PASSED captures=4 actors=6")
-	native_stage.queue_free(); viewport.queue_free(); await _settle(4); quit(0)
+	print("TRANSPORT_CURRENT_NATIVE_VISIBLE_ACCEPTANCE_PASSED captures=4 actors=6 actual_main_entry_flow=true")
+	await _settle(4); quit(0)
+
+
+func _actual_main_entry_flow() -> Dictionary:
+	var packed := load("res://scenes/Main.tscn") as PackedScene
+	if packed == null:
+		_fail("actual Main scene could not be loaded for entry-flow evidence")
+		return {}
+	var main = packed.instantiate()
+	main.start_save_path = "user://mayor_simulator/tests/transport_current_entry_flow.json"
+	root.add_child(main)
+	await _settle(12)
+	main.start_screen.animation_duration = 0.04
+	main.start_screen.new_game_button.emit_signal("pressed")
+	for _frame in range(180):
+		if main._game_started and not main.start_screen.visible:
+			break
+		await process_frame
+	if not main._game_started or main.start_screen.visible:
+		_fail("actual Main new game did not reach the entry-flow map")
+		return {}
+	if main.tutorial_overlay != null and main.tutorial_overlay.is_open():
+		main.tutorial_overlay.skip_button.emit_signal("pressed")
+		await _settle(6)
+	main.vertical_slice.set_time_paused(true)
+	main.municipal_overlay.open_page("buildings")
+	main._select_building_group("mobility")
+	await _settle(6)
+	if main.municipal_overlay.find_child("OpenBlueprintButton", true, false) != null:
+		_fail("actual Main building page still exposes OpenBlueprintButton")
+		return {}
+	if main.municipal_overlay.find_child("OpenTransportPlanningButton", true, false) != null:
+		_fail("actual Main building page still exposes OpenTransportPlanningButton")
+		return {}
+	var station_card := main.municipal_overlay.find_child("BuildingCard_公車站", true, false) as Button
+	if station_card == null or not station_card.is_visible_in_tree():
+		_fail("actual Main building page does not expose the bus-station card")
+		return {}
+	var entry_captures: Array[Dictionary] = []
+	var buildings_capture := _capture_actual_main("transport-entry-buildings-native.png")
+	if buildings_capture.is_empty(): return {}
+	entry_captures.append(buildings_capture)
+	station_card.pressed.emit()
+	await _settle(6)
+	if main.municipal_overlay.current_page() != "blueprint" or main.selected_building != "公車站":
+		_fail("actual Main station card did not open its blueprint directly")
+		return {}
+	var blueprint_capture := _capture_actual_main("transport-entry-blueprint-native.png")
+	if blueprint_capture.is_empty(): return {}
+	entry_captures.append(blueprint_capture)
+	var station_action := main.vertical_slice_panel.find_child("SubmitBlueprintButton", true, false) as Button
+	if station_action == null or station_action.disabled or not station_action.text.contains("連續站點"):
+		_fail("actual Main approved station blueprint lacks the continuous-planning action")
+		return {}
+	var funds_before := int(main.vertical_slice.treasury_balance())
+	var jobs_before := int(main.vertical_slice.construction.jobs.size())
+	station_action.pressed.emit()
+	await _settle(4)
+	var session: Dictionary = main.vertical_slice.transport_planning_session_snapshot()
+	var session_id := str(session.get("id", ""))
+	if session_id.is_empty() or str(session.get("state", "")) != "station_placement":
+		_fail("actual Main blueprint action did not create one station-placement session")
+		return {}
+	if int(main.vertical_slice.treasury_balance()) != funds_before or int(main.vertical_slice.construction.jobs.size()) != jobs_before:
+		_fail("starting the actual Main station session charged funds or created a job")
+		return {}
+	main._cancel_building_placement(true)
+	main._open_transport_planning()
+	await _settle(6)
+	if main.transport_planning_panel.has_signal("station_requested"):
+		_fail("actual Main transport page still exposes station_requested")
+		return {}
+	if main.transport_planning_panel.find_child("TransportStationPager", true, false) != null:
+		_fail("actual Main transport page still exposes a station pager")
+		return {}
+	if main.transport_planning_panel.find_child("TransportStationSection", true, false) != null:
+		_fail("actual Main transport page still exposes a station creation section")
+		return {}
+	var continue_button := main.transport_planning_panel.find_child("TransportPlanningSessionContinue", true, false) as Button
+	if continue_button == null or continue_button.disabled or not continue_button.is_visible_in_tree():
+		_fail("actual Main transport page cannot continue its existing session")
+		return {}
+	var transport_capture := _capture_actual_main("transport-existing-session-native.png")
+	if transport_capture.is_empty(): return {}
+	entry_captures.append(transport_capture)
+	var refs_before := Array(session.get("station_refs", [])).size()
+	continue_button.pressed.emit()
+	await _settle(4)
+	var continued: Dictionary = main.vertical_slice.transport_planning_session_snapshot()
+	if str(continued.get("id", "")) != session_id or str(continued.get("state", "")) != "station_placement":
+		_fail("existing-session continue changed session identity or state")
+		return {}
+	if Array(continued.get("station_refs", [])).size() != refs_before:
+		_fail("existing-session continue duplicated a station reference")
+		return {}
+	if int(main.vertical_slice.treasury_balance()) != funds_before or int(main.vertical_slice.construction.jobs.size()) != jobs_before:
+		_fail("existing-session continue charged funds or created a job")
+		return {}
+	main._cancel_building_placement(true)
+	main.queue_free()
+	await _settle(6)
+	return {
+		"actual_main": true,
+		"scene": "res://scenes/Main.tscn",
+		"single_creation_entry": "municipal -> buildings -> transport station card -> blueprint -> approved continuous planning",
+		"duplicate_building_shortcuts": 0,
+		"transport_station_pagers": 0,
+		"transport_station_signals": 0,
+		"existing_session_continue": true,
+		"session_id_preserved": true,
+		"station_reference_delta_on_continue": 0,
+		"construction_job_delta_before_confirmation": 0,
+		"funds_delta_before_confirmation": 0,
+		"captures": entry_captures,
+	}
+
+
+func _capture_actual_main(filename: String) -> Dictionary:
+	var image := root.get_texture().get_image()
+	if image.is_empty():
+		_fail("actual Main native capture is empty: %s" % filename)
+		return {}
+	var path := output_dir.path_join(filename)
+	if image.save_png(path) != OK:
+		_fail("failed actual Main native capture: %s" % filename)
+		return {}
+	var size := image.get_size()
+	return {
+		"filename": filename,
+		"width": size.x,
+		"height": size.y,
+		"bytes": FileAccess.get_file_as_bytes(path).size(),
+		"sha256": FileAccess.get_sha256(path).to_lower(),
+	}
 
 func _make_stage(stage_size: Vector2) -> Control:
 	var stage := Control.new(); stage.size = stage_size

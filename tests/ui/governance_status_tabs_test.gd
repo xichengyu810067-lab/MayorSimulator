@@ -18,9 +18,15 @@ func _run() -> void:
 	await process_frame
 	await process_frame
 	await process_frame
+	main._open_municipal_center()
+	await process_frame
 	var l10n = root.get_node_or_null("L10n")
 
 	var tabs := main.governance_status_tabs as TabContainer
+	_check(not main.lower_council_stage.is_class("ScrollContainer"), "governance root is a fixed scene workflow, not a vertical page scroller")
+	_check(main.lower_council_stage.find_children("*", "ScrollContainer", true, false).is_empty(), "governance scene workflow has no nested vertical scroll container")
+	var idle_layout: Dictionary = main.lower_council_stage.debug_signature()
+	_check(bool(idle_layout.get("catalog_visible", false)) and not bool(idle_layout.get("hearing_controls_visible", true)), "idle chamber keeps the policy and bill catalog inside its action tray")
 	_check(tabs != null and tabs.get_tab_count() == 3, "governance exposes exactly three status tabs")
 	_check(l10n != null and tabs.get_tab_title(0).begins_with(l10n.text("已實施")), "first tab is implemented")
 	_check(l10n != null and tabs.get_tab_title(1).begins_with(l10n.text("審核中")), "second tab is under review")
@@ -44,6 +50,21 @@ func _run() -> void:
 	await process_frame
 	_check(_parent_name(main.governance_bill_cards["交通建設法案"]) == "review_bill_Grid", "submitted bill moves to review")
 	_check(tabs.current_tab == 1, "successful submission opens the review tab")
+	var decision_day := int(main.vertical_slice.governance.pending_bill.get("decision_day", -1))
+	var hearing_events: Array[Dictionary] = main.vertical_slice.advance_days(
+		decision_day - main.vertical_slice.game_day(),
+		{"public_support": 70, "regional_support": {"north": 70, "east": 70, "south": 70, "west": 70}},
+		false
+	)
+	main._consume_vertical_events(hearing_events)
+	main._update_ui()
+	main.municipal_overlay.open_page("governance")
+	await process_frame
+	var hearing_signature: Dictionary = main.lower_council_stage.debug_signature()
+	_check(bool(hearing_signature.get("visible", false)), "review bill opens the lower-council hearing stage on decision day")
+	_check(int(hearing_signature.get("seat_count", 0)) == 30 and int(hearing_signature.get("majority_threshold", 0)) == 16, "hearing stage shows 30 seats and threshold 16")
+	_check(int(hearing_signature.get("response_option_count", 0)) == 3, "hearing stage shows exactly three mayor response choices")
+	_check(not bool(hearing_signature.get("catalog_visible", true)) and bool(hearing_signature.get("hearing_controls_visible", false)), "hearing swaps the catalog for response and confirmation controls within the same stage")
 
 	main.vertical_slice.governance.pending_bill.clear()
 	main.vertical_slice.governance.active_laws["transit_act"] = {

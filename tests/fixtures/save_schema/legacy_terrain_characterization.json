@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "purpose": "immutable Phase A baseline for schema 4 to 6 terrain compatibility",
+  "source_contract": {
+    "head": "5e70cbfd026574a7c2f347beac2de8d6c9edc5ff",
+    "tree": "67fb921a66a0bf4761880114b5ea9a2d4f25b3cf",
+    "canonical_source_fingerprint": "36a8d72f26e726ef354dab2dcd441fa6c5cc1e6f98efd9111a7f4a6729cab6e7",
+    "canonical_file_count": 1415,
+    "canonical_total_bytes": 237984577
+  },
+  "lineage": {
+    "r1_results_sha256": "d7f8278f1fd2ddeb03ccf90a28e1b956817bfc0fb11b01915cf01974509b1b9e",
+    "r1_handback_sha256": "a468d6e59bfabda186b121864c02db900192cc7c5199c7e688d6e06256453b5b",
+    "r5_manifest_sha256": "09ed610184f0f4dbcbf03f236fa3766a23c3d6d94e8b82b9b9c178de442eb124",
+    "r5_results_sha256": "9088c8e71e038c4ae97c5d1a073e2db876da6c0ea96c5c5e7cf964d16ceab8a1",
+    "p1_current_round_trip_sha256": "a1f865a3074be346f3cd122b1b3c11249a848be78cdab434b6b63c78f71bd731",
+    "p1_current_round_trip_git_blob": "a7c3ff65cf9c3cdb21c2c9bbad096e551c7cd296"
+  },
+  "semantic_comparison": {
+    "object_keys": "ordinal_sorted",
+    "arrays": "preserve_order_and_container",
+    "numbers": "finite_integral_float_to_integer",
+    "typed_hashes_are_not_semantic_equality": true
+  },
+  "shared_empty_domain_hashes": {
+    "buildings": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "jobs": "159f71cb211f6cff0c50010f0d74ed3281e8c80fa2ffba03d7c261c3b57e3733",
+    "footprints": "30140930c52da45d083bde86f54d5e1d80c9781834f4b434d05a7a6a91de2c41",
+    "npcs": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "transport": "3aeeb9d829483cba169fea3aab22d311cf393a92980524de1301e776a51419cf",
+    "time": "b4675722bf7e5613f0a913f277ea04067672222901c162f414dfe2a7e98fc792"
+  },
+  "cases": [
+    {
+      "name": "schema4_absent_tracked",
+      "input_sha256": "456fa25513cba2eebf83491f796822e82acc252bd31723f2853e81c93ed4b2e7",
+      "input_source": "tests/fixtures/save_schema/oldest_supported_vertical_4.json",
+      "source_schema": 4,
+      "terrain_mode": "absent",
+      "historical_status": "tracked_schema4",
+      "expected_domains": {"population":"7fe302a3032f54ae8120fe53104d91791f5e4ab430383b2e31420085ebedd6e1","addresses":"146a6aa50795ae74aab104675b03cc4d8567646ae7ea6c504193ae3fa4daea89","finance":"ffeb295a1bba2de71b16f2a4230ccf0b0d1f9a4dfa37196ce045a965410b8afb"},
+      "expected_flattened_tile_ids": []
+    },
+    {
+      "name": "schema4_present_layout3_compat",
+      "input_sha256": "ff441aa78cfe6cd84b53bc3d48b2eb60287ab4039ed5ed8183dac572e2e3168d",
+      "input_source": "schema4_absent_tracked plus immutable P1 layout3 terrain",
+      "source_schema": 4,
+      "terrain_mode": "present_layout3",
+      "historical_status": "compatibility_probe_not_historical",
+      "expected_domains": {"population":"7fe302a3032f54ae8120fe53104d91791f5e4ab430383b2e31420085ebedd6e1","addresses":"146a6aa50795ae74aab104675b03cc4d8567646ae7ea6c504193ae3fa4daea89","finance":"ffeb295a1bba2de71b16f2a4230ccf0b0d1f9a4dfa37196ce045a965410b8afb"},
+      "expected_flattened_tile_ids": []
+    },
+    {
+      "name": "schema5_absent_compat",
+      "input_sha256": "b0965c4eada0344aca0104db6b5bbfbb3b6551e3f154cfbb3e355d21ca861718",
+      "input_source": "immutable schema4 tracked input retagged to schema5",
+      "source_schema": 5,
+      "terrain_mode": "absent",
+      "historical_status": "compatibility_probe_not_historical",
+      "expected_domains": {"population":"7fe302a3032f54ae8120fe53104d91791f5e4ab430383b2e31420085ebedd6e1","addresses":"146a6aa50795ae74aab104675b03cc4d8567646ae7ea6c504193ae3fa4daea89","finance":"ffeb295a1bba2de71b16f2a4230ccf0b0d1f9a4dfa37196ce045a965410b8afb"},
+      "expected_flattened_tile_ids": []
+    },
+    {
+      "name": "schema5_present_layout3_compat",
+      "input_sha256": "f0301b79000aa6d06d12ed0252e0a966028fdae78d0c5f9e5a55eb710aac4246",
+      "input_source": "immutable schema5 absent input plus immutable P1 layout3 terrain",
+      "source_schema": 5,
+      "terrain_mode": "present_layout3",
+      "historical_status": "compatibility_probe_not_historical",
+      "expected_domains": {"population":"7fe302a3032f54ae8120fe53104d91791f5e4ab430383b2e31420085ebedd6e1","addresses":"146a6aa50795ae74aab104675b03cc4d8567646ae7ea6c504193ae3fa4daea89","finance":"ffeb295a1bba2de71b16f2a4230ccf0b0d1f9a4dfa37196ce045a965410b8afb"},
+      "expected_flattened_tile_ids": []
+    },
+    {
+      "name": "schema6_absent_compat",
+      "input_sha256": "874dad58ceb0d6a2944b0de5d463638ca9efbedd3f08361bb41f2a8d58e26cf6",
+      "input_source": "immutable save_recovery schema6 pattern",
+      "source_schema": 6,
+      "terrain_mode": "absent",
+      "historical_status": "compatibility_probe_not_historical",
+      "expected_domains": {"population":"d03ffeaf95fc6673bd523beb23f0fe15c9a0a505fb28e76f8c5b7fcca9b0e8a0","addresses":"76a87a8fef1956a7e7b8d2a387357741eca43cde12887c0205e64b09033fdd29","finance":"eef3a1cb5bd2fa7173bee52307aac24c65d3a253c0ef4aa9b521127f53c7d968"},
+      "expected_flattened_tile_ids": []
+    },
+    {
+      "name": "schema6_present_layout3_compat",
+      "input_sha256": "9d13f158fbfb4ff639ee045687b8472d004854ace43bb899bb8b431b3238d202",
+      "input_source": "immutable schema6 absent input plus immutable P1 layout3 terrain",
+      "source_schema": 6,
+      "terrain_mode": "present_layout3",
+      "historical_status": "compatibility_probe_not_historical",
+      "expected_domains": {"population":"d03ffeaf95fc6673bd523beb23f0fe15c9a0a505fb28e76f8c5b7fcca9b0e8a0","addresses":"76a87a8fef1956a7e7b8d2a387357741eca43cde12887c0205e64b09033fdd29","finance":"eef3a1cb5bd2fa7173bee52307aac24c65d3a253c0ef4aa9b521127f53c7d968"},
+      "expected_flattened_tile_ids": []
+    },
+    {
+      "name": "schema4_absent_occupied_worksite",
+      "input_sha256": "761899a831b60b45c9e3ea79f88d8a8814efa52609c7b4006b1629ccf40fa405",
+      "input_source": "immutable public coordinator construction fixture matching save_recovery patterns",
+      "source_schema": 4,
+      "terrain_mode": "absent",
+      "historical_status": "compatibility_probe_not_historical",
+      "expected_domains": {"buildings":"a5b775b278dc5ca0bb60afe8fbf2212b711f30b318611230cdff81c26acf10a1","jobs":"3f2fff632730d7f2bbf72ba204b7abab05ba631b4086b5c9176a7f71be9818e2","footprints":"f390081dbcead14aa9305aa7957bd9437bab18804fb2412cb7ad8756867d1e07","population":"f82caf4104d38dc5c508733aede53edd7edc8e4a7d70bf7bd23013a5d744bade","addresses":"5c03ceaf49fe89aa02a975935bc6fb6df32d7b22eb182be1ff893dfc77308cfd","finance":"b5b0472a9ec38c010436c25c779d0b3185d03d1fe2970291d3f1bd7e4f059414","time":"adcd5e0268ff5862f3c22fac1df10240350f8c8d9f491258b4c514a29d7bcc0a"},
+      "expected_flattened_tile_ids": [0, 1],
+      "expected_ledger_balance": 459000
+    }
+  ]
+}

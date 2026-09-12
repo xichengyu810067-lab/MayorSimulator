@@ -1,6 +1,10 @@
 class_name CityNavigationGrid
 extends RefCounted
 
+const CityTerrainLayoutScript = preload("res://data/catalogs/city_terrain_layout.gd")
+const CityBackdropTerrainCatalog = preload("res://data/catalogs/city_backdrop_terrain.gd")
+const SquareGridLayoutScript = preload("res://scripts/world/square_grid_layout.gd")
+
 ## Deterministic, stage-local navigation for the fixed 1120x820 city map.
 ##
 ## The navigation grid deliberately does not depend on Control/global canvas
@@ -10,10 +14,10 @@ extends RefCounted
 
 const STAGE_SIZE := Vector2(1120.0, 820.0)
 const BACKDROP_ASSET_PATH := "res://assets/images/world/backgrounds/city-map-background.png"
-const BACKDROP_ISO_TILE_STEP := Vector2(56.0, 32.0)
-const BACKDROP_ISO_MAP_ORIGIN := Vector2(560.0, 104.0)
-const BACKDROP_TILE_FOOT_OFFSET_Y := 34.0
-const BACKDROP_PLOT_HALF_EXTENTS := Vector2(49.0, 29.0)
+const BACKDROP_ISO_TILE_STEP := SquareGridLayoutScript.CELL_SIZE
+const BACKDROP_ISO_MAP_ORIGIN := SquareGridLayoutScript.GRID_ORIGIN
+const BACKDROP_TILE_FOOT_OFFSET_Y := 0.0
+const BACKDROP_PLOT_HALF_EXTENTS := SquareGridLayoutScript.CELL_SIZE * 0.5
 const BACKDROP_MIN_PLOT_COVERAGE := 0.035
 const GRID_CELL_SIZE := 10.0
 const GRID_SIZE := Vector2i(112, 82)
@@ -39,7 +43,7 @@ var _last_query_diagnostics: Dictionary = {}
 
 func _init(foot_radius: float = DEFAULT_FOOT_RADIUS) -> void:
 	_foot_radius = maxf(0.0, foot_radius)
-	_static_polygons = _create_static_polygons()
+	_static_polygons = _create_layout_terrain_polygons()
 	_configure_astar()
 	_rebuild_static_solidity()
 	_refresh_grid_solidity()
@@ -97,26 +101,23 @@ func static_classification_at(position: Vector2) -> PackedStringArray:
 	return kinds
 
 
-## The backdrop polygons are the single terrain source for both plot legality
-## and NPC navigation. They model scenery painted into the original image.
+## Layout 3's frozen backdrop classification is the shared terrain source for
+## both plot legality and NPC navigation. Its geometry now comes from the
+## canonical square grid while retaining the original image-derived kinds.
 static func backdrop_terrain_for_coordinate(coordinate: Vector2i) -> Dictionary:
-	return backdrop_terrain_for_plot(
-		backdrop_tile_center(coordinate), BACKDROP_PLOT_HALF_EXTENTS
-	)
+	return CityTerrainLayoutScript.model_for_coordinate(coordinate)
 
 
 static func backdrop_tile_center(coordinate: Vector2i) -> Vector2:
-	return Vector2(
-		BACKDROP_ISO_MAP_ORIGIN.x + float(coordinate.x - coordinate.y) * BACKDROP_ISO_TILE_STEP.x,
-		BACKDROP_ISO_MAP_ORIGIN.y + float(coordinate.x + coordinate.y) * BACKDROP_ISO_TILE_STEP.y + BACKDROP_TILE_FOOT_OFFSET_Y
-	)
+	return SquareGridLayoutScript.center_for_coordinate(coordinate)
 
 
 static func backdrop_terrain_for_plot(center: Vector2, half_extents: Vector2) -> Dictionary:
-	var plot := _diamond_points(center, half_extents)
+	var plot := _rect_points(center, half_extents)
 	var plot_area := maxf(1.0, _polygon_area(plot))
 	var coverage_by_kind: Dictionary = {}
 	var feature_ids_by_kind: Dictionary = {}
+	var kind_order := PackedStringArray()
 	for polygon_data: Dictionary in _create_static_polygons():
 		var overlap_area := 0.0
 		for intersection: PackedVector2Array in Geometry2D.intersect_polygons(
@@ -127,15 +128,16 @@ static func backdrop_terrain_for_plot(center: Vector2, half_extents: Vector2) ->
 		if coverage < BACKDROP_MIN_PLOT_COVERAGE:
 			continue
 		var kind := str(polygon_data.get("kind", ""))
+		if not coverage_by_kind.has(kind):
+			kind_order.append(kind)
 		coverage_by_kind[kind] = float(coverage_by_kind.get(kind, 0.0)) + coverage
 		var ids: Array = Array(feature_ids_by_kind.get(kind, [])).duplicate()
 		ids.append(str(polygon_data.get("id", "")))
 		feature_ids_by_kind[kind] = ids
 	var winning_kind := "flat_grass"
 	var winning_coverage := 0.0
-	for kind_variant: Variant in coverage_by_kind.keys():
-		var kind := str(kind_variant)
-		var coverage := float(coverage_by_kind[kind_variant])
+	for kind: String in kind_order:
+		var coverage := float(coverage_by_kind[kind])
 		if coverage > winning_coverage:
 			winning_kind = kind
 			winning_coverage = coverage
@@ -264,7 +266,7 @@ func set_building_blocker(
 	enabled: bool = true,
 	half_extents: Vector2 = DEFAULT_DYNAMIC_HALF_EXTENTS
 ) -> void:
-	set_dynamic_diamond(
+	set_dynamic_rect(
 		"building:%d" % tile_index,
 		center,
 		half_extents,
@@ -281,7 +283,7 @@ func set_construction_blocker(
 	enabled: bool = true,
 	half_extents: Vector2 = DEFAULT_DYNAMIC_HALF_EXTENTS
 ) -> void:
-	set_dynamic_diamond(
+	set_dynamic_rect(
 		"construction:%d" % tile_index,
 		center,
 		half_extents,
@@ -299,7 +301,7 @@ func set_terrain_blocker(
 	enabled: bool = true,
 	half_extents: Vector2 = DEFAULT_DYNAMIC_HALF_EXTENTS
 ) -> void:
-	set_dynamic_diamond(
+	set_dynamic_rect(
 		"terrain:%d" % tile_index,
 		center,
 		half_extents,
@@ -353,6 +355,12 @@ func sync_map_tile_blockers(
 ) -> void:
 	# Replace the complete map-owned blocker set in one A* refresh. Custom
 	# diagnostic/gameplay blockers remain untouched.
+	# Once an authoritative terrain snapshot is loaded, its tile blockers own
+	# natural navigation. The startup backdrop polygons must not leak layout 4
+	# classification into preserved legacy terrain.
+	if not _static_polygons.is_empty():
+		_static_polygons.clear()
+		_rebuild_static_solidity()
 	var retained: Dictionary = {}
 	for blocker_id_variant: Variant in _dynamic_blockers.keys():
 		var blocker_id := str(blocker_id_variant)
@@ -446,7 +454,36 @@ func set_dynamic_diamond(
 		safe_extents,
 		kind,
 		tile_index,
-		source if not source.is_empty() else kind
+		source if not source.is_empty() else kind,
+		_diamond_points(center, safe_extents)
+	)
+	_refresh_grid_solidity()
+
+
+func set_dynamic_rect(
+	blocker_id: String,
+	center: Vector2,
+	half_extents: Vector2,
+	enabled: bool = true,
+	kind: String = "dynamic",
+	tile_index: int = -1,
+	source: String = ""
+) -> void:
+	if blocker_id.is_empty():
+		return
+	if not enabled:
+		_dynamic_blockers.erase(blocker_id)
+		_refresh_grid_solidity()
+		return
+	var safe_extents := _safe_half_extents(half_extents)
+	_dynamic_blockers[blocker_id] = _dynamic_blocker_record(
+		blocker_id,
+		center,
+		safe_extents,
+		kind,
+		tile_index,
+		source if not source.is_empty() else kind,
+		_rect_points(center, safe_extents)
 	)
 	_refresh_grid_solidity()
 
@@ -467,12 +504,10 @@ func set_flattened_terrain_apertures(
 ) -> void:
 	var next_apertures: Dictionary = {}
 	var safe_extents := _safe_half_extents(half_extents)
-	var edge_normal_length := sqrt(
-		1.0 / (safe_extents.x * safe_extents.x)
-		+ 1.0 / (safe_extents.y * safe_extents.y)
+	var walkable_extents := Vector2(
+		maxf(0.5, safe_extents.x - _foot_radius),
+		maxf(0.5, safe_extents.y - _foot_radius)
 	)
-	var clearance_scale := clampf(1.0 - _foot_radius * edge_normal_length, 0.05, 1.0)
-	var walkable_extents := safe_extents * clearance_scale
 	for tile_variant: Variant in flattened_centers.keys():
 		var center_variant: Variant = flattened_centers[tile_variant]
 		if not center_variant is Vector2:
@@ -484,7 +519,7 @@ func set_flattened_terrain_apertures(
 			"center": center_variant,
 			"half_extents": safe_extents,
 			"walkable_half_extents": walkable_extents,
-			"points": _diamond_points(center_variant, walkable_extents),
+			"points": _rect_points(center_variant, walkable_extents),
 		}
 	_flattened_terrain_apertures = next_apertures
 	_rebuild_static_solidity()
@@ -795,8 +830,10 @@ func _dynamic_blocker_record(
 	half_extents: Vector2,
 	kind: String,
 	tile_index: int,
-	source: String
+	source: String,
+	points: PackedVector2Array = PackedVector2Array()
 ) -> Dictionary:
+	var resolved_points := points if not points.is_empty() else _rect_points(center, half_extents)
 	return {
 		"id": blocker_id,
 		"kind": kind,
@@ -804,8 +841,17 @@ func _dynamic_blocker_record(
 		"tile_index": tile_index,
 		"center": center,
 		"half_extents": half_extents,
-		"points": _diamond_points(center, half_extents),
+		"points": resolved_points,
 	}
+
+
+static func _rect_points(center: Vector2, half_extents: Vector2) -> PackedVector2Array:
+	return PackedVector2Array([
+		center + Vector2(-half_extents.x, -half_extents.y),
+		center + Vector2(half_extents.x, -half_extents.y),
+		center + Vector2(half_extents.x, half_extents.y),
+		center + Vector2(-half_extents.x, half_extents.y),
+	])
 
 
 func _reset_query_diagnostics() -> void:
@@ -821,175 +867,26 @@ func _reset_query_diagnostics() -> void:
 	}
 
 
+static func _create_layout_terrain_polygons() -> Array[Dictionary]:
+	var polygons: Array[Dictionary] = []
+	for tile_id in CityTerrainLayoutScript.CELL_COUNT:
+		if not CityTerrainLayoutScript.is_blocked_tile_id(tile_id):
+			continue
+		var model := CityTerrainLayoutScript.model_for_tile_id(tile_id)
+		var center := Vector2(model.get("plot_center", Vector2.INF))
+		if center == Vector2.INF:
+			continue
+		var half_extents := SquareGridLayoutScript.CELL_SIZE * 0.5
+		polygons.append({
+			"id": "terrain_layout4:%d" % tile_id,
+			"kind": str(model.get("kind", "terrain")),
+			"tile_index": tile_id,
+			"center": center,
+			"half_extents": half_extents,
+			"points": _rect_points(center, half_extents),
+		})
+	return polygons
+
+
 static func _create_static_polygons() -> Array[Dictionary]:
-	# Coordinates were authored in the fixed map_stage space, not in the source
-	# texture's 1672x941 pixel space.  Keep these records simple and non-self-
-	# intersecting so they are also suitable for debug overlay rendering.
-	return [
-		{
-			"id": "river_north",
-			"kind": KIND_RIVER_LAKE,
-			"points": PackedVector2Array([
-				Vector2(778, -12), Vector2(895, -12), Vector2(879, 42),
-				Vector2(846, 88), Vector2(858, 139), Vector2(843, 185),
-				Vector2(808, 221), Vector2(780, 201), Vector2(792, 156),
-				Vector2(779, 111), Vector2(791, 66),
-			]),
-		},
-		{
-			"id": "lake_north_central",
-			"kind": KIND_RIVER_LAKE,
-			"points": PackedVector2Array([
-				Vector2(468, 224), Vector2(518, 200), Vector2(581, 196),
-				Vector2(641, 207), Vector2(701, 214), Vector2(757, 194),
-				Vector2(807, 215), Vector2(810, 261), Vector2(778, 301),
-				Vector2(718, 329), Vector2(638, 336), Vector2(564, 330),
-				Vector2(507, 310), Vector2(475, 281),
-			]),
-		},
-		{
-			"id": "northwest_cliffs",
-			"kind": KIND_HILL_CLIFF,
-			"points": PackedVector2Array([
-				Vector2(-12, -12), Vector2(466, -12), Vector2(456, 68),
-				Vector2(418, 98), Vector2(402, 141), Vector2(367, 164),
-				Vector2(365, 207), Vector2(321, 228), Vector2(281, 215),
-				Vector2(247, 243), Vector2(205, 233), Vector2(187, 268),
-				Vector2(135, 285), Vector2(87, 258), Vector2(38, 269),
-				Vector2(-12, 239),
-			]),
-		},
-		{
-			"id": "northern_cliffs",
-			"kind": KIND_HILL_CLIFF,
-			"points": PackedVector2Array([
-				Vector2(438, -12), Vector2(781, -12), Vector2(776, 66),
-				Vector2(746, 99), Vector2(731, 142), Vector2(697, 171),
-				Vector2(651, 170), Vector2(624, 192), Vector2(570, 184),
-				Vector2(542, 166), Vector2(501, 173), Vector2(456, 147),
-				Vector2(428, 105),
-			]),
-		},
-		{
-			"id": "northeast_cliffs",
-			"kind": KIND_HILL_CLIFF,
-			"points": PackedVector2Array([
-				Vector2(884, -12), Vector2(1132, -12), Vector2(1132, 290),
-				Vector2(1082, 276), Vector2(1042, 250), Vector2(1010, 253),
-				Vector2(982, 231), Vector2(944, 239), Vector2(911, 214),
-				Vector2(875, 203), Vector2(861, 168), Vector2(881, 121),
-			]),
-		},
-		{
-			"id": "west_cliff_spur",
-			"kind": KIND_HILL_CLIFF,
-			"points": PackedVector2Array([
-				Vector2(-12, 238), Vector2(56, 246), Vector2(101, 264),
-				Vector2(141, 286), Vector2(178, 311), Vector2(202, 337),
-				Vector2(188, 367), Vector2(154, 381), Vector2(119, 361),
-				Vector2(82, 377), Vector2(42, 358), Vector2(-12, 369),
-			]),
-		},
-		{
-			"id": "west_forest",
-			"kind": KIND_TREES_SCENERY,
-			"points": PackedVector2Array([
-				Vector2(-12, 216), Vector2(49, 226), Vector2(82, 255),
-				Vector2(91, 300), Vector2(111, 340), Vector2(100, 394),
-				Vector2(119, 438), Vector2(99, 484), Vector2(118, 529),
-				Vector2(96, 575), Vector2(119, 625), Vector2(102, 678),
-				Vector2(64, 711), Vector2(-12, 708),
-			]),
-		},
-		{
-			"id": "east_forest",
-			"kind": KIND_TREES_SCENERY,
-			"points": PackedVector2Array([
-				Vector2(1017, 244), Vector2(1065, 235), Vector2(1132, 218),
-				Vector2(1132, 691), Vector2(1069, 678), Vector2(1038, 647),
-				Vector2(1048, 603), Vector2(1027, 568), Vector2(1044, 525),
-				Vector2(1021, 484), Vector2(1036, 446), Vector2(1012, 405),
-				Vector2(1029, 363), Vector2(1007, 319),
-			]),
-		},
-		{
-			"id": "southwest_forest",
-			"kind": KIND_TREES_SCENERY,
-			"points": PackedVector2Array([
-				Vector2(-12, 688), Vector2(76, 679), Vector2(143, 699),
-				Vector2(203, 679), Vector2(259, 705), Vector2(310, 688),
-				Vector2(354, 717), Vector2(375, 756), Vector2(361, 832),
-				Vector2(-12, 832),
-			]),
-		},
-		{
-			"id": "southcentral_forest",
-			"kind": KIND_TREES_SCENERY,
-			"points": PackedVector2Array([
-				Vector2(337, 717), Vector2(390, 686), Vector2(450, 681),
-				Vector2(500, 703), Vector2(548, 686), Vector2(603, 701),
-				Vector2(647, 680), Vector2(702, 692), Vector2(749, 722),
-				Vector2(763, 762), Vector2(749, 832), Vector2(330, 832),
-			]),
-		},
-		{
-			"id": "southeast_forest",
-			"kind": KIND_TREES_SCENERY,
-			"points": PackedVector2Array([
-				Vector2(729, 742), Vector2(775, 704), Vector2(827, 690),
-				Vector2(878, 704), Vector2(921, 681), Vector2(973, 694),
-				Vector2(1013, 672), Vector2(1057, 688), Vector2(1132, 675),
-				Vector2(1132, 832), Vector2(730, 832),
-			]),
-		},
-		{
-			"id": "south_meadow_rocks",
-			"kind": KIND_TREES_SCENERY,
-			"points": PackedVector2Array([
-				Vector2(657, 625), Vector2(695, 603), Vector2(739, 600),
-				Vector2(779, 616), Vector2(797, 644), Vector2(778, 674),
-				Vector2(736, 685), Vector2(691, 675), Vector2(663, 653),
-			]),
-		},
-		# The following compact scenery islands sit inside the otherwise open
-		# meadow.  Their outlines follow only the visible tree/rock/flower mass;
-		# the adjacent tan paths and grass lanes deliberately remain outside.
-		{
-			"id": "west_lower_tree_grove",
-			"kind": KIND_TREES_SCENERY,
-			"points": PackedVector2Array([
-				Vector2(88, 520), Vector2(119, 505), Vector2(153, 514),
-				Vector2(184, 533), Vector2(202, 554), Vector2(201, 583),
-				Vector2(180, 611), Vector2(143, 624), Vector2(106, 612),
-				Vector2(90, 582),
-			]),
-		},
-		{
-			"id": "south_meadow_tree_grove",
-			"kind": KIND_TREES_SCENERY,
-			"points": PackedVector2Array([
-				Vector2(748, 612), Vector2(772, 586), Vector2(807, 575),
-				Vector2(844, 588), Vector2(874, 609), Vector2(867, 641),
-				Vector2(842, 669), Vector2(805, 682), Vector2(778, 666),
-				Vector2(758, 642),
-			]),
-		},
-		{
-			"id": "east_path_rock_garden_upper",
-			"kind": KIND_TREES_SCENERY,
-			"points": PackedVector2Array([
-				Vector2(899, 537), Vector2(914, 523), Vector2(939, 519),
-				Vector2(958, 530), Vector2(957, 549), Vector2(940, 562),
-				Vector2(914, 562), Vector2(899, 550),
-			]),
-		},
-		{
-			"id": "east_path_rock_garden_lower",
-			"kind": KIND_TREES_SCENERY,
-			"points": PackedVector2Array([
-				Vector2(947, 577), Vector2(959, 565), Vector2(977, 567),
-				Vector2(988, 579), Vector2(982, 593), Vector2(964, 599),
-				Vector2(949, 591),
-			]),
-		},
-	]
+	return CityBackdropTerrainCatalog.static_polygons()

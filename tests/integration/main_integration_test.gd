@@ -13,6 +13,10 @@ func _initialize() -> void:
 
 
 func _run() -> void:
+	# Profiling instrumentation is inert in a normal integration run. The
+	# performance runner has to opt in before it can emit markers or hold frames.
+	var performance_profile_only := "--performance-profile-lazy-overlay" in OS.get_cmdline_user_args()
+	var performance_profile_hold_ms := _performance_profile_hold_ms(performance_profile_only)
 	# Headless tests need a deterministic desktop-sized layout reference. This is
 	# deliberately not the visual acceptance test; the capture suite validates the
 	# real fullscreen window separately.
@@ -73,6 +77,22 @@ func _run() -> void:
 	_check(main.city_backdrop != null and main.city_backdrop.bg_texture_rect != null, "city backdrop texture node exists")
 	if main.city_backdrop != null and main.city_backdrop.bg_texture_rect != null:
 		_check(main.city_backdrop.bg_texture_rect.texture.resource_path == BACKGROUND_PATH, "provided fantasy map is the active backdrop")
+		var terrain_projection: Dictionary = main.city_backdrop.debug_terrain_projection()
+		var backdrop_policy: Dictionary = terrain_projection.get("visual_policy", {})
+		_check(int(terrain_projection.get("tile_count", 0)) == 100, "city backdrop debug projection retains all 100 authoritative terrain cells")
+		_check(is_zero_approx(float(backdrop_policy.get("flat_grass_fill_alpha", -1.0))), "city backdrop adds a persistent flat-grass fill")
+		_check(is_zero_approx(float(backdrop_policy.get("non_flat_fill_max_alpha", -1.0))), "city backdrop adds a persistent non-flat terrain fill")
+		_check(not bool(backdrop_policy.get("persistent_terrain_overlay", true)), "city backdrop adds persistent per-cell terrain decoration")
+		_check(str(backdrop_policy.get("interactive_grid_owner", "")) == "CityTileButton", "city backdrop does not delegate interactive grid drawing to CityTileButton")
+		_check(main.city_backdrop.has_method("debug_render_order"), "city backdrop exposes no render-order debug contract")
+		if main.city_backdrop.has_method("debug_render_order"):
+			var render_order: Dictionary = main.city_backdrop.debug_render_order()
+			_check(main.city_backdrop.get_parent() == main.map_stage, "city backdrop is not attached to the actual map stage")
+			_check(int(render_order.get("backdrop_sibling_index", -1)) == 0, "city backdrop is not the first map-stage visual layer")
+			_check(int(render_order.get("background_texture_z_index", -1)) == 0, "city backdrop texture falls behind the root background")
+			_check(bool(render_order.get("background_texture_visible_in_tree", false)), "city backdrop texture is hidden in the actual Main tree")
+			_check(Rect2(render_order.get("background_texture_rect", Rect2())).size.is_equal_approx(main.city_backdrop.size), "city backdrop texture does not cover the actual map stage")
+			_check(bool(render_order.get("precedes_all_later_canvas_siblings", false)), "city backdrop does not render before transport, tiles, vehicles, and NPCs")
 
 	# The map-first shell must not instantiate the old permanent tab/sidebar or
 	# fixed top-bar UI. Only floating HUD surfaces may sit above the map.
@@ -82,23 +102,8 @@ func _run() -> void:
 		if tab.is_visible_in_tree():
 			visible_persistent_tabs.append(tab)
 	_check(visible_persistent_tabs.is_empty(), "no persistent TabContainer navigation is visible over the map")
-	var fiscal_tabs := main.find_child("FiscalCategoryTabs", true, false) as TabContainer
-	_check(fiscal_tabs != null and fiscal_tabs.get_tab_count() == 3, "finance root exposes exactly three broad categories")
-	if fiscal_tabs != null:
-		var fiscal_tab_style := fiscal_tabs.get_theme_stylebox("tab_unselected") as StyleBoxFlat
-		_check(fiscal_tab_style != null, "finance tabs expose an explicit bordered style")
-		if fiscal_tab_style != null:
-			_check(
-				fiscal_tab_style.content_margin_left >= 8.0 and fiscal_tab_style.content_margin_right >= 8.0,
-				"finance tab labels keep visible horizontal padding"
-			)
-			_check(
-				fiscal_tab_style.get_border_width(SIDE_LEFT) >= 2 and fiscal_tab_style.get_border_width(SIDE_RIGHT) >= 2,
-				"finance tabs retain clear individual boundaries"
-			)
-		for fiscal_category_variant in fiscal_tabs.get_children():
-			var subcategories := fiscal_category_variant as TabContainer
-			_check(subcategories != null and subcategories.get_tab_count() == 2, "each finance category reveals exactly two focused subcategories")
+	_check(main.find_child("FiscalCategoryTabs", true, false) == null, "finance removes the legacy nested fiscal TabContainer")
+	_check(main.municipal_overlay == null, "finance controls are deferred with the municipal overlay")
 	_check(main.find_child("RightPanel", true, false) == null, "legacy fixed side rail does not exist")
 	_check(main.find_child("ReportPanel", true, false) == null, "legacy fixed report rail does not exist")
 	_check(main.find_child("TopBar", true, false) == null, "legacy fixed TopBar is not instantiated")
@@ -146,13 +151,20 @@ func _run() -> void:
 		main.exit_button,
 	]
 	_check(compact_actions.size() == 3, "ActionDock keeps only municipal, settings, and exit actions")
+	var previous_action_rect := Rect2()
 	for action_button in compact_actions:
 		_check(action_button != null, "every main/context/exit action has a compact button")
 		if action_button == null:
 			continue
 		var action_name := str(action_button.get_meta("semantic_label", action_button.text))
-		_check(action_button.custom_minimum_size == Vector2(88.0, 88.0), "'%s' declares a readable 88x88 click target" % action_name)
+		_check(action_button.custom_minimum_size == Vector2(72.0, 72.0), "'%s' declares a readable 72x72 click target" % action_name)
 		_check(absf(action_button.size.x - action_button.size.y) <= 2.0, "'%s' renders as a square button" % action_name)
+		var action_rect: Rect2 = (action_button as Button).get_global_rect()
+		if previous_action_rect.size != Vector2.ZERO:
+			_check(absf(action_rect.position.y - previous_action_rect.position.y) <= 1.0, "compact actions share one aligned top edge")
+			_check(absf(action_rect.size.y - previous_action_rect.size.y) <= 1.0, "compact actions share one aligned height")
+			_check(absf(action_rect.position.x - previous_action_rect.end.x - 12.0) <= 1.0, "compact actions use one consistent 12px gutter")
+		previous_action_rect = action_rect
 		_check(_rect_inside_viewport(action_button.get_global_rect(), viewport_size), "compact action '%s' stays inside the viewport" % action_name)
 		var captions: Array[Node] = action_button.find_children("*", "Label", true, false)
 		_check(captions.size() == 1, "compact action '%s' has one caption" % action_name)
@@ -160,15 +172,29 @@ func _run() -> void:
 			var caption := captions[0] as Label
 			_check(caption.get_theme_font_size("font_size") >= 18, "compact action '%s' caption remains readable" % action_name)
 			_check(caption.autowrap_mode == TextServer.AUTOWRAP_WORD_SMART, "compact action '%s' caption wraps instead of clipping" % action_name)
-	_check(not main.labels["month"].tooltip_text.contains("2 分鐘"), "date HUD no longer explains the real-time day conversion")
-	_check(not main.vertical_slice.is_time_paused() and main.labels["month"].text.begins_with("▶"), "live map exposes its running state in the date HUD")
+	var date_hud := main.labels["month"] as Label
+	_check(not main.vertical_slice.is_time_paused() and date_hud.text.ends_with("· 自動"), "live map describes automatic time without a play-button affordance")
+	_check(date_hud.tooltip_text == "遊戲時間每 120 秒自動推進一天，日期區不需點擊。", "running date HUD explains the automatic clock and that it is not a button")
+	var day_before_date_hud_input := int(main.vertical_slice.game_day())
+	var date_hud_click := InputEventMouseButton.new()
+	date_hud_click.button_index = MOUSE_BUTTON_LEFT
+	date_hud_click.pressed = true
+	date_hud.emit_signal("gui_input", date_hud_click)
+	var date_hud_accept := InputEventAction.new()
+	date_hud_accept.action = "ui_accept"
+	date_hud_accept.pressed = true
+	date_hud.emit_signal("gui_input", date_hud_accept)
+	await process_frame
+	_check(int(main.vertical_slice.game_day()) == day_before_date_hud_input, "clicking or accepting the non-interactive date HUD does not advance time")
+	_check(date_hud.focus_mode == Control.FOCUS_NONE, "date HUD cannot receive keyboard focus or impersonate a button")
 
 	_check(main.settings_overlay != null and not main.settings_overlay.is_open(), "settings overlay starts closed")
 	main.settings_button.emit_signal("pressed")
 	await process_frame
 	await process_frame
 	_check(main.settings_overlay.is_open(), "settings button opens the unified settings overlay")
-	_check(main.vertical_slice.is_time_paused() and main.labels["month"].text.begins_with("Ⅱ"), "settings pauses simulation and exposes the paused state")
+	_check(main.vertical_slice.is_time_paused() and main.labels["month"].text.ends_with("· 暫停"), "settings pauses simulation and exposes the paused state without a pause-button affordance")
+	_check(main.labels["month"].tooltip_text == "管理或教學畫面開啟時會自動暫停，日期區不需點擊。", "paused date HUD explains automatic modal pausing and that it is not a button")
 	_check(main.settings_overlay.language_selector.choice_count() == 5, "settings preserves all five language choices")
 	_check(main.settings_overlay.language_selector.visible_popup_item_count() == 5, "settings exposes all five language choices on one popup page")
 	_check(main.settings_overlay.language_selector.shows_all_choices(), "settings language selector disables More paging")
@@ -176,30 +202,68 @@ func _run() -> void:
 	_check(main.find_child("GameLanguageSelector", true, false) == null, "language selector is no longer exposed as a separate HUD control")
 	main.settings_overlay.close()
 	await process_frame
-	_check(not main.vertical_slice.is_time_paused() and main.labels["month"].text.begins_with("▶"), "closing settings resumes the live map")
+	_check(not main.vertical_slice.is_time_paused() and main.labels["month"].text.ends_with("· 自動"), "closing settings resumes the automatic clock")
 
 	# Bounds checks use the live viewport instead of assuming a fixed capture size.
 	for key in ["month", "funds", "population", "satisfaction", "grievance", "trust", "score", "rating"]:
 		var status_rect: Rect2 = main.labels[key].get_global_rect()
 		_check(_rect_inside_viewport(status_rect, viewport_size), "top status '%s' stays inside the viewport" % key)
-	# Modal navigation starts out of the way, then exposes every municipal
-	# destinations through the hub's actual clickable buttons.
-	_check(main.municipal_overlay != null and not main.municipal_overlay.is_open(), "municipal overlay starts closed")
+	# Modal navigation defers the municipal control trees until the player asks
+	# for them. Opening the hub must not run the global UI sync path, because a
+	# pending governance failure would otherwise append a durable report event.
+	var original_grievance: int = main.vertical_slice.governance.grievance
+	main.vertical_slice.governance.grievance = 81
+	_check(main.vertical_slice.governance.failure_reason() == "grievance_above_80", "municipal lazy-open fixture exposes the governance-failure sync hazard")
+	var city_state_before_municipal_open: Dictionary = main.vertical_slice.session.state.to_dict()
+	var report_history_before_municipal_open: Dictionary = main.city_report_history_service.snapshot()
+	_check(main.municipal_overlay == null, "municipal overlay is not instantiated during startup")
 	_check(main.grid_buttons.all(func(button: Button) -> bool: return button.focus_mode == Control.FOCUS_ALL), "every map tile is keyboard focusable")
 	_check(main.get_visible_npc_actors().all(func(button: Button) -> bool: return button.focus_mode == Control.FOCUS_ALL), "every visible resident is keyboard focusable")
+	if performance_profile_only:
+		_emit_performance_profile_phase("startup_ready")
+		_performance_profile_hold(performance_profile_hold_ms)
 	main.municipal_button.emit_signal("pressed")
-	await process_frame
-	await process_frame
+	if performance_profile_only:
+		_emit_performance_profile_phase("first_open_completed")
+		_performance_profile_hold(performance_profile_hold_ms)
 	_check(main.municipal_overlay.is_open() and main.municipal_overlay.current_page() == "hub", "municipal button opens the hub")
-	_check(main.vertical_slice.is_time_paused() and main.labels["month"].text.begins_with("Ⅱ"), "municipal management pauses simulation while the player reads")
+	var fiscal_state: Dictionary = main.call("debug_fiscal_draft_state")
+	var fiscal_ui: Dictionary = fiscal_state.get("ui", {})
+	_check(Array(fiscal_ui.get("category_ids", [])).size() == 6, "finance exposes six focused category choices")
+	_check(Array(fiscal_ui.get("plan_ids", [])).size() == 3, "each fiscal category exposes three plan choices")
+	for category_id in ["resident_tax", "industry_tax", "utilities", "environment_energy", "city_services", "education_leisure"]:
+		var fiscal_card := main.find_child("FiscalCategoryCard_%s" % category_id, true, false) as Button
+		_check(fiscal_card != null and fiscal_card.custom_minimum_size.y >= 44.0, "fiscal category '%s' remains a reachable 44px card" % category_id)
+	var city_state_after_municipal_open: Dictionary = main.vertical_slice.session.state.to_dict()
+	var report_history_after_municipal_open: Dictionary = main.city_report_history_service.snapshot()
+	_check(city_state_after_municipal_open == city_state_before_municipal_open, "first municipal open does not mutate CityState")
+	_check(report_history_after_municipal_open == report_history_before_municipal_open, "first municipal open does not append a governance event")
+	main.vertical_slice.governance.grievance = original_grievance
+	if performance_profile_only:
+		# The profile ends after the state-preservation assertions. Write its
+		# completion evidence synchronously, then use the same leak-clean teardown
+		# as the full integration path before the SceneTree exits.
+		_emit_performance_profile_phase("validation_completed")
+		_performance_profile_hold(performance_profile_hold_ms)
+		await TestCleanup.finish(self, [main], 1 if _failed else 0)
+		return
+	await process_frame
+	await process_frame
+	await process_frame
+	_check(main.municipal_overlay.is_open() and main.municipal_overlay.current_page() == "hub", "lazy municipal hub remains live across three frames after first open")
+	_check(main.vertical_slice.is_time_paused() and main.labels["month"].text.ends_with("· 暫停"), "municipal management pauses simulation while the player reads")
 	_check(main.get_visible_npc_actors().all(func(button: Button) -> bool: return button.tooltip_text.is_empty() and button.mouse_filter == Control.MOUSE_FILTER_IGNORE), "modal opening disables resident hover tooltips and pointer input")
 	_check(main.grid_buttons.all(func(button: Button) -> bool: return button.tooltip_text.is_empty() and button.mouse_filter == Control.MOUSE_FILTER_IGNORE), "modal opening disables tile hover tooltips and pointer input")
 	var municipal_root := main.municipal_overlay.find_child("MunicipalHubRoot", true, false) as Control
-	var municipal_menu := municipal_root.find_child("MenuChoices", true, false) as GridContainer if municipal_root != null else null
+	var municipal_menu := municipal_root.find_child("MunicipalDirectDestinations", true, false) as Control if municipal_root != null else null
 	var hub_window := main.municipal_overlay.find_child("MunicipalWindow", true, false) as Control
-	_check(municipal_menu != null and municipal_menu.columns == 3, "municipal hub exposes exactly three broad categories")
+	var hub_debug: Dictionary = main.municipal_overlay.debug_hub_layout_state()
+	_check(municipal_menu != null, "municipal hub exposes a direct destination surface")
+	_check(int(hub_debug.get("direct_card_count", 0)) == 7 and int(hub_debug.get("unique_destination_count", 0)) == 7, "municipal hub exposes seven unique direct destinations")
+	_check(int(hub_debug.get("filler_count", -1)) == 0 and int(hub_debug.get("intermediate_page_count", -1)) == 0, "municipal hub uses neither filler cards nor category pages")
+	_check(int(hub_debug.get("secondary_columns", 0)) == 2 and int(hub_debug.get("secondary_rows", 0)) == 3, "municipal hub balances six secondary destinations as 2x3")
 	if municipal_menu != null:
-		_check(municipal_menu.get_child_count() == 3, "municipal hub keeps only three choices visible")
+		_check(municipal_menu.get_child_count() == 7, "municipal hub keeps all seven destinations visible")
 		for menu_child in municipal_menu.get_children():
 			_check(_rect_inside_viewport((menu_child as Control).get_global_rect(), viewport_size), "municipal hub destination remains inside the viewport")
 			_check(hub_window != null and hub_window.get_global_rect().encloses((menu_child as Control).get_global_rect()), "municipal hub destination stays inside the modal window")
@@ -209,23 +273,14 @@ func _run() -> void:
 	for npc_button in main.get_visible_npc_actors():
 		highest_npc_z = maxi(highest_npc_z, npc_button.z_index)
 	_check(main.municipal_overlay.z_index > highest_npc_z, "municipal overlay renders above every map resident")
-	for group_id in ["development", "governance", "community"]:
-		var category_button := main.municipal_overlay.find_child("MunicipalCategory_%s" % group_id, true, false) as Button
-		_check(category_button != null and not category_button.disabled, "municipal hub exposes '%s' category" % group_id)
-		if category_button == null:
-			continue
-		category_button.emit_signal("pressed")
-		await process_frame
-		var category_page := main.municipal_overlay.find_child("MunicipalHubGroup_%s" % group_id, true, false) as Control
-		var category_choices := category_page.find_child("MenuChoices", true, false) as GridContainer if category_page != null else null
-		_check(main.municipal_overlay.current_page() == "hub:%s" % group_id, "municipal category '%s' opens" % group_id)
-		_check(category_choices != null and category_choices.get_child_count() == 3, "municipal category '%s' contains exactly three destinations" % group_id)
-		main.municipal_overlay.open_hub()
-		await process_frame
+	var direct_hub_pages := ["buildings", "governance", "judicial", "oversight", "finance", "public_affairs", "city_data"]
 	for page_id in ["buildings", "governance", "judicial", "oversight", "blueprint", "finance", "public_affairs", "city_data", "report"]:
 		var hub_button := main.municipal_overlay.find_child("%sButton" % page_id.capitalize(), true, false) as Button
-		_check(hub_button != null and not hub_button.disabled, "categorized hub preserves enabled '%s' destination" % page_id)
-		if hub_button != null and not hub_button.disabled:
+		if page_id in direct_hub_pages:
+			_check(hub_button != null and not hub_button.disabled, "direct hub preserves enabled '%s' destination" % page_id)
+		else:
+			_check(hub_button == null, "contextual page '%s' does not consume a direct hub card" % page_id)
+		if page_id in direct_hub_pages or page_id in ["blueprint", "report"]:
 			main.municipal_overlay.open_page(page_id)
 			await process_frame
 			await process_frame
@@ -285,6 +340,9 @@ func _run() -> void:
 				previous_snapshot["coverage_rate"] = 125.0
 				previous_snapshot["security"] = 72
 				main.monthly_report_history.append(previous_snapshot)
+				var current_snapshot: Dictionary = main._make_monthly_report_snapshot(900, 800, 1.0)
+				current_snapshot["security"] = 45
+				main.monthly_report_history.append(current_snapshot)
 				main.security = 45
 				main._update_ui()
 				_check(is_equal_approx(main.monthly_data_kpi_charts["net"].baseline_value(), 125.0), "second-month finance chart compares against last month")
@@ -292,6 +350,14 @@ func _run() -> void:
 				_check(is_equal_approx(main.monthly_data_service_charts["security"].safety_value(), 60.0), "second-month service chart keeps its independent safety line")
 				_check(main.monthly_data_service_charts["security"].has_safety_warning(), "second-month comparison still raises a below-safety warning")
 				_check(main.monthly_data_service_charts["security"].difference_label.text.contains("上月"), "second-month chart states its prior-month comparison")
+				_check(str(main.monthly_data_service_charts["security"].get_meta("chart_render_mode", "")) == "donut", "Main city data renders its monthly comparisons as donut charts")
+				main.monthly_report_history.clear()
+				for _month in 3:
+					var unsafe_snapshot: Dictionary = main._make_monthly_report_snapshot(1000, 800, 1.5)
+					unsafe_snapshot["security"] = 45
+					main.monthly_report_history.append(unsafe_snapshot)
+				main._update_ui()
+				_check(str(main.monthly_data_service_charts["security"].get_meta("safety_warning_severity", "")) == "critical", "Main forwards existing monthly history so the third unsafe month turns critical")
 				main.monthly_report_history.clear()
 				main.security = original_security
 				main._update_ui()
@@ -321,11 +387,152 @@ func _run() -> void:
 							visible_filters += 1
 					_check(visible_filters <= 2, "each building family keeps its subgroup list below three choices")
 				for pager_variant in main.building_card_pagers.values():
-					_check(pager_variant.visible_choice_count() <= 3, "building catalogs reveal at most three cards per page")
+					_check(pager_variant.page_size == 6 and pager_variant.visible_choice_count() <= 6, "building catalogs expose up to six balanced cards per page")
+					_check(bool(pager_variant.get_meta("balanced_building_pager", false)), "building catalogs opt into the count-balanced layout")
+					_check(pager_variant.has_method("debug_layout_state"), "building catalogs expose inspectable balanced geometry")
+					if pager_variant.has_method("debug_layout_state"):
+						var building_layout: Dictionary = pager_variant.debug_layout_state()
+						_check(Array(building_layout.get("row_counts", [])) == _expected_building_rows(pager_variant.visible_choice_count()), "building catalog row geometry follows its visible card count")
 				for building_button_variant in main.building_buttons.values():
 					_check((building_button_variant as Button).get_theme_font_size("font_size") >= 18, "building cards use at least 18px text")
 			main.municipal_overlay.open_hub()
 			await process_frame
+	var municipal_back := main.municipal_overlay.find_child("BackButton", true, false) as Button
+	_check(municipal_back != null and municipal_back.tooltip_text == "返回上一頁（Esc）", "municipal BackButton describes its immediate previous-page behavior")
+	# Navigation is a real visit history, not a static child-to-parent lookup.
+	# Exercise the player-visible sequences first, then a direct-page transition
+	# whose return target cannot be expressed by the legacy static map.
+	for route in [["buildings", "blueprint", "buildings"], ["buildings", "transport_planning", "buildings"], ["city_data", "report", "city_data"]]:
+		main.municipal_overlay.open_hub()
+		await process_frame
+		main.municipal_overlay.open_page(str(route[0]))
+		await process_frame
+		main.municipal_overlay.open_page(str(route[1]))
+		await process_frame
+		_check(municipal_back != null and municipal_back.visible, "contextual page '%s' exposes back navigation" % route[1])
+		if municipal_back != null:
+			municipal_back.emit_signal("pressed")
+			await process_frame
+			_check(main.municipal_overlay.current_page() == str(route[2]), "contextual page '%s' returns to immediate '%s'" % [route[1], route[2]])
+			municipal_back.emit_signal("pressed")
+			await process_frame
+			_check(main.municipal_overlay.current_page() == "hub", "parent page '%s' returns to the hub" % route[2])
+	for page_id in direct_hub_pages:
+		main.municipal_overlay.open_hub()
+		await process_frame
+		main.municipal_overlay.open_page(str(page_id))
+		await process_frame
+		_check(municipal_back != null and municipal_back.visible, "direct page '%s' exposes back navigation" % page_id)
+		if municipal_back != null:
+			municipal_back.emit_signal("pressed")
+			await process_frame
+			_check(main.municipal_overlay.current_page() == "hub", "direct page '%s' returns to the hub" % page_id)
+	main.municipal_overlay.open_hub()
+	await process_frame
+	main.municipal_overlay.open_page("governance")
+	await process_frame
+	main.municipal_overlay.open_page("finance")
+	await process_frame
+	if municipal_back != null:
+		municipal_back.emit_signal("pressed")
+		await process_frame
+		_check(main.municipal_overlay.current_page() == "governance", "cross-page visit returns to the actual previous page instead of the hub")
+		municipal_back.emit_signal("pressed")
+		await process_frame
+		_check(main.municipal_overlay.current_page() == "hub", "cross-page history eventually returns to the hub")
+	main.municipal_overlay.open_page("buildings")
+	await process_frame
+	main.municipal_overlay.open_page("buildings")
+	await process_frame
+	if municipal_back != null:
+		municipal_back.emit_signal("pressed")
+		await process_frame
+		_check(main.municipal_overlay.current_page() == "hub", "opening the same page repeatedly does not create a back-loop")
+	main.municipal_overlay.open_hub()
+	await process_frame
+	for navigation_index in 24:
+		main.municipal_overlay.open_page("governance" if navigation_index % 2 == 0 else "finance")
+		await process_frame
+	var capped_back_steps := 0
+	if municipal_back != null:
+		municipal_back.emit_signal("pressed")
+		await process_frame
+		capped_back_steps += 1
+		_check(main.municipal_overlay.current_page() == "governance", "capped history still returns to the most recently visited prior page")
+		while main.municipal_overlay.current_page() != "hub" and capped_back_steps < 32:
+			municipal_back.emit_signal("pressed")
+			await process_frame
+			capped_back_steps += 1
+		_check(main.municipal_overlay.current_page() == "hub", "capped municipal history still ends at the hub")
+		_check(capped_back_steps <= 16, "repeated municipal page visits retain only the bounded recent navigation path")
+	main.municipal_overlay.open_hub()
+	await process_frame
+	main.municipal_overlay.open_page("buildings")
+	await process_frame
+	main.municipal_overlay.open_page("blueprint")
+	await process_frame
+	var child_escape := InputEventAction.new()
+	child_escape.action = "ui_cancel"
+	child_escape.pressed = true
+	main.municipal_overlay._unhandled_key_input(child_escape)
+	_check(main.get_viewport().is_input_handled(), "Escape from a municipal child page marks its input event handled")
+	await process_frame
+	_check(main.municipal_overlay.current_page() == "buildings", "Escape from a municipal child page returns to its immediate previous page")
+	if municipal_back != null:
+		municipal_back.emit_signal("pressed")
+		await process_frame
+	_check(main.municipal_overlay.current_page() == "hub", "Back returns the child-Escape route to the hub before hub Escape is tested")
+	var hub_escape := InputEventAction.new()
+	hub_escape.action = "ui_cancel"
+	hub_escape.pressed = true
+	main.municipal_overlay._unhandled_key_input(hub_escape)
+	_check(main.get_viewport().is_input_handled(), "Escape from the municipal hub marks its input event handled")
+	await process_frame
+	_check(not main.municipal_overlay.is_open(), "Escape from the municipal hub closes the overlay")
+	main.municipal_button.emit_signal("pressed")
+	await process_frame
+	_check(main.municipal_overlay.is_open() and main.municipal_overlay.current_page() == "hub", "municipal control reopens the overlay after Escape closes it")
+	main.municipal_overlay.open_page("buildings")
+	await process_frame
+	main.municipal_overlay.open_page("unknown_municipal_page")
+	await process_frame
+	_check(main.municipal_overlay.current_page() == "buildings", "unknown municipal page fails safe without replacing the current page")
+	if municipal_back != null:
+		municipal_back.emit_signal("pressed")
+		await process_frame
+		_check(main.municipal_overlay.current_page() == "hub", "unknown municipal page does not corrupt the previous-page route")
+	var released_page := Control.new()
+	main.municipal_overlay.register_page("released_navigation_test", "Released navigation test", released_page, false)
+	main.municipal_overlay.open_page("buildings")
+	await process_frame
+	main.municipal_overlay.open_page("released_navigation_test")
+	await process_frame
+	released_page.queue_free()
+	await process_frame
+	main.municipal_overlay.open_page("released_navigation_test")
+	await process_frame
+	_check(main.municipal_overlay.current_page() == "released_navigation_test", "opening a freed registered page fails safe without changing the current route")
+	main.municipal_overlay.set_dark_mode(true)
+	main.municipal_overlay.set_dark_mode(false)
+	main.municipal_overlay.open_page("blueprint")
+	await process_frame
+	if municipal_back != null:
+		municipal_back.emit_signal("pressed")
+		await process_frame
+		_check(main.municipal_overlay.current_page() == "buildings", "released history page is skipped safely while navigating back")
+	main.municipal_overlay.close_overlay()
+	await process_frame
+	main.municipal_overlay.open_hub()
+	await process_frame
+	_check(main.municipal_overlay.current_page() == "hub", "close and reopen clears stale municipal navigation history")
+	main.municipal_overlay.open_page("buildings")
+	await process_frame
+	if municipal_back != null:
+		municipal_back.emit_signal("pressed")
+		await process_frame
+		_check(main.municipal_overlay.current_page() == "hub", "reopened municipal overlay starts a fresh navigation route")
+	main.municipal_overlay.open_hub()
+	await process_frame
 
 	var overlay_close_button := main.municipal_overlay.find_child("CloseButton", true, false) as Button
 	_check(overlay_close_button != null, "municipal overlay exposes a mouse-clickable close button")
@@ -333,7 +540,7 @@ func _run() -> void:
 		overlay_close_button.emit_signal("pressed")
 	await process_frame
 	_check(not main.municipal_overlay.is_open(), "clicking the municipal close button restores the map")
-	_check(not main.vertical_slice.is_time_paused() and main.labels["month"].text.begins_with("▶"), "closing municipal management resumes simulation")
+	_check(not main.vertical_slice.is_time_paused() and main.labels["month"].text.ends_with("· 自動"), "closing municipal management resumes the automatic clock")
 	_check(main.get_visible_npc_actors().all(func(button: Button) -> bool: return not button.tooltip_text.is_empty() and button.mouse_filter == Control.MOUSE_FILTER_STOP), "closing the modal restores resident interaction")
 	_check(main.grid_buttons.all(func(button: Button) -> bool: return not button.tooltip_text.is_empty() and button.mouse_filter == Control.MOUSE_FILTER_STOP), "closing the modal restores tile interaction")
 
@@ -529,7 +736,8 @@ func _run() -> void:
 	_check(int(authoritative_metrics.get("environment", -1)) == main.environment, "CityState owns the synchronized environment metric")
 	_check(int(authoritative_metrics.get("traffic", -1)) == main.traffic, "CityState owns the synchronized traffic metric")
 	_check(int(authoritative_metrics.get("education", -1)) == main.education and int(authoritative_metrics.get("healthcare", -1)) == main.healthcare, "CityState owns the synchronized service metrics")
-	_check(int(main._capture_player_shell_state().get("schema_version", 0)) == 8, "player shell schema marks metric authority, healthcare-service latch, audio, and map zoom persistence")
+	var captured_shell: Dictionary = main._capture_player_shell_state()
+	_check(int(captured_shell.get("schema_version", 0)) == 9 and captured_shell.get("onboarding") is Dictionary, "player shell schema includes authoritative onboarding state alongside metric authority, healthcare-service latch, audio, and map zoom persistence")
 	_check(main.last_report.contains("人口 320（+20）"), "concise monthly report uses authoritative active-law population change")
 	_check(bool(main.last_month_summary.get("available", false)), "monthly settlement records a structured summary")
 	_check(int(main.last_month_summary.get("population_change", 0)) == 20, "structured monthly summary preserves the authoritative population delta")
@@ -711,3 +919,51 @@ func _check(condition: bool, message: String) -> void:
 		return
 	_failed = true
 	push_error("Main integration check failed: %s" % message)
+
+
+func _emit_performance_profile_phase(phase: String) -> void:
+	var monotonic_usec := Time.get_ticks_usec()
+	print("PERFORMANCE_PROFILE_LAZY_OVERLAY_PHASE phase=%s monotonic_usec=%d" % [phase, monotonic_usec])
+	var marker_path := "user://mayor_simulator/tests/performance_profile_lazy_overlay_phases.jsonl"
+	var marker := FileAccess.open(
+		marker_path,
+		FileAccess.READ_WRITE if FileAccess.file_exists(marker_path) else FileAccess.WRITE_READ
+	)
+	if marker == null:
+		push_error("Unable to write lazy-overlay performance profile phase marker: %s" % phase)
+		return
+	marker.seek_end()
+	marker.store_line(JSON.stringify({
+		"schema_version": 1,
+		"phase": phase,
+		"monotonic_usec": monotonic_usec,
+	}))
+	marker.flush()
+	marker.close()
+
+
+func _performance_profile_hold_ms(profile_enabled: bool) -> int:
+	if not profile_enabled:
+		return 0
+	for argument in OS.get_cmdline_user_args():
+		if argument.begins_with("--performance-profile-hold-ms="):
+			var raw_value := argument.trim_prefix("--performance-profile-hold-ms=")
+			if raw_value.is_valid_int():
+				return clampi(raw_value.to_int(), 50, 2_000)
+	return 500
+
+
+func _performance_profile_hold(hold_ms: int) -> void:
+	if hold_ms > 0:
+		OS.delay_msec(hold_ms)
+
+
+func _expected_building_rows(visible_count: int) -> Array:
+	match visible_count:
+		0: return []
+		1: return [1]
+		2: return [2]
+		3: return [3]
+		4: return [2, 2]
+		5: return [3, 2]
+		_: return [3, 3]

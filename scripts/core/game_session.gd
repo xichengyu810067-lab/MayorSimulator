@@ -7,19 +7,25 @@ const SaveEnvelopeScript = preload("res://scripts/core/save_envelope.gd")
 const SaveSchemaAuthorityScript = preload("res://scripts/core/save_schema_authority.gd")
 const SaveServiceScript = preload("res://scripts/core/save_service.gd")
 const ConstructionSystemScript = preload("res://scripts/systems/city/construction_system.gd")
+const PopulationSystemScript = preload("res://scripts/systems/population/population_system.gd")
 const BlueprintLibraryServiceScript = preload("res://scripts/app/blueprint_library_service.gd")
 const TransportNetworkSystemScript = preload("res://scripts/systems/city/transport_network_system.gd")
+const TransportPlanningSessionScript = preload("res://scripts/systems/city/transport_planning_session.gd")
 const CityTerrainMapScript = preload("res://scripts/world/city_terrain_map.gd")
 const TransportModesScript = preload("res://data/catalogs/transport_modes.gd")
+const BuildingFootprintsScript = preload("res://data/catalogs/building_footprints.gd")
 
 signal domain_event(event)
 signal state_changed(view_model: Dictionary)
 
 const CONTENT_VERSION := "vertical_slice_1"
 const DEFAULT_SAVE_PATH := "user://mayor_simulator/autosave.json"
+const MIN_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA := SaveSchemaAuthorityScript.MIN_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA
 const MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA := SaveSchemaAuthorityScript.MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA
-const MAX_SUPPORTED_POPULATION_SCHEMA := 2
-const MAX_SUPPORTED_NPC_RECORD_SCHEMA := 2
+const MIN_SUPPORTED_POPULATION_SCHEMA := SaveSchemaAuthorityScript.POPULATION_MIN_SUPPORTED_SCHEMA_VERSION
+const MAX_SUPPORTED_POPULATION_SCHEMA := SaveSchemaAuthorityScript.POPULATION_MAX_SUPPORTED_SCHEMA_VERSION
+const MIN_SUPPORTED_NPC_RECORD_SCHEMA := SaveSchemaAuthorityScript.NPC_RECORD_MIN_SUPPORTED_SCHEMA_VERSION
+const MAX_SUPPORTED_NPC_RECORD_SCHEMA := SaveSchemaAuthorityScript.NPC_RECORD_MAX_SUPPORTED_SCHEMA_VERSION
 const TERMINAL_FAILURE_REASONS := [
 	"",
 	"imprisonment_judgment",
@@ -45,6 +51,15 @@ func new_game(seed: int = SimulationKernelScript.DEFAULT_SEED, initial_funds: in
 	kernel = SimulationKernelScript.new(state, seed)
 	kernel.event_emitted.connect(_on_kernel_event)
 	state_changed.emit(get_view_model())
+
+
+## Installs the canonical population into CityState's runtime-only lookup in one
+## atomic, sequence-neutral step. Persisted snapshots still contain the records
+## only under metadata.vertical_slice.population.records.
+func hydrate_runtime_population(population_snapshot: Dictionary) -> bool:
+	if state == null:
+		return false
+	return state.hydrate_runtime_npcs_from_population(population_snapshot)
 
 
 func process_frame(delta_seconds: float) -> Array:
@@ -120,27 +135,14 @@ func restore_envelope(envelope) -> bool:
 
 
 func _stamp_current_writer_pair(state_snapshot: Dictionary) -> void:
-	# VerticalSliceCoordinator still assembles its in-memory block with the last
-	# reader schema. The save boundary is the authoritative writer: it upgrades
-	# only that known assembly state when terrain already uses layout 3. Forged or
-	# stale layout-2 data is left untouched so semantic validation rejects it.
-	var metadata_value: Variant = state_snapshot.get("metadata", null)
-	if not metadata_value is Dictionary:
+	# The save boundary may upgrade only explicitly supported legacy snapshots.
+	# Rejected migrations remain untouched and fail the semantic save gate.
+	var migration := _migrate_state_snapshot_to_current_pair(state_snapshot)
+	if not bool(migration.get("ok", false)):
 		return
-	var vertical_value: Variant = (metadata_value as Dictionary).get("vertical_slice", null)
-	if not vertical_value is Dictionary:
-		return
-	var vertical: Dictionary = vertical_value
-	var terrain_value: Variant = vertical.get("terrain", null)
-	if not terrain_value is Dictionary:
-		return
-	if (
-		int(vertical.get("schema_version", -1)) == SaveSchemaAuthorityScript.LEGACY_MIGRATION_VERTICAL_SCHEMA_VERSION
-		and int((terrain_value as Dictionary).get("layout_version", -1)) == SaveSchemaAuthorityScript.CURRENT_TERRAIN_LAYOUT_VERSION
-	):
-		vertical["schema_version"] = SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION
-		(metadata_value as Dictionary)["vertical_slice"] = vertical
-		state_snapshot["metadata"] = metadata_value
+	var migrated_state: Dictionary = migration.get("state", {})
+	state_snapshot.clear()
+	state_snapshot.merge(migrated_state, true)
 
 
 func _prepare_envelope_for_restore(envelope):
@@ -152,8 +154,44 @@ func _prepare_envelope_for_restore(envelope):
 	var migration := _migrate_state_snapshot_to_current_pair(candidate.state)
 	if not bool(migration.get("ok", false)):
 		return null
-	candidate.state = Dictionary(migration.get("state", {})).duplicate(true)
+	var city_state_migration := CityStateScript.migrate_dict(migration.get("state", {}))
+	if city_state_migration.is_empty():
+		return null
+	var population_normalization := _normalize_population_snapshot_for_restore(city_state_migration)
+	if not bool(population_normalization.get("ok", false)):
+		return null
+	candidate.state = Dictionary(population_normalization.get("state", {})).duplicate(true)
 	return candidate
+
+
+func _normalize_population_snapshot_for_restore(state_snapshot: Dictionary) -> Dictionary:
+	var normalized := state_snapshot.duplicate(true)
+	var metadata_value: Variant = normalized.get("metadata", null)
+	if not metadata_value is Dictionary:
+		return {"ok": true, "state": normalized}
+	var metadata: Dictionary = metadata_value
+	var vertical_value: Variant = metadata.get("vertical_slice", null)
+	if vertical_value == null:
+		return {"ok": true, "state": normalized}
+	if not vertical_value is Dictionary:
+		return {"ok": false, "state": {}}
+	var vertical: Dictionary = vertical_value
+	var schema_value: Variant = vertical.get("schema_version", null)
+	if not _is_integer_value(schema_value):
+		return {"ok": false, "state": {}}
+	var schema_version := int(schema_value)
+	if not SaveSchemaAuthorityScript.is_supported_vertical_schema(schema_version):
+		return {"ok": false, "state": {}}
+	var population_value: Variant = vertical.get("population", null)
+	if not population_value is Dictionary:
+		return {"ok": false, "state": {}}
+	var parsed_population = PopulationSystemScript.from_dict(population_value as Dictionary)
+	if parsed_population == null:
+		return {"ok": false, "state": {}}
+	vertical["population"] = parsed_population.to_dict()
+	metadata["vertical_slice"] = vertical
+	normalized["metadata"] = metadata
+	return {"ok": true, "state": normalized}
 
 
 func _migrate_state_snapshot_to_current_pair(state_snapshot: Dictionary) -> Dictionary:
@@ -168,40 +206,247 @@ func _migrate_state_snapshot_to_current_pair(state_snapshot: Dictionary) -> Dict
 	var vertical: Dictionary = vertical_value
 	var schema_value: Variant = vertical.get("schema_version", 0)
 	if not _is_integer_value(schema_value):
-		return {"ok": true, "migrated": false, "state": migrated_state}
+		return {"ok": false, "migrated": false, "state": {}}
 	var schema_version := int(schema_value)
-	if schema_version < SaveSchemaAuthorityScript.LEGACY_MIGRATION_VERTICAL_SCHEMA_VERSION:
-		return {"ok": true, "migrated": false, "state": migrated_state}
+	if not SaveSchemaAuthorityScript.is_supported_vertical_schema(schema_version):
+		return {"ok": false, "migrated": false, "state": {}}
+	var footprint_migration := _migrate_legacy_building_footprints(
+		migrated_state,
+		vertical,
+		schema_version
+	)
+	if not bool(footprint_migration.get("ok", false)):
+		return {"ok": false, "migrated": false, "state": {}}
+	vertical = footprint_migration.get("vertical", vertical)
+	metadata["vertical_slice"] = vertical
+	migrated_state["metadata"] = metadata
+	var footprints_migrated := bool(footprint_migration.get("migrated", false))
+	# Schemas four through six keep their source schema because they lack enough
+	# subsystem state to claim the current writer contract. Terrain is attached
+	# below as a validated compatibility snapshot without changing that schema.
+	if schema_version >= 6 and schema_version < SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION:
+		var transport_value: Variant = vertical.get("transport", null)
+		if not transport_value is Dictionary:
+			return {"ok": false, "migrated": false, "state": {}}
+		var migrated_transport := TransportNetworkSystemScript.migrate_snapshot(transport_value as Dictionary)
+		if migrated_transport.is_empty():
+			return {"ok": false, "migrated": false, "state": {}}
+		vertical["transport"] = migrated_transport
+		metadata["vertical_slice"] = vertical
+		migrated_state["metadata"] = metadata
 	var terrain_value: Variant = vertical.get("terrain", null)
+	if schema_version < SaveSchemaAuthorityScript.LEGACY_MIGRATION_VERTICAL_SCHEMA_VERSION:
+		var compat_terrain: Dictionary = {}
+		if terrain_value == null:
+			compat_terrain = CityTerrainMapScript.synthesized_layout3_compat_snapshot()
+		elif terrain_value is Dictionary:
+			var direct_terrain: Dictionary = terrain_value
+			var direct_layout_value: Variant = direct_terrain.get("layout_version", null)
+			if not _is_integer_value(direct_layout_value):
+				return {"ok": false, "migrated": false, "state": {}}
+			var direct_layout := int(direct_layout_value)
+			if direct_layout == SaveSchemaAuthorityScript.FROZEN_TERRAIN_LAYOUT_VERSION:
+				compat_terrain = CityTerrainMapScript.migrate_snapshot_to_current(direct_terrain)
+			elif direct_layout == SaveSchemaAuthorityScript.CURRENT_TERRAIN_LAYOUT_VERSION:
+				var direct_validation := CityTerrainMapScript.validate_snapshot(direct_terrain)
+				var direct_provenance := str(direct_terrain.get("classification_provenance", ""))
+				if (
+					bool(direct_validation.get("valid", false))
+					and direct_provenance in [
+						CityTerrainMapScript.PROVENANCE_PRESERVED_LAYOUT_3,
+						CityTerrainMapScript.PROVENANCE_SYNTHESIZED_LAYOUT_3_COMPAT,
+					]
+				):
+					compat_terrain = direct_terrain.duplicate(true)
+			else:
+				return {"ok": false, "migrated": false, "state": {}}
+		else:
+			return {"ok": false, "migrated": false, "state": {}}
+		if compat_terrain.is_empty():
+			return {"ok": false, "migrated": false, "state": {}}
+		vertical["terrain"] = compat_terrain
+		metadata["vertical_slice"] = vertical
+		migrated_state["metadata"] = metadata
+		return {
+			"ok": true,
+			"migrated": true,
+			"state": migrated_state,
+		}
 	if not terrain_value is Dictionary:
-		return {"ok": true, "migrated": false, "state": migrated_state}
+		return {"ok": false, "migrated": false, "state": {}}
 	var terrain: Dictionary = terrain_value
 	var layout_value: Variant = terrain.get("layout_version", null)
 	if not _is_integer_value(layout_value):
-		return {"ok": true, "migrated": false, "state": migrated_state}
+		return {"ok": false, "migrated": false, "state": {}}
 	var layout_version := int(layout_value)
 	if SaveSchemaAuthorityScript.validate_vertical_terrain_pair(schema_version, layout_version):
-		return {"ok": true, "migrated": false, "state": migrated_state}
-	if not SaveSchemaAuthorityScript.is_legacy_migration_pair(schema_version, layout_version):
+		return {"ok": true, "migrated": footprints_migrated, "state": migrated_state}
+	var accepted_migration_pair := (
+		SaveSchemaAuthorityScript.is_legacy_migration_pair(schema_version, layout_version)
+		or SaveSchemaAuthorityScript.is_footprint_migration_pair(schema_version, layout_version)
+		or SaveSchemaAuthorityScript.is_transport_session_migration_pair(schema_version, layout_version)
+		or SaveSchemaAuthorityScript.is_transport_reuse_migration_pair(schema_version, layout_version)
+		or SaveSchemaAuthorityScript.is_layout3_preservation_migration_pair(schema_version, layout_version)
+	)
+	if not accepted_migration_pair:
 		return {"ok": false, "migrated": false, "state": {}}
 	var migrated_terrain := CityTerrainMapScript.migrate_snapshot_to_current(terrain)
 	if migrated_terrain.is_empty():
 		return {"ok": false, "migrated": false, "state": {}}
-	vertical["schema_version"] = SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION
 	vertical["terrain"] = migrated_terrain
+	if SaveSchemaAuthorityScript.is_layout3_preservation_migration_pair(schema_version, layout_version):
+		vertical["schema_version"] = SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION
+		metadata["vertical_slice"] = vertical
+		migrated_state["metadata"] = metadata
+		return {"ok": true, "migrated": true, "state": migrated_state}
+	if SaveSchemaAuthorityScript.is_transport_reuse_migration_pair(schema_version, layout_version):
+		var planning_value: Variant = vertical.get("transport_planning_session", null)
+		if not planning_value is Dictionary:
+			return {"ok": false, "migrated": false, "state": {}}
+		var migrated_planning := TransportPlanningSessionScript.migrate_snapshot(planning_value as Dictionary)
+		if migrated_planning.is_empty():
+			return {"ok": false, "migrated": false, "state": {}}
+		vertical["schema_version"] = SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION
+		vertical["transport_planning_session"] = migrated_planning
+		metadata["vertical_slice"] = vertical
+		migrated_state["metadata"] = metadata
+		return {"ok": true, "migrated": true, "state": migrated_state}
+	if SaveSchemaAuthorityScript.is_transport_session_migration_pair(schema_version, layout_version):
+		vertical["schema_version"] = SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION
+		vertical["transport_planning_session"] = TransportPlanningSessionScript.inactive_snapshot()
+		metadata["vertical_slice"] = vertical
+		migrated_state["metadata"] = metadata
+		return {"ok": true, "migrated": true, "state": migrated_state}
+	if SaveSchemaAuthorityScript.is_footprint_migration_pair(schema_version, layout_version):
+		vertical["schema_version"] = SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION
+		vertical["transport_planning_session"] = TransportPlanningSessionScript.inactive_snapshot()
+		metadata["vertical_slice"] = vertical
+		migrated_state["metadata"] = metadata
+		return {"ok": true, "migrated": true, "state": migrated_state}
+	vertical["schema_version"] = SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION
+	vertical["transport_planning_session"] = TransportPlanningSessionScript.inactive_snapshot()
 	metadata["vertical_slice"] = vertical
 	migrated_state["metadata"] = metadata
 	return {"ok": true, "migrated": true, "state": migrated_state}
 
 
+func _migrate_legacy_building_footprints(
+	state_snapshot: Dictionary,
+	vertical: Dictionary,
+	source_schema_version: int
+) -> Dictionary:
+	var terrain_mapping = CityTerrainMapScript.new()
+	var buildings_value: Variant = state_snapshot.get("buildings", null)
+	if not buildings_value is Dictionary:
+		return {"ok": false}
+	var buildings: Dictionary = buildings_value
+	var migrated := false
+	if source_schema_version < SaveSchemaAuthorityScript.TRANSPORT_SESSION_MIGRATION_VERTICAL_SCHEMA_VERSION:
+		for building_key: Variant in buildings.keys():
+			var record_value: Variant = buildings[building_key]
+			if not record_value is Dictionary:
+				return {"ok": false}
+			var record: Dictionary = record_value
+			var tile_value: Variant = record.get("tile_index", null)
+			if not _is_integer_value(tile_value):
+				return {"ok": false}
+			var legacy_fields := BuildingFootprintsScript.legacy_single_fields(int(tile_value), terrain_mapping)
+			if legacy_fields.is_empty():
+				return {"ok": false}
+			for field_name: String in legacy_fields.keys():
+				record[field_name] = legacy_fields[field_name]
+			buildings[building_key] = record
+			migrated = true
+		var construction_value: Variant = vertical.get("construction", null)
+		if construction_value is Dictionary:
+			var construction: Dictionary = construction_value
+			var jobs_value: Variant = construction.get("jobs", null)
+			if jobs_value is Dictionary:
+				var jobs: Dictionary = jobs_value
+				for job_key: Variant in jobs.keys():
+					var job_value: Variant = jobs[job_key]
+					if not job_value is Dictionary:
+						return {"ok": false}
+					var job: Dictionary = job_value
+					var metadata_value: Variant = job.get("metadata", null)
+					if not metadata_value is Dictionary:
+						continue
+					var job_metadata: Dictionary = metadata_value
+					if not _is_building_construction_job(job, job_metadata):
+						continue
+					var tile_value: Variant = job_metadata.get("tile_index", null)
+					if not _is_integer_value(tile_value):
+						return {"ok": false}
+					var job_fields := BuildingFootprintsScript.legacy_single_fields(int(tile_value), terrain_mapping)
+					if job_fields.is_empty():
+						return {"ok": false}
+					for field_name: String in job_fields.keys():
+						job_metadata[field_name] = job_fields[field_name]
+					job["metadata"] = job_metadata
+					jobs[job_key] = job
+					var core_jobs_value: Variant = state_snapshot.get("construction_jobs", null)
+					if core_jobs_value is Dictionary and (core_jobs_value as Dictionary).has(job_key):
+						var core_job_value: Variant = (core_jobs_value as Dictionary)[job_key]
+						if not core_job_value is Dictionary:
+							return {"ok": false}
+						var migrated_core_job := job.duplicate(true)
+						migrated_core_job["job_id"] = str((core_job_value as Dictionary).get("job_id", job_key))
+						(core_jobs_value as Dictionary)[job_key] = migrated_core_job
+						state_snapshot["construction_jobs"] = core_jobs_value
+					migrated = true
+				construction["jobs"] = jobs
+			vertical["construction"] = construction
+	state_snapshot["buildings"] = buildings
+	if not _validate_building_footprint_records_in_snapshot(buildings, terrain_mapping, true):
+		return {"ok": false}
+	return {"ok": true, "migrated": migrated, "vertical": vertical}
+
+
 func save_now(path: String = "") -> Error:
 	var resolved_path: String = path if not path.is_empty() else save_path
+	if not _validate_runtime_population_save_boundary():
+		save_service.last_error_message = "Refusing to save: runtime NPC data does not exactly match canonical population metadata."
+		return ERR_INVALID_DATA
 	var envelope = make_envelope()
 	var validated_state = CityStateScript.from_dict(envelope.state)
-	if validated_state == null or not _validate_envelope_semantics(envelope, validated_state):
+	var snapshot_is_valid := validated_state != null and _validate_envelope_semantics(envelope, validated_state)
+	# Validation builds a detached CityState (including a hydrated NPC lookup).
+	# Release it before JSON encoding and temporary-file read-back verification.
+	validated_state = null
+	if not snapshot_is_valid:
 		save_service.last_error_message = "Refusing to save a semantically inconsistent session snapshot."
 		return ERR_INVALID_DATA
 	return save_service.save_atomic(resolved_path, envelope)
+
+
+func _validate_runtime_population_save_boundary() -> bool:
+	var metadata_value: Variant = state.metadata.get("vertical_slice", null)
+	if metadata_value == null:
+		return state.npcs.is_empty()
+	if not metadata_value is Dictionary:
+		return false
+	var population_value: Variant = (metadata_value as Dictionary).get("population", null)
+	if population_value == null:
+		return state.npcs.is_empty()
+	if not population_value is Dictionary:
+		return false
+	var population: Dictionary = population_value
+	if not PopulationSystemScript.validate_snapshot(population):
+		return false
+	# The metadata block was produced by PopulationSystem.to_dict(). Full snapshot
+	# validation plus direct comparison avoids constructing a second 200k-object
+	# PopulationSystem merely to validate the save boundary.
+	var canonical_records: Array = population.get("records", [])
+	if canonical_records.size() != state.npcs.size():
+		return false
+	for record_value: Variant in canonical_records:
+		var record: Dictionary = record_value
+		var npc_id := str(record.get("npc_id", ""))
+		if npc_id.is_empty() or not state.npcs.has(npc_id):
+			return false
+		if _canonicalize(state.npcs[npc_id]) != _canonicalize(record):
+			return false
+	return true
 
 
 func load_now(path: String = "") -> bool:
@@ -382,7 +627,7 @@ func _validate_vertical_slice_metadata(restored_state, runtime: Dictionary) -> b
 	if not _is_integer_value(schema_value):
 		return false
 	var schema_version := int(schema_value)
-	if schema_version < 0 or schema_version > MAX_SUPPORTED_VERTICAL_SLICE_METADATA_SCHEMA:
+	if not SaveSchemaAuthorityScript.is_supported_vertical_schema(schema_version):
 		return false
 	# Schema 4 adds an optional persisted UI-event latch. Older saves omit it;
 	# current saves must keep it string-typed and inside the governance failure
@@ -391,46 +636,39 @@ func _validate_vertical_slice_metadata(restored_state, runtime: Dictionary) -> b
 		var terminal_reason: Variant = vertical["terminal_failure_event_reason"]
 		if not terminal_reason is String or str(terminal_reason) not in TERMINAL_FAILURE_REASONS:
 			return false
-	if not _validate_core_building_records(restored_state, schema_version >= 6):
+	if not _validate_core_building_records(
+		restored_state,
+		schema_version >= 6,
+		schema_version >= SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION
+	):
 		return false
-	# Schemas 1-2 predate the canonical persistent population snapshot. Schema 3
-	# and later require it, so a missing block is corruption rather than a legacy save.
-	if schema_version < 3:
-		return true
 	var population_value: Variant = vertical.get("population", null)
 	if not population_value is Dictionary:
 		return false
 	var population: Dictionary = population_value
-	var population_schema: Variant = population.get("schema_version", 1)
-	if not _is_integer_value(population_schema) or int(population_schema) < 1 or int(population_schema) > MAX_SUPPORTED_POPULATION_SCHEMA:
+	var parsed_population = PopulationSystemScript.from_dict(population)
+	if parsed_population == null:
 		return false
-	var population_schema_version := int(population_schema)
-	var records_value: Variant = population.get("records", null)
-	if not records_value is Array:
-		return false
+	var normalized_population: Dictionary = parsed_population.to_dict()
+	var records_value: Variant = normalized_population.get("records", null)
 	var canonical_ids: Dictionary = {}
+	var canonical_records: Dictionary = {}
 	for record_value: Variant in records_value:
-		if not record_value is Dictionary:
-			return false
 		var record: Dictionary = record_value
-		var record_schema: Variant = record.get("schema_version", 1)
-		if not _is_integer_value(record_schema) or int(record_schema) < 1 or int(record_schema) > MAX_SUPPORTED_NPC_RECORD_SCHEMA:
-			return false
-		for nonnegative_field: String in ["income", "salary", "debt"]:
-			if not record.has(nonnegative_field) or record[nonnegative_field] == null:
-				continue
-			if not _is_integer_value(record[nonnegative_field]) or int(record[nonnegative_field]) < 0:
-				return false
 		var npc_id := str(record.get("npc_id", ""))
 		if npc_id.is_empty() or canonical_ids.has(npc_id):
 			return false
 		canonical_ids[npc_id] = true
+		canonical_records[npc_id] = record
 	if canonical_ids.size() != restored_state.npcs.size():
 		return false
 	for core_id: Variant in restored_state.npcs.keys():
-		if not canonical_ids.has(str(core_id)):
+		var npc_id := str(core_id)
+		if not canonical_ids.has(npc_id):
 			return false
-	var requests_value: Variant = population.get("requests", [])
+		if _canonicalize(restored_state.npcs[core_id]) != _canonicalize(canonical_records[npc_id]):
+			return false
+	var requests_value: Variant = normalized_population.get("requests", [])
 	if not requests_value is Array:
 		return false
 	for request_value: Variant in requests_value:
@@ -439,8 +677,6 @@ func _validate_vertical_slice_metadata(restored_state, runtime: Dictionary) -> b
 		var request_npc_id := str((request_value as Dictionary).get("npc_id", ""))
 		if not request_npc_id.is_empty() and not canonical_ids.has(request_npc_id):
 			return false
-	if population_schema_version >= 2 and not _validate_population_finance_snapshot(population):
-		return false
 	for building_value: Variant in restored_state.buildings.values():
 		var building: Dictionary = building_value
 		if not building.has("resident_ids"):
@@ -469,6 +705,28 @@ func _validate_vertical_slice_metadata(restored_state, runtime: Dictionary) -> b
 			return false
 		if not _validate_transport_construction_links(vertical, restored_state):
 			return false
+		if (
+			schema_version >= SaveSchemaAuthorityScript.TRANSPORT_SESSION_MIGRATION_VERTICAL_SCHEMA_VERSION
+			and not _validate_building_construction_footprints(vertical)
+		):
+			return false
+		if schema_version >= SaveSchemaAuthorityScript.CURRENT_VERTICAL_SCHEMA_VERSION:
+			var planning_value: Variant = vertical.get("transport_planning_session", null)
+			if not planning_value is Dictionary:
+				return false
+			var planning_validation: Dictionary = TransportPlanningSessionScript.validate_snapshot(
+				planning_value as Dictionary
+			)
+			if not bool(planning_validation.get("valid", false)):
+				return false
+			var planning_reference_validation: Dictionary = TransportPlanningSessionScript.validate_references(
+				planning_value as Dictionary,
+				vertical.get("construction", {}),
+				transport_value as Dictionary,
+				restored_state.buildings
+			)
+			if not bool(planning_reference_validation.get("valid", false)):
+				return false
 	if schema_version >= 7:
 		var terrain_value: Variant = vertical.get("terrain", null)
 		if not terrain_value is Dictionary:
@@ -486,7 +744,11 @@ func _validate_vertical_slice_metadata(restored_state, runtime: Dictionary) -> b
 	return true
 
 
-func _validate_core_building_records(restored_state, require_current_status: bool) -> bool:
+func _validate_core_building_records(
+	restored_state,
+	require_current_status: bool,
+	require_footprints: bool
+) -> bool:
 	for building_value: Variant in restored_state.buildings.values():
 		if not building_value is Dictionary:
 			return false
@@ -495,7 +757,78 @@ func _validate_core_building_records(restored_state, require_current_status: boo
 		var status_value: Variant = (building_value as Dictionary).get("status", null)
 		if not status_value is String or str(status_value) not in ["active", "demolition", "scrapped"]:
 			return false
+	return _validate_building_footprint_records_in_snapshot(
+		restored_state.buildings,
+		CityTerrainMapScript.new(),
+		require_footprints
+	)
+
+
+func _validate_building_footprint_records_in_snapshot(
+	buildings: Dictionary,
+	terrain_mapping,
+	require_footprints: bool
+) -> bool:
+	var occupied_owners: Dictionary = {}
+	for building_key: Variant in buildings.keys():
+		var record_value: Variant = buildings[building_key]
+		if not record_value is Dictionary:
+			return false
+		var record: Dictionary = record_value
+		var has_any_footprint_field := (
+			record.has("anchor_tile_id")
+			or record.has("footprint_id")
+			or record.has("occupied_tile_ids")
+		)
+		if not require_footprints and not has_any_footprint_field:
+			continue
+		var validation := BuildingFootprintsScript.validate_persisted_record(record, terrain_mapping)
+		if not bool(validation.get("valid", false)):
+			return false
+		for tile_id: int in validation.get("occupied_tile_ids", []):
+			if occupied_owners.has(tile_id):
+				return false
+			occupied_owners[tile_id] = str(building_key)
 	return true
+
+
+func _validate_building_construction_footprints(vertical: Dictionary) -> bool:
+	var construction_value: Variant = vertical.get("construction", null)
+	if not construction_value is Dictionary:
+		return false
+	var jobs_value: Variant = (construction_value as Dictionary).get("jobs", null)
+	if not jobs_value is Dictionary:
+		return false
+	var terrain_mapping = CityTerrainMapScript.new()
+	for job_value: Variant in (jobs_value as Dictionary).values():
+		if not job_value is Dictionary:
+			return false
+		var job: Dictionary = job_value
+		var metadata_value: Variant = job.get("metadata", null)
+		if not metadata_value is Dictionary:
+			return false
+		var metadata: Dictionary = metadata_value
+		if not _is_building_construction_job(job, metadata):
+			continue
+		var validation := BuildingFootprintsScript.validate_persisted_record(
+			metadata,
+			terrain_mapping,
+			str(job.get("blueprint", {}).get("size_tier", ""))
+		)
+		if not bool(validation.get("valid", false)):
+			return false
+	return true
+
+
+func _is_building_construction_job(job: Dictionary, metadata: Dictionary) -> bool:
+	return (
+		str(job.get("operation", "")) == "build"
+		and str(metadata.get("entity_kind", "")) not in [
+			"transport_project",
+			ConstructionSystemScript.TERRAIN_FLATTEN_ENTITY_KIND,
+		]
+		and not str(metadata.get("building_name", "")).is_empty()
+	)
 
 
 func _validate_current_vertical_sequences(vertical: Dictionary, restored_state, runtime: Dictionary) -> bool:
@@ -708,7 +1041,15 @@ func _validate_active_construction_capacity_and_tiles(construction: Dictionary, 
 func _core_building_id_at_tile(restored_state, tile_id: int) -> String:
 	for building_key: Variant in restored_state.buildings.keys():
 		var building_value: Variant = restored_state.buildings[building_key]
-		if building_value is Dictionary and int((building_value as Dictionary).get("tile_index", -1)) == tile_id:
+		if not building_value is Dictionary:
+			continue
+		var building: Dictionary = building_value
+		var occupied_value: Variant = building.get("occupied_tile_ids", null)
+		if occupied_value is Array:
+			for occupied_variant: Variant in occupied_value:
+				if _is_integer_value(occupied_variant) and int(occupied_variant) == tile_id:
+					return str(building_key)
+		elif int(building.get("tile_index", -1)) == tile_id:
 			return str(building_key)
 	return ""
 
@@ -730,6 +1071,16 @@ func _validated_active_job_tile_ids(job: Dictionary) -> Variant:
 			if tile_id < 0 or tile_id >= CityTerrainMapScript.CELL_COUNT or result.has(tile_id):
 				return null
 			result.append(tile_id)
+	elif _is_building_construction_job(job, metadata) and metadata.has("footprint_id"):
+		var validation := BuildingFootprintsScript.validate_persisted_record(
+			metadata,
+			CityTerrainMapScript.new(),
+			str(job.get("blueprint", {}).get("size_tier", ""))
+		)
+		if not bool(validation.get("valid", false)):
+			return null
+		for tile_id: int in validation.get("occupied_tile_ids", []):
+			result.append(tile_id)
 	else:
 		var tile_value: Variant = metadata.get("tile_index", null)
 		if not _is_integer_value(tile_value):
@@ -745,6 +1096,18 @@ func _validated_active_job_tile_ids(job: Dictionary) -> Variant:
 func _validate_terrain_construction_links(vertical: Dictionary, restored_state) -> bool:
 	var terrain_snapshot: Dictionary = vertical.get("terrain", {})
 	var terrain_map = CityTerrainMapScript.create_from_dict(terrain_snapshot)
+	for building_value: Variant in restored_state.buildings.values():
+		if not building_value is Dictionary:
+			return false
+		var footprint_validation := BuildingFootprintsScript.validate_persisted_record(
+			building_value as Dictionary,
+			terrain_map
+		)
+		if not bool(footprint_validation.get("valid", false)):
+			return false
+		for occupied_tile_id: int in footprint_validation.get("occupied_tile_ids", []):
+			if not terrain_map.is_buildable(occupied_tile_id):
+				return false
 	var construction: Dictionary = vertical.get("construction", {})
 	var jobs: Dictionary = construction.get("jobs", {})
 	for job_value: Variant in jobs.values():
@@ -755,6 +1118,13 @@ func _validate_terrain_construction_links(vertical: Dictionary, restored_state) 
 		if not metadata_value is Dictionary:
 			return false
 		var metadata: Dictionary = metadata_value
+		if str(job.get("status", "")) == "active" and _is_building_construction_job(job, metadata):
+			var footprint_tiles_value: Variant = _validated_active_job_tile_ids(job)
+			if footprint_tiles_value == null:
+				return false
+			for occupied_tile_id: int in footprint_tiles_value:
+				if not terrain_map.is_buildable(occupied_tile_id):
+					return false
 		if str(metadata.get("entity_kind", "")) != ConstructionSystemScript.TERRAIN_FLATTEN_ENTITY_KIND:
 			continue
 		if str(job.get("operation", "")) != "build" or not str(job.get("review_id", "")).is_empty():

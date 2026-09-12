@@ -4,6 +4,7 @@ signal npc_activated(slot_index: int)
 
 const CityNavigationGridScript = preload("res://scripts/world/city_navigation_grid.gd")
 const NpcActorScript = preload("res://scripts/world/npc_actor.gd")
+const SquareGridLayoutScript = preload("res://scripts/world/square_grid_layout.gd")
 
 const NPC_ACTOR_SIZE := Vector2(52, 68)
 const NPC_ACTOR_FEET_OFFSET := Vector2(26, 65)
@@ -24,6 +25,7 @@ const NPC_LOCAL_WANDER_OFFSETS := [
 	Vector2(44, -40),
 ]
 const NPC_PRIMARY_ROUTE_COUNT := 24
+const MAX_VISIBLE_PROXY_COUNT := 80
 const NPC_ROUTE_SAMPLE_STEP := 18.0
 const NPC_ROUTE_SPECS := [
 	{"start": Vector2(104, 302), "end": Vector2(150, 302)},
@@ -64,11 +66,11 @@ var _layer: Control
 var _dark_mode := false
 var _navigation
 var _tile_centers := PackedVector2Array()
+var _tile_ids_by_display_order := PackedInt32Array()
 var _blocked_tiles: Dictionary = {}
 var _crossing_tile_ids := PackedInt32Array()
 var _crossing_states: Dictionary = {}
-var _iso_tile_size := Vector2(128, 128)
-var _iso_tile_step := Vector2(72, 40)
+var _grid_cell_size := SquareGridLayoutScript.CELL_SIZE
 
 
 func mount(
@@ -88,6 +90,7 @@ func unmount() -> void:
 	_layer = null
 	_navigation = null
 	_tile_centers.clear()
+	_tile_ids_by_display_order.clear()
 	_blocked_tiles.clear()
 	_crossing_tile_ids.clear()
 	_crossing_states.clear()
@@ -98,6 +101,7 @@ func rebuild_actor_pool(authoritative_proxies: Array[Dictionary], dark_mode: boo
 	_dark_mode = dark_mode
 	if _layer == null:
 		return
+	authoritative_proxies = cap_authoritative_proxies(authoritative_proxies)
 	var wander_points := _npc_wander_points()
 	var occupied_feet: Array[Vector2] = []
 	var reserved_destinations: Array[Vector2] = []
@@ -169,6 +173,15 @@ func rebuild_actor_pool(authoritative_proxies: Array[Dictionary], dark_mode: boo
 		_actors.append(actor)
 
 
+static func cap_authoritative_proxies(authoritative_proxies: Array[Dictionary]) -> Array[Dictionary]:
+	var capped: Array[Dictionary] = []
+	for proxy: Dictionary in authoritative_proxies:
+		if capped.size() >= MAX_VISIBLE_PROXY_COUNT:
+			break
+		capped.append(proxy)
+	return capped
+
+
 func _clear_actors() -> void:
 	# Detach synchronously so slot-bound signals from an old pool cannot overlap
 	# a replacement pool for one frame.
@@ -211,8 +224,13 @@ func configure_navigation(map_snapshot: Dictionary) -> void:
 
 func sync_map_snapshot(map_snapshot: Dictionary) -> void:
 	_tile_centers = PackedVector2Array(map_snapshot.get("tile_centers", PackedVector2Array())).duplicate()
-	_iso_tile_size = Vector2(map_snapshot.get("iso_tile_size", _iso_tile_size))
-	_iso_tile_step = Vector2(map_snapshot.get("iso_tile_step", _iso_tile_step))
+	_tile_ids_by_display_order = PackedInt32Array(
+		map_snapshot.get("tile_ids_by_display_order", PackedInt32Array())
+	).duplicate()
+	_grid_cell_size = Vector2(map_snapshot.get(
+		"grid_cell_size",
+		map_snapshot.get("iso_tile_size", _grid_cell_size)
+	))
 	_crossing_tile_ids.clear()
 	for tile_variant: Variant in map_snapshot.get("crossing_tile_ids", []):
 		var crossing_tile_id := int(tile_variant)
@@ -235,8 +253,8 @@ func sync_map_snapshot(map_snapshot: Dictionary) -> void:
 	var building_centers := Dictionary(map_snapshot.get("building_centers", {})).duplicate(true)
 	var construction_centers := Dictionary(map_snapshot.get("construction_centers", {})).duplicate(true)
 	var derived_half_extents := Vector2(
-		maxf(0.5, _iso_tile_size.x * 0.5),
-		maxf(0.5, _iso_tile_step.y)
+		maxf(0.5, _grid_cell_size.x * 0.5),
+		maxf(0.5, _grid_cell_size.y * 0.5)
 	)
 	var structure_half_extents := _snapshot_vector2(
 		map_snapshot,
@@ -690,18 +708,22 @@ func _npc_position_is_scenery_safe(position: Vector2) -> bool:
 
 
 func _npc_tile_at_feet(feet_position: Vector2) -> int:
-	var closest_index := -1
-	var closest_score := INF
+	var coordinate := SquareGridLayoutScript.coordinate_for_point(feet_position)
+	if (
+		coordinate != SquareGridLayoutScript.INVALID_COORDINATE
+		and _tile_ids_by_display_order.size() == SquareGridLayoutScript.GRID_SIZE.x * SquareGridLayoutScript.GRID_SIZE.y
+	):
+		return _tile_ids_by_display_order[
+			coordinate.y * SquareGridLayoutScript.GRID_SIZE.x + coordinate.x
+		]
+	# Compatibility fallback for isolated callers that provide arbitrary test
+	# centers without the fixed city-grid display-order mapping.
+	var half_cell := _grid_cell_size * 0.5
 	for tile_index in _tile_centers.size():
 		var center := _tile_centers[tile_index]
-		var score := (
-			absf(feet_position.x - center.x) / (_iso_tile_size.x * 0.5)
-			+ absf(feet_position.y - center.y) / _iso_tile_step.y
-		)
-		if score <= 1.0 and score < closest_score:
-			closest_score = score
-			closest_index = tile_index
-	return closest_index
+		if Rect2(center - half_cell, _grid_cell_size).has_point(feet_position):
+			return tile_index
+	return -1
 
 
 func _npc_tile_has_obstacle(tile_index: int) -> bool:

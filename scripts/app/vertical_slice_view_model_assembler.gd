@@ -93,7 +93,7 @@ static func assemble(input: Dictionary) -> Dictionary:
 		int(committee.get("oversight_term_years", 3)),
 		int(committee.get("oversight_open_cases", 0)),
 	]
-	var governance_text := _governance_text(input)
+	var governance_text := _governance_text(input, localizer)
 
 	var citizen_requests: Array[Dictionary] = []
 	for request_variant: Dictionary in public_affairs_requests:
@@ -225,17 +225,20 @@ static func _citizen_text(
 	return header + "\n" + _text(localizer, "請求已完成並寫入人物事件簿。")
 
 
-static func _governance_text(input: Dictionary) -> String:
+static func _governance_text(input: Dictionary, localizer) -> String:
 	var pending_bill: Dictionary = input.get("pending_bill", {})
 	var bill_definitions: Dictionary = input.get("bill_definitions", {})
 	if not pending_bill.is_empty():
 		var bill_id := str(pending_bill.get("bill_id", ""))
-		return "%s 審核中，預計第 %d 天完成兩院表決。" % [bill_definitions.get(bill_id, {}).get("name", bill_id), int(pending_bill.get("decision_day", 0))]
+		var bill_name := _text(localizer, str(bill_definitions.get(bill_id, {}).get("name", bill_id)))
+		if str(pending_bill.get("status", "")) == "awaiting_mayor_response":
+			return _text(localizer, "%s 已進入下議院答詢；正式表決將在市長確認答覆後進行。") % bill_name
+		return _text(localizer, "%s 審核中，預計第 %d 天完成兩院表決。") % [bill_name, int(pending_bill.get("decision_day", 0))]
 	var rejected_id := str(input.get("latest_rejected_bill_id", ""))
 	var active_laws: Dictionary = input.get("active_laws", {})
 	if not rejected_id.is_empty() and not active_laws.has(rejected_id):
-		return "%s遭否決；可強制執行，但會啟動後續法律與行政責任程序。" % bill_definitions.get(rejected_id, {}).get("name", rejected_id)
-	return "生效法案 %d｜目前無待審法案" % active_laws.size()
+		return _text(localizer, "%s遭否決；可強制執行，但會啟動後續法律與行政責任程序。") % _text(localizer, str(bill_definitions.get(rejected_id, {}).get("name", rejected_id)))
+	return _text(localizer, "生效法案 %d｜目前無待審法案") % [active_laws.size()]
 
 
 static func _selected_request_is_open(active_requests: Array[Dictionary], selected_request_id: String) -> bool:

@@ -1,7 +1,8 @@
-extends ScrollContainer
+extends Control
 
-const UiIconCatalog = preload("res://ui/theme/ui_icon_catalog.gd")
 const CourtroomStageScript = preload("res://ui/governance/courtroom_stage.gd")
+const OversightHearingStageScript = preload("res://ui/governance/oversight_hearing_stage.gd")
+const SemanticPalette = preload("res://ui/theme/semantic_palette.gd")
 
 signal defense_submitted(mode: String, case_id: String, defense_id: String, result: Dictionary)
 
@@ -66,6 +67,7 @@ var _case_page_label: Label
 var _previous_case_button: Button
 var _next_case_button: Button
 var _courtroom_stage
+var _oversight_hearing_stage
 var _procedure_labels: Dictionary = {}
 var _next_step_label: Label
 var _bench_label: Label
@@ -78,15 +80,20 @@ func _init(p_mode: String = MODE_JUDICIAL) -> void:
 	name = str(_config()["page_name"])
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	size_flags_vertical = Control.SIZE_EXPAND_FILL
-	horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	custom_minimum_size = Vector2(720, 420)
+	clip_contents = true
 	_build_content()
 
 
 func set_dark_mode(enabled: bool) -> void:
 	_dark_mode = enabled
-	var text_color := Color(0.92, 0.96, 0.98) if enabled else Color(0.07, 0.12, 0.18)
+	var text_color := SemanticPalette.color_for(enabled, "text_primary")
 	for label: Label in _labels:
 		label.add_theme_color_override("font_color", text_color)
+	if mode == MODE_JUDICIAL and _courtroom_stage != null:
+		_courtroom_stage.set_dark_mode(enabled)
+	elif mode == MODE_OVERSIGHT and _oversight_hearing_stage != null:
+		_oversight_hearing_stage.set_dark_mode(enabled)
 	_apply_case_style()
 	for button_variant in _defense_buttons.values():
 		_style_defense_button(button_variant as Button, text_color)
@@ -105,9 +112,16 @@ func refresh(system) -> void:
 		return
 	var summary: Dictionary = _system.committee_summary()
 	var open_key := "judicial_open_cases" if mode == MODE_JUDICIAL else "oversight_open_cases"
+	var active_key := "judicial_active" if mode == MODE_JUDICIAL else "oversight_active"
+	var capacity_key := "judicial_capacity" if mode == MODE_JUDICIAL else "oversight_capacity"
 	var open_cases := int(summary.get(open_key, 0))
 	var game_day := int(summary.get("current_day", 0))
-	_summary_label.text = L10n.text("%s　｜　%d 件待處理") % [_format_game_date(game_day), open_cases]
+	_summary_label.text = L10n.text("%s｜委員 %d / %d｜待處理 %d 件") % [
+		_format_game_date(game_day),
+		int(summary.get(active_key, 0)),
+		int(summary.get(capacity_key, 0)),
+		open_cases,
+	]
 	_refresh_case_navigation()
 
 
@@ -125,121 +139,127 @@ func submit_current_defense(template_id: String) -> Dictionary:
 		result = _system.submit_oversight_defense(case_id, template_id)
 	if bool(result.get("ok", false)):
 		refresh(_system)
+		if mode == MODE_OVERSIGHT and _oversight_hearing_stage != null:
+			_oversight_hearing_stage.play_defense(template_id)
 	defense_submitted.emit(mode, case_id, template_id, result)
 	return result
 
 
 func _build_content() -> void:
-	var content := VBoxContainer.new()
-	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	content.add_theme_constant_override("separation", 16)
-	add_child(content)
-
-	var hero_text := VBoxContainer.new()
-	hero_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	hero_text.alignment = BoxContainer.ALIGNMENT_CENTER
-	hero_text.add_theme_constant_override("separation", 10)
-	content.add_child(hero_text)
-	hero_text.add_child(_title(str(_config()["page_name"])))
-	var purpose := _body(str(_config()["purpose"]))
-	purpose.add_theme_font_size_override("font_size", 21)
-	hero_text.add_child(purpose)
-	_summary_label = _body("載入案件資料中……")
-	hero_text.add_child(_summary_label)
 	if mode == MODE_JUDICIAL:
 		_courtroom_stage = CourtroomStageScript.new()
-		content.add_child(_courtroom_stage)
+		add_child(_courtroom_stage)
+		_courtroom_stage.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	else:
-		var picture := TextureRect.new()
-		picture.name = "FunctionIllustration"
-		picture.texture = UiIconCatalog.texture(str(_config()["icon"]))
-		picture.custom_minimum_size = Vector2(220, 220)
-		picture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		picture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		picture.tooltip_text = str(_config()["purpose"])
-		content.add_child(picture)
+		_oversight_hearing_stage = OversightHearingStageScript.new()
+		add_child(_oversight_hearing_stage)
+		_oversight_hearing_stage.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var stage = _courtroom_stage if mode == MODE_JUDICIAL else _oversight_hearing_stage
+	var top_host := stage.top_content() as HBoxContainer
+	var tray_host := stage.tray_content() as VBoxContainer
+
+	_summary_label = _body("載入案件資料中……")
+	_summary_label.name = "JusticeOversightSummary"
+	_summary_label.custom_minimum_size = Vector2(172, 44)
+	_summary_label.max_lines_visible = 2
+	_summary_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_summary_label.add_theme_font_size_override("font_size", 15)
+	top_host.add_child(_summary_label)
 
 	_case_panel = PanelContainer.new()
 	_case_panel.name = "DefenseCasePanel"
-	content.add_child(_case_panel)
+	_case_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_case_panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	tray_host.add_child(_case_panel)
 	var case_margin := MarginContainer.new()
-	case_margin.add_theme_constant_override("margin_left", 20)
-	case_margin.add_theme_constant_override("margin_top", 16)
-	case_margin.add_theme_constant_override("margin_right", 20)
-	case_margin.add_theme_constant_override("margin_bottom", 18)
+	case_margin.add_theme_constant_override("margin_left", 12)
+	case_margin.add_theme_constant_override("margin_top", 7)
+	case_margin.add_theme_constant_override("margin_right", 12)
+	case_margin.add_theme_constant_override("margin_bottom", 7)
 	_case_panel.add_child(case_margin)
 	var case_stack := VBoxContainer.new()
-	case_stack.add_theme_constant_override("separation", 9)
+	case_stack.add_theme_constant_override("separation", 4)
 	case_margin.add_child(case_stack)
 	var case_navigation := HBoxContainer.new()
 	case_navigation.name = "CaseNavigation"
-	case_navigation.add_theme_constant_override("separation", 10)
-	case_stack.add_child(case_navigation)
+	case_navigation.add_theme_constant_override("separation", 6)
+	case_navigation.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	top_host.add_child(case_navigation)
 	_previous_case_button = Button.new()
 	_previous_case_button.name = "CasePreviousButton"
-	_previous_case_button.text = "← 上一案"
-	_previous_case_button.custom_minimum_size = Vector2(122, 44)
+	_previous_case_button.text = "←"
+	_previous_case_button.tooltip_text = "← 上一案"
+	_previous_case_button.set_meta("semantic_label", "← 上一案")
+	_previous_case_button.custom_minimum_size = Vector2(48, 44)
 	_previous_case_button.disabled = true
 	_previous_case_button.pressed.connect(_select_previous_case)
 	case_navigation.add_child(_previous_case_button)
 	_case_selector = OptionButton.new()
 	_case_selector.name = "CaseSelector"
 	_case_selector.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_case_selector.custom_minimum_size = Vector2(260, 44)
+	_case_selector.custom_minimum_size = Vector2(210, 44)
+	_case_selector.fit_to_longest_item = false
+	_case_selector.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_case_selector.disabled = true
 	_case_selector.item_selected.connect(_on_case_selected)
 	case_navigation.add_child(_case_selector)
 	_case_page_label = _body("")
 	_case_page_label.name = "CasePagerLabel"
 	_case_page_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_case_page_label.custom_minimum_size = Vector2(120, 44)
+	_case_page_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_case_page_label.custom_minimum_size = Vector2(80, 44)
+	_case_page_label.add_theme_font_size_override("font_size", 14)
 	case_navigation.add_child(_case_page_label)
 	_next_case_button = Button.new()
 	_next_case_button.name = "CaseNextButton"
-	_next_case_button.text = "下一案 →"
-	_next_case_button.custom_minimum_size = Vector2(122, 44)
+	_next_case_button.text = "→"
+	_next_case_button.tooltip_text = "下一案 →"
+	_next_case_button.set_meta("semantic_label", "下一案 →")
+	_next_case_button.custom_minimum_size = Vector2(48, 44)
 	_next_case_button.disabled = true
 	_next_case_button.pressed.connect(_select_next_case)
 	case_navigation.add_child(_next_case_button)
 	_case_title = _title("目前無待處理案件")
+	_case_title.add_theme_font_size_override("font_size", 20)
+	_case_title.custom_minimum_size = Vector2(0, 28)
+	_case_title.max_lines_visible = 1
 	_case_title.set_meta("l10n_skip", true)
 	case_stack.add_child(_case_title)
 	_case_detail = _body(str(_config()["empty_hint"]))
+	_case_detail.add_theme_font_size_override("font_size", 15)
+	_case_detail.custom_minimum_size = Vector2(0, 36)
+	_case_detail.max_lines_visible = 2
 	_case_detail.set_meta("l10n_skip", true)
 	case_stack.add_child(_case_detail)
 	if mode == MODE_JUDICIAL:
 		_build_procedure_timeline(case_stack)
 	_defense_status = _body("案件成立後即可選擇辯護策略。")
+	_defense_status.add_theme_font_size_override("font_size", 15)
+	_defense_status.custom_minimum_size = Vector2(0, 24)
+	_defense_status.max_lines_visible = 1
 	_defense_status.set_meta("l10n_skip", true)
 	case_stack.add_child(_defense_status)
 	var defense_row := HBoxContainer.new()
 	defense_row.name = "DefenseActions"
-	defense_row.add_theme_constant_override("separation", 12)
+	defense_row.add_theme_constant_override("separation", 8)
 	case_stack.add_child(defense_row)
 	for option_variant in _config()["defenses"]:
 		var option: Dictionary = option_variant
 		var button := Button.new()
 		var option_id := str(option["id"])
 		button.name = "%sDefenseButton" % option_id.to_pascal_case()
-		button.text = str(option["label"])
+		button.text = "%s\n%s" % [str(option["label"]), str(option["detail"])]
 		button.tooltip_text = str(option["detail"])
 		button.set_meta("semantic_label", str(option["label"]))
-		button.custom_minimum_size = Vector2(150, 50)
+		button.set_meta("semantic_detail", str(option["detail"]))
+		button.custom_minimum_size = Vector2(150, 100)
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		button.add_theme_font_size_override("font_size", 18)
+		button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		button.add_theme_font_size_override("font_size", 15)
 		button.disabled = true
 		button.pressed.connect(func() -> void: submit_current_defense(option_id))
 		_defense_buttons[option_id] = button
-		var option_stack := VBoxContainer.new()
-		option_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		option_stack.add_theme_constant_override("separation", 5)
-		option_stack.add_child(button)
-		var explanation := _body(str(option["detail"]))
-		explanation.set_meta("l10n_skip", true)
-		explanation.add_theme_font_size_override("font_size", 15)
-		explanation.custom_minimum_size = Vector2(0, 56)
-		option_stack.add_child(explanation)
-		defense_row.add_child(option_stack)
+		defense_row.add_child(button)
 
 	set_dark_mode(_dark_mode)
 
@@ -259,8 +279,10 @@ func _refresh_case_navigation() -> void:
 		_previous_case_button.disabled = true
 		_next_case_button.disabled = true
 		_case_page_label.text = L10n.text("第 %d / %d 案") % [0, 0]
-		_previous_case_button.text = L10n.text("← 上一案")
-		_next_case_button.text = L10n.text("下一案 →")
+		_previous_case_button.text = "←"
+		_next_case_button.text = "→"
+		_previous_case_button.tooltip_text = L10n.text("← 上一案")
+		_next_case_button.tooltip_text = L10n.text("下一案 →")
 		_refresh_case()
 		return
 	var selected_index := _open_case_ids.find(_selected_case_id)
@@ -324,8 +346,10 @@ func _select_next_case() -> void:
 func _update_case_navigation_state(index: int) -> void:
 	_previous_case_button.disabled = index <= 0
 	_next_case_button.disabled = index < 0 or index >= _open_case_ids.size() - 1
-	_previous_case_button.text = L10n.text("← 上一案")
-	_next_case_button.text = L10n.text("下一案 →")
+	_previous_case_button.text = "←"
+	_next_case_button.text = "→"
+	_previous_case_button.tooltip_text = L10n.text("← 上一案")
+	_next_case_button.tooltip_text = L10n.text("下一案 →")
 	_case_page_label.text = L10n.text("第 %d / %d 案") % [index + 1, _open_case_ids.size()]
 
 
@@ -342,6 +366,55 @@ func select_case_by_id(case_id: String) -> bool:
 	return true
 
 
+func debug_layout_signature() -> Dictionary:
+	var scroll_count := 0
+	var positive_vertical_scroll_count := 0
+	for node_variant in find_children("*", "ScrollContainer", true, false):
+		var scroll := node_variant as ScrollContainer
+		if scroll == null or not scroll.is_visible_in_tree():
+			continue
+		scroll_count += 1
+		var bar := scroll.get_v_scroll_bar()
+		if bar != null and bar.max_value - bar.page > 0.5:
+			positive_vertical_scroll_count += 1
+	var stage = _courtroom_stage if mode == MODE_JUDICIAL else _oversight_hearing_stage
+	var stage_signature: Dictionary = stage.debug_signature()
+	var minimum_target := INF
+	for button_variant in [_previous_case_button, _next_case_button]:
+		var button := button_variant as Button
+		if is_instance_valid(button):
+			minimum_target = minf(minimum_target, minf(button.size.x, button.size.y))
+	for button_variant in _defense_buttons.values():
+		var button := button_variant as Button
+		if is_instance_valid(button):
+			minimum_target = minf(minimum_target, minf(button.size.x, button.size.y))
+	var defense_actions := find_child("DefenseActions", true, false) as HBoxContainer
+	var defense_actions_rect := Rect2()
+	var defense_actions_fully_visible := false
+	if is_instance_valid(defense_actions) and defense_actions.is_visible_in_tree():
+		defense_actions_rect = defense_actions.get_global_rect()
+		defense_actions_fully_visible = get_global_rect().encloses(defense_actions_rect)
+		if is_instance_valid(_case_panel):
+			defense_actions_fully_visible = defense_actions_fully_visible and _case_panel.get_global_rect().encloses(defense_actions_rect)
+		for button_variant in _defense_buttons.values():
+			var defense_button := button_variant as Button
+			if is_instance_valid(defense_button) and not defense_actions_rect.encloses(defense_button.get_global_rect()):
+				defense_actions_fully_visible = false
+	return {
+		"mode": mode,
+		"root_is_scroll_container": false,
+		"scroll_container_count": scroll_count,
+		"positive_vertical_scroll_count": positive_vertical_scroll_count,
+		"minimum_interactive_extent": 0.0 if minimum_target == INF else minimum_target,
+		"defense_actions_rect": defense_actions_rect,
+		"defense_actions_fully_visible": defense_actions_fully_visible,
+		"panel_rect": get_rect(),
+		"top_rect": stage_signature.get("top_rect", Rect2()),
+		"tray_rect": stage_signature.get("tray_rect", Rect2()),
+		"actor_layer_count": int(stage_signature.get("actor_layer_count", 0)),
+	}
+
+
 func _refresh_case() -> void:
 	if _case_title == null:
 		return
@@ -353,9 +426,15 @@ func _refresh_case() -> void:
 		if mode == MODE_JUDICIAL:
 			_courtroom_stage.show_empty()
 			_refresh_procedure_timeline({})
+		elif mode == MODE_OVERSIGHT and _oversight_hearing_stage != null:
+			_oversight_hearing_stage.show_empty()
 		for button_variant in _defense_buttons.values():
-			(button_variant as Button).disabled = true
-			(button_variant as Button).text = L10n.text(str((button_variant as Button).get_meta("semantic_label", "辯護")))
+			var empty_button := button_variant as Button
+			empty_button.disabled = true
+			empty_button.text = "%s\n%s" % [
+				L10n.text(str(empty_button.get_meta("semantic_label", "辯護"))),
+				L10n.text(str(empty_button.get_meta("semantic_detail", ""))),
+			]
 		return
 
 	var selected_id := str(active_case.get("defense_template_id", ""))
@@ -379,6 +458,8 @@ func _refresh_case() -> void:
 			int(active_case.get("evidence_strength", 0)),
 			"、".join(localized_allegations),
 		]
+		if _oversight_hearing_stage != null:
+			_oversight_hearing_stage.set_case(active_case)
 	if _system.has_method("is_terminal_locked") and bool(_system.is_terminal_locked()):
 		var failure_reason := str(_system.terminal_failure_reason())
 		_defense_status.text = L10n.text("遊戲失敗：%s") % L10n.text(str(FAILURE_REASON_LABELS.get(failure_reason, "狀態未知")))
@@ -395,13 +476,11 @@ func _refresh_case() -> void:
 		button.disabled = submission_closed
 		var label := str(button.get_meta("semantic_label", option_id))
 		var localized_label := L10n.text(label)
-		button.text = "✓ %s" % localized_label if option_id == selected_id else localized_label
+		var detail := L10n.text(str(button.get_meta("semantic_detail", "")))
+		button.text = "%s%s\n%s" % ["✓ " if option_id == selected_id else "", localized_label, detail]
 
 
 func _build_procedure_timeline(parent: VBoxContainer) -> void:
-	var heading := _body("審判程序")
-	heading.add_theme_font_size_override("font_size", 17)
-	parent.add_child(heading)
 	var timeline := HBoxContainer.new()
 	timeline.name = "JudicialProcedureTimeline"
 	timeline.add_theme_constant_override("separation", 7)
@@ -412,20 +491,25 @@ func _build_procedure_timeline(parent: VBoxContainer) -> void:
 		stage_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		stage_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		stage_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		stage_label.custom_minimum_size = Vector2(96, 48)
+		stage_label.custom_minimum_size = Vector2(88, 40)
 		stage_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		stage_label.add_theme_font_size_override("font_size", 15)
+		stage_label.add_theme_font_size_override("font_size", 14)
 		stage_label.set_meta("l10n_skip", true)
 		timeline.add_child(stage_label)
 		_procedure_labels[stage_id] = stage_label
 	_next_step_label = _body("")
 	_next_step_label.name = "JudicialNextStep"
 	_next_step_label.set_meta("l10n_skip", true)
+	_next_step_label.add_theme_font_size_override("font_size", 14)
+	_next_step_label.custom_minimum_size = Vector2(0, 22)
+	_next_step_label.max_lines_visible = 1
 	parent.add_child(_next_step_label)
 	_bench_label = _body("")
 	_bench_label.name = "JudicialBenchLabel"
 	_bench_label.set_meta("l10n_skip", true)
-	_bench_label.add_theme_font_size_override("font_size", 15)
+	_bench_label.add_theme_font_size_override("font_size", 14)
+	_bench_label.custom_minimum_size = Vector2(0, 22)
+	_bench_label.max_lines_visible = 1
 	parent.add_child(_bench_label)
 
 
@@ -554,10 +638,11 @@ func _apply_case_style() -> void:
 	if not is_instance_valid(_case_panel):
 		return
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.08, 0.13, 0.17) if _dark_mode else Color(0.965, 0.91, 0.78)
-	style.border_color = _config()["accent"] as Color
-	style.set_border_width_all(2)
-	style.set_corner_radius_all(12)
+	style.bg_color = SemanticPalette.color_for(_dark_mode, "surface_raised")
+	style.bg_color.a = 0.82
+	style.border_color = SemanticPalette.color_for(_dark_mode, "border_default")
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(10)
 	_case_panel.add_theme_stylebox_override("panel", style)
 
 
@@ -565,17 +650,18 @@ func _style_defense_button(button: Button, text_color: Color) -> void:
 	if not is_instance_valid(button):
 		return
 	var normal := StyleBoxFlat.new()
-	normal.bg_color = Color(0.12, 0.22, 0.28) if _dark_mode else Color(1.0, 0.96, 0.86)
-	normal.border_color = _config()["accent"] as Color
+	normal.bg_color = SemanticPalette.color_for(_dark_mode, "surface_muted")
+	normal.border_color = SemanticPalette.color_for(_dark_mode, "border_default")
 	normal.set_border_width_all(2)
 	normal.set_corner_radius_all(9)
 	var hover := normal.duplicate() as StyleBoxFlat
-	hover.bg_color = Color(0.18, 0.33, 0.40) if _dark_mode else Color(1.0, 0.99, 0.93)
+	hover.bg_color = SemanticPalette.color_for(_dark_mode, "surface_raised")
+	hover.border_color = SemanticPalette.color_for(_dark_mode, "border_focus")
 	var pressed := normal.duplicate() as StyleBoxFlat
-	pressed.bg_color = Color(0.07, 0.15, 0.19) if _dark_mode else Color(0.88, 0.80, 0.64)
+	pressed.bg_color = SemanticPalette.color_for(_dark_mode, "surface_base")
 	var disabled := normal.duplicate() as StyleBoxFlat
-	disabled.bg_color = Color(0.14, 0.18, 0.21) if _dark_mode else Color(0.78, 0.77, 0.71)
-	disabled.border_color = Color(0.31, 0.39, 0.44) if _dark_mode else Color(0.55, 0.54, 0.49)
+	disabled.bg_color = SemanticPalette.color_for(_dark_mode, "action_primary_disabled")
+	disabled.border_color = SemanticPalette.color_for(_dark_mode, "border_disabled")
 	button.add_theme_stylebox_override("normal", normal)
 	button.add_theme_stylebox_override("hover", hover)
 	button.add_theme_stylebox_override("focus", hover)
@@ -585,4 +671,4 @@ func _style_defense_button(button: Button, text_color: Color) -> void:
 	button.add_theme_color_override("font_hover_color", text_color)
 	button.add_theme_color_override("font_pressed_color", text_color)
 	button.add_theme_color_override("font_focus_color", text_color)
-	button.add_theme_color_override("font_disabled_color", Color(0.67, 0.74, 0.78) if _dark_mode else Color(0.18, 0.22, 0.25))
+	button.add_theme_color_override("font_disabled_color", SemanticPalette.color_for(_dark_mode, "text_disabled"))

@@ -1,39 +1,33 @@
-# Mayor Simulator 現行中控指標
+# 《城諾之音》 / CivicTale: Voice of Promise Current Release Control
 
-這份紀錄是目前專案控制權的唯一 repo 內指標；它不自行宣告 goal 完成。
+- Control task: `019fc87e-d138-7010-a95c-29ca1fb678bf`.
+- Product authority: `30_core` branch `main`.
+- Current target: `0.1.0-alpha.3`, Windows x64, INTERNAL-ONLY.
+- Release source: `d55c62033c9d9b50d9ae359f9f9c63ce7079f0d1` (tree
+  `211e454b6ff3d3297fc08f6d47af81adb3a992d3`).
+- Tag contract: no tag is created by this audit. Existing `v0.1.0-alpha.1`
+  and `v0.1.0-alpha.2` tags are immutable and must never be moved.
+- Product version authority: root `VERSION`; Windows metadata remains `0.1.0.0`.
+- Historic alpha.1 baseline: `dac20a65365b62a1ba370d7be8317536f67be755`; it is not the alpha.1 tag source and is not this RC source. The alpha.2 source and evidence are historical only.
+- Distribution: no push, remote tag, GitHub Release, public upload, or public release.
+- Internal verdict: **CONDITIONAL GO** for access-controlled Windows x64 testing.
+  The 2026-08-10 fresh acceptance passed on the exact source above; P1-001
+  still requires manual five-language native-GUI evidence. Public release
+  remains NO-GO due to `P0-RIGHTS-001..003`.
 
-- 現行中控 task：`019fa248-259e-7040-a887-cc73da543621`（Mayor Simulator｜專案中控中心）
-- 捕獲時狀態：`active`（等待 tag CI 與私有 GitHub Pre-release 核對完成）
-- 目前產品階段：MVP Alpha
-- 目前版本：`0.1.0-alpha.1`
-- 後續通道：Alpha → Beta → Pre-release → Release
-- 權威工作區：`C:\Users\XCJ\遊戲\MayorSimulator_Authoritative_2026-08-02`
-- Release candidate branch：`agent/semver-alpha-release`
-- Base commit：`8769f78118f1afbf2cf0cb7e060e1bd698477be6`
-- SDK gitlink：`956f0414b6cd42dc8b7a648e3ce942d7e061430a`（SDK 1.2.0 SemVer release contract）
-- 產品版本唯一權威來源：根目錄 `VERSION`；目前為 `0.1.0-alpha.1`。
-- Tag 契約：`v<SEMVER>`；本次目標為 `v0.1.0-alpha.1`。
-- Windows 四段式 metadata：`MAJOR.MINOR.PATCH.0`；本次為 `0.1.0.0`，不再用日期當產品版本。
+## Recomputed time gates
 
-`專案移交_2026-08-02/GOAL_CURRENT.*` 與 `PACKAGE_CONTENT_MANIFEST.json` 是 2026-08-02 凌晨的歷史移交快照，仍指向舊 task、舊路徑與 `paused` 狀態，不是 live control evidence，也不得用來覆蓋現在的 UI 驗收要求。
+The live audit started after 09:00 Asia/Taipei on 2026-08-10. 07:00 and 09:00
+are elapsed checkpoints, not automatically successful or "missed" labels.
+Record actual evidence against each checkpoint; timing never overrides a NO-GO.
 
-目前已通過：
+## Exact acceptance
 
-- 凍結後 fresh runtime assertion matrix 66/66，66/66 product-clean、失敗 0、環境警告測項 0。
-- 凍結後 OS-kill save QA 5/5，173 個 semantic checks、5 次強制終止，全部程序停止。
-- 兩次獨立 canonical UI 驗收皆通過：native root 4/4、offscreen evidence 33/33、產品 diagnostics 0、來源指紋執行前後一致。
-- Native 是真正 Windows root viewport：視窗／capture `1656×843`、logical `1414×720`、root backing `1939×987`。
-- Offscreen 高解析證據是 `2880×1800`、logical `1280×800`；它只作證據，不冒充 native-window 解析度。
-- T3 產品凍結後 fresh 可視終驗 PASS：10×10／縮放、六車種、道路／軌道／跑道、NPC 避障、整地前置、多幀動畫、民情 lifecycle、healthcare、音效持久化、Save／Continue 與 Godot 零殘留均通過。
-- SDK、ledger、marker 與 read-only release guard 終審。
-
-技術驗收已封口：
-
-- 本中控 task 已由 `update_goal` 正式標記為 `complete`。
-- T0 最終 SDK／移交守門與 T2 Goal #8 可追溯性複核均已完成；Goal #8 runtime／visible acceptance gap 為 0。
-
-公開 release 仍被 LICENSE/COPYING、88 項分發權利、city-map background source rights 與 train-station provenance 阻擋；這些是公開散布治理阻擋，不是已知 runtime 缺陷。根目錄 canonical `RELEASE_README.txt` 已存在，Windows／Linux CI staging 會將它連同第三方聲明納入封裝。
-
-本次允許在私有 repository 建立 MVP Alpha `0.1.0-alpha.1` 的 GitHub Pre-release，供授權成員驗收；這不解除公開散布阻擋，也不把產品階段提升為 Beta、Pre-release channel 或正式 Release。
-
-真正完成狀態只由本中控 task 在 tag CI、Windows／Linux 成品與 GitHub Pre-release 資產全部核對後的 `update_goal` 成功結果決定。
+- Canonical single-run acceptance: PASS; assertion matrix 67/67 product-clean,
+  OS-kill 5/5, Windows exported-product smoke exit 0 with zero product and
+  ObjectDB leak diagnostics.
+- Native Windows UI acceptance: PASS; 4 native captures at 2880x1800 and 33
+  supplemental captures. This is not five-language manual click-through proof.
+- Stable Windows ZIP: `MayorSimulator-Windows-x86_64-0.1.0-alpha.3.zip`,
+  `59764222` bytes, SHA-256
+  `35bc170c96e91b6c89153cf4b7ed1555b701eed516c640f2f7a2b1fbe7bb72d5`.

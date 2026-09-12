@@ -106,6 +106,32 @@ func process_next() -> Array:
 				))
 		"upsert_building":
 			events.append(_upsert_record(command, "building.upserted", "building_id"))
+		"complete_building_construction":
+			var building_id := str(command.payload.get("building_id", ""))
+			var job_id := str(command.payload.get("job_id", ""))
+			var record_value: Variant = command.payload.get("record", null)
+			if building_id.is_empty():
+				events.append(_rejected(command, "building_id_required"))
+			elif job_id.is_empty():
+				events.append(_rejected(command, "job_id_required"))
+			elif not record_value is Dictionary:
+				events.append(_rejected(command, "building_record_required"))
+			else:
+				var validation_error := building_completion_validation_error(job_id, record_value as Dictionary)
+				if not validation_error.is_empty():
+					events.append(_rejected(command, validation_error))
+				else:
+					var record: Dictionary = (record_value as Dictionary).duplicate(true)
+					record["building_id"] = building_id
+					events.append(_emit(
+						"building.construction_completed",
+						state.game_time,
+						building_id,
+						null,
+						str(command.payload.get("reason_tag", "building.construction_completed")),
+						{"record": record, "job_id": job_id},
+						command.operation_id
+					))
 		"remove_building":
 			events.append(_remove_record(command, "building.removed", "building_id"))
 		"upsert_construction":
@@ -241,6 +267,109 @@ func _remove_record(command, event_type: String, id_key: String):
 	if subject_id.is_empty():
 		return _rejected(command, "%s_required" % id_key)
 	return _emit(event_type, state.game_time, subject_id, null, str(command.payload.get("reason_tag", "record_removed")), {}, command.operation_id)
+
+
+func building_completion_validation_error(job_id: String, record: Dictionary) -> String:
+	if not state.construction_jobs.has(job_id):
+		return "construction_job_required"
+	var job_value: Variant = state.construction_jobs[job_id]
+	if not job_value is Dictionary:
+		return "construction_job_invalid"
+	var job: Dictionary = job_value
+	if str(job.get("status", "")) != "completed":
+		return "construction_job_not_completed"
+	if str(job.get("operation", "")) != "build":
+		return "construction_job_not_build"
+	var metadata_value: Variant = job.get("metadata", null)
+	if not metadata_value is Dictionary:
+		return "building_job_metadata_required"
+	var metadata: Dictionary = metadata_value
+	if not str(metadata.get("entity_kind", "")).is_empty():
+		return "construction_job_not_building"
+	if str(record.get("status", "")) != "active":
+		return "building_record_not_active"
+	var job_blueprint_value: Variant = job.get("blueprint", null)
+	var record_blueprint_value: Variant = record.get("blueprint", null)
+	if not job_blueprint_value is Dictionary or not record_blueprint_value is Dictionary:
+		return "building_blueprint_required"
+	var job_blueprint: Dictionary = job_blueprint_value
+	var record_blueprint: Dictionary = record_blueprint_value
+	if record_blueprint != job_blueprint:
+		return "building_blueprint_mismatch"
+	if str(record.get("definition_id", "")) != str(job_blueprint.get("building_id", "")):
+		return "building_definition_mismatch"
+	if str(record.get("building_name", "")) != str(metadata.get("building_name", "")):
+		return "building_name_mismatch"
+	var job_tile_value: Variant = _normalized_completion_integer(metadata.get("tile_index", null))
+	if job_tile_value == null:
+		return "building_job_tile_required"
+	var record_tile_value: Variant = _normalized_completion_integer(record.get("tile_index", null))
+	if record_tile_value == null:
+		return "building_tile_required"
+	if record_tile_value != job_tile_value:
+		return "building_tile_mismatch"
+	var job_anchor_value: Variant = _normalized_completion_integer(metadata.get("anchor_tile_id", null))
+	if job_anchor_value == null:
+		return "building_job_anchor_required"
+	var record_anchor_value: Variant = _normalized_completion_integer(record.get("anchor_tile_id", null))
+	if record_anchor_value == null:
+		return "building_anchor_required"
+	if record_anchor_value != job_anchor_value:
+		return "building_anchor_mismatch"
+	var job_footprint_value: Variant = metadata.get("footprint_id", null)
+	if not job_footprint_value is String or str(job_footprint_value).strip_edges().is_empty():
+		return "building_job_footprint_required"
+	var record_footprint_value: Variant = record.get("footprint_id", null)
+	if not record_footprint_value is String or str(record_footprint_value).strip_edges().is_empty():
+		return "building_footprint_required"
+	if record_footprint_value != job_footprint_value:
+		return "building_footprint_mismatch"
+	var job_occupied_value: Variant = _normalized_completion_tile_ids(metadata.get("occupied_tile_ids", null))
+	var record_occupied_value: Variant = _normalized_completion_tile_ids(record.get("occupied_tile_ids", null))
+	if job_occupied_value == null or record_occupied_value == null:
+		return "building_occupied_tiles_required"
+	if record_occupied_value != job_occupied_value:
+		return "building_occupied_tiles_mismatch"
+	var tile_index: int = job_tile_value
+	if int(job_anchor_value) != tile_index:
+		return "building_job_tile_relation_invalid"
+	var occupied_tile_ids: Array = job_occupied_value
+	if occupied_tile_ids.is_empty() or int(occupied_tile_ids[0]) != tile_index:
+		return "building_job_footprint_relation_invalid"
+	if str(metadata.get("footprint_id", "")).is_empty():
+		return "building_job_footprint_relation_invalid"
+	if str(job.get("target_id", "")) != "tile_%02d" % tile_index:
+		return "building_job_target_mismatch"
+	return ""
+
+
+func _normalized_completion_integer(value: Variant) -> Variant:
+	if value is int:
+		return value if int(value) >= 0 else null
+	if not value is float:
+		return null
+	var numeric_value := float(value)
+	if not is_finite(numeric_value) or numeric_value < 0.0 or numeric_value != floor(numeric_value):
+		return null
+	var normalized_value := int(numeric_value)
+	if float(normalized_value) != numeric_value:
+		return null
+	return normalized_value
+
+
+func _normalized_completion_tile_ids(value: Variant) -> Variant:
+	if not value is Array:
+		return null
+	var normalized: Array[int] = []
+	for tile_value: Variant in value:
+		var normalized_value: Variant = _normalized_completion_integer(tile_value)
+		if normalized_value == null:
+			return null
+		var tile_id: int = normalized_value
+		if normalized.has(tile_id):
+			return null
+		normalized.append(tile_id)
+	return normalized
 
 
 func _append_calendar_boundary_events(events: Array, previous_date: Dictionary, operation_id: String) -> void:

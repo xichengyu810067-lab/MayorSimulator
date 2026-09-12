@@ -1,9 +1,11 @@
 extends RefCounted
 
 const LedgerScript = preload("res://scripts/core/ledger.gd")
+const SaveSchemaAuthorityScript = preload("res://scripts/core/save_schema_authority.gd")
 
-const SNAPSHOT_SCHEMA_VERSION := 1
-const MIN_SUPPORTED_SNAPSHOT_SCHEMA_VERSION := 1
+const SNAPSHOT_SCHEMA_VERSION := SaveSchemaAuthorityScript.CITY_STATE_CURRENT_SCHEMA_VERSION
+const MIN_SUPPORTED_SNAPSHOT_SCHEMA_VERSION := SaveSchemaAuthorityScript.CITY_STATE_MIN_SUPPORTED_SCHEMA_VERSION
+const MAX_SUPPORTED_SNAPSHOT_SCHEMA_VERSION := SaveSchemaAuthorityScript.CITY_STATE_MAX_SUPPORTED_SCHEMA_VERSION
 const DAYS_PER_MONTH := 30
 const MONTHS_PER_YEAR := 12
 
@@ -116,6 +118,16 @@ func apply_event(event) -> bool:
 				)
 		"building.upserted":
 			buildings[event.subject_id] = event.payload.get("record", event.payload).duplicate(true)
+		"building.construction_completed":
+			var completed_record_value: Variant = event.payload.get("record", null)
+			var completed_job_id := str(event.payload.get("job_id", ""))
+			if event.subject_id.is_empty() or completed_job_id.is_empty() or not completed_record_value is Dictionary:
+				accepted = false
+			else:
+				var completed_record: Dictionary = (completed_record_value as Dictionary).duplicate(true)
+				completed_record["building_id"] = event.subject_id
+				construction_jobs.erase(completed_job_id)
+				buildings[event.subject_id] = completed_record
 		"building.removed":
 			buildings.erase(event.subject_id)
 		"construction.upserted":
@@ -180,7 +192,6 @@ func to_dict() -> Dictionary:
 		"metrics": metrics.duplicate(true),
 		"buildings": buildings.duplicate(true),
 		"construction_jobs": construction_jobs.duplicate(true),
-		"npcs": npcs.duplicate(true),
 		"scheduled_events": scheduled_events.duplicate(true),
 		"event_book": event_book.duplicate(true),
 		"governance": governance.duplicate(true),
@@ -193,7 +204,7 @@ static func from_dict(data: Dictionary):
 	var migrated := migrate_dict(data)
 	if migrated.is_empty():
 		return null
-	for dictionary_field: String in ["ledger", "metrics", "buildings", "construction_jobs", "npcs", "scheduled_events", "governance", "maintenance", "metadata"]:
+	for dictionary_field: String in ["ledger", "metrics", "buildings", "construction_jobs", "scheduled_events", "governance", "maintenance", "metadata"]:
 		if not migrated.get(dictionary_field, {}) is Dictionary:
 			return null
 	if not migrated.get("event_book", []) is Array:
@@ -212,10 +223,14 @@ static func from_dict(data: Dictionary):
 		state.metrics[metric_name] = state._deep_copy(loaded_metrics[metric_name])
 	state.buildings = (migrated.get("buildings", {}) as Dictionary).duplicate(true)
 	state.construction_jobs = (migrated.get("construction_jobs", {}) as Dictionary).duplicate(true)
-	state.npcs = (migrated.get("npcs", {}) as Dictionary).duplicate(true)
+	var hydration := _runtime_npcs_from_metadata(migrated)
+	if not bool(hydration.get("ok", false)):
+		return null
+	# The hydration helper already deep-copies every canonical record into a new
+	# dictionary. Taking ownership here preserves the atomic boundary without a
+	# second 200k-record deep copy.
+	state.npcs = hydration.get("records", {}) as Dictionary
 	if not loaded_metrics.has("population"):
-		# Schema-1 snapshots created before the population mirror was introduced
-		# remain loadable; their already-persisted NPC collection is authoritative.
 		state.metrics["population"] = state.npcs.size()
 	state.scheduled_events = (migrated.get("scheduled_events", {}) as Dictionary).duplicate(true)
 	state.event_book.clear()
@@ -240,11 +255,94 @@ static func migrate_dict(data: Dictionary) -> Dictionary:
 	if not _is_integer_value(data.get("schema_version", -1)):
 		return {}
 	var source_version := int(data.get("schema_version", -1))
-	if source_version < MIN_SUPPORTED_SNAPSHOT_SCHEMA_VERSION or source_version > SNAPSHOT_SCHEMA_VERSION:
+	if source_version < MIN_SUPPORTED_SNAPSHOT_SCHEMA_VERSION or source_version > MAX_SUPPORTED_SNAPSHOT_SCHEMA_VERSION:
 		return {}
-	# Version 1 remains readable as-is. Future migrations must be added here
-	# explicitly instead of being synthesized by permissive default values.
-	return data.duplicate(true)
+	var migrated := data.duplicate(true)
+	if source_version == 1:
+		if not _migrate_v1_npc_mirror(migrated):
+			return {}
+		migrated["schema_version"] = SNAPSHOT_SCHEMA_VERSION
+	elif migrated.has("npcs"):
+		# CityState v2 has one writer shape. Reintroducing the removed mirror is
+		# corruption, not a permissive compatibility extension.
+		return {}
+	return migrated
+
+
+## Rebuilds the runtime-only NPC lookup atomically from the persisted population
+## authority. This is a pure hydration boundary: it emits no domain event and
+## advances neither command_sequence nor event_sequence.
+func hydrate_runtime_npcs_from_population(population_snapshot: Dictionary) -> bool:
+	var hydration := _runtime_npcs_from_population_snapshot(population_snapshot)
+	if not bool(hydration.get("ok", false)):
+		return false
+	# The candidate lookup is detached from the input and complete before this
+	# assignment, so taking ownership remains atomic and capacity-safe.
+	npcs = hydration.get("records", {}) as Dictionary
+	return true
+
+
+static func _migrate_v1_npc_mirror(state_snapshot: Dictionary) -> bool:
+	var mirror_value: Variant = state_snapshot.get("npcs", {})
+	if not mirror_value is Dictionary:
+		return false
+	var mirror: Dictionary = mirror_value
+	var hydration := _runtime_npcs_from_metadata(state_snapshot)
+	if not bool(hydration.get("ok", false)):
+		return false
+	var has_canonical_population := bool(hydration.get("present", false))
+	var canonical: Dictionary = hydration.get("records", {})
+	if not has_canonical_population:
+		# A non-empty core-only collection has no authoritative population history.
+		# Reject it instead of fabricating a replacement population snapshot.
+		if not mirror.is_empty():
+			return false
+		state_snapshot.erase("npcs")
+		return true
+	if mirror.size() != canonical.size():
+		return false
+	for key: Variant in mirror.keys():
+		var npc_id := str(key)
+		var mirror_record: Variant = mirror[key]
+		if npc_id.is_empty() or not mirror_record is Dictionary or not canonical.has(npc_id):
+			return false
+		if _canonicalize(mirror_record) != _canonicalize(canonical[npc_id]):
+			return false
+	state_snapshot.erase("npcs")
+	return true
+
+
+static func _runtime_npcs_from_metadata(state_snapshot: Dictionary) -> Dictionary:
+	var metadata_value: Variant = state_snapshot.get("metadata", {})
+	if not metadata_value is Dictionary:
+		return {"ok": false, "present": false, "records": {}}
+	var vertical_value: Variant = (metadata_value as Dictionary).get("vertical_slice", null)
+	if vertical_value == null:
+		return {"ok": true, "present": false, "records": {}}
+	if not vertical_value is Dictionary:
+		return {"ok": false, "present": false, "records": {}}
+	var population_value: Variant = (vertical_value as Dictionary).get("population", null)
+	if population_value == null:
+		return {"ok": true, "present": false, "records": {}}
+	if not population_value is Dictionary:
+		return {"ok": false, "present": true, "records": {}}
+	return _runtime_npcs_from_population_snapshot(population_value as Dictionary)
+
+
+static func _runtime_npcs_from_population_snapshot(population_snapshot: Dictionary) -> Dictionary:
+	var records_value: Variant = population_snapshot.get("records", null)
+	if not records_value is Array:
+		return {"ok": false, "present": true, "records": {}}
+	var result: Dictionary = {}
+	for record_value: Variant in records_value:
+		if not record_value is Dictionary:
+			return {"ok": false, "present": true, "records": {}}
+		var record: Dictionary = record_value
+		var npc_id := str(record.get("npc_id", ""))
+		if npc_id.is_empty() or result.has(npc_id):
+			return {"ok": false, "present": true, "records": {}}
+		result[npc_id] = record.duplicate(true)
+	return {"ok": true, "present": true, "records": result}
 
 
 func validate_semantics() -> bool:
@@ -314,7 +412,7 @@ static func _is_numeric_value(value: Variant) -> bool:
 	return (value is int) or (value is float and is_finite(float(value)))
 
 
-func _canonicalize(value: Variant) -> Variant:
+static func _canonicalize(value: Variant) -> Variant:
 	if value is Dictionary:
 		var output: Dictionary = {}
 		var keys: Array = (value as Dictionary).keys()
