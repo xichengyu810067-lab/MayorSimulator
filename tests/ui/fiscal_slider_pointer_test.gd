@@ -25,6 +25,13 @@ func _run() -> void:
 			break
 	main.tutorial_overlay.close_as_completed(false)
 	await process_frame
+	# Keep the real pointer fixture outside the deferred onboarding input mask.
+	main.onboarding_progress.restore_from_shell_state({"schema_version": 8, "tutorial_completed": true})
+	main.call("_refresh_onboarding_guide")
+	main.call("_sync_map_interaction_for_ui")
+	await process_frame
+	main._open_municipal_center()
+	await process_frame
 	main.municipal_overlay.open_page("finance")
 	var category_card := main.find_child("FiscalCategoryCard_education_leisure", true, false) as Button
 	if category_card == null:

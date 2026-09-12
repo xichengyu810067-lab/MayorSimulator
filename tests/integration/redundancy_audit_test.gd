@@ -73,7 +73,10 @@ func _audit_feature_ownership(main) -> void:
 	var report_hub_button := main.municipal_overlay.find_child("%sButton" % "report".capitalize(), true, false) as Button
 	_check(city_data_hub_button != null and not city_data_hub_button.disabled, "municipal hub keeps city data directly reachable")
 	_check(report_hub_button == null, "monthly report remains a contextual child instead of duplicating a hub card")
-	main.municipal_overlay.open_page("report")
+	main._open_city_data()
+	await process_frame
+	main._open_monthly_report()
+	await process_frame
 	var municipal_back := main.municipal_overlay.find_child("BackButton", true, false) as Button
 	if municipal_back != null:
 		municipal_back.emit_signal("pressed")

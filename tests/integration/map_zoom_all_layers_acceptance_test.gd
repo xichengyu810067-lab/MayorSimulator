@@ -37,8 +37,14 @@ func _run() -> void:
 	_check(main._game_started and not main.start_screen.visible, "New reaches the interactive Main map")
 	if main.tutorial_overlay != null and main.tutorial_overlay.is_open():
 		main.tutorial_overlay.close_as_completed(false)
-	await _settle(2)
+	await process_frame
+	# This test owns map input, not the mandatory onboarding flow. Restore the
+	# validated legacy-complete shell state before its deferred guide refresh can
+	# reopen an input mask over the synthetic wheel, click, and drag events.
+	main.onboarding_progress.restore_from_shell_state({"schema_version": 8, "tutorial_completed": true})
+	main.call("_refresh_onboarding_guide")
 	main.call("_sync_map_interaction_for_ui")
+	await process_frame
 	main.call("_layout_map_stage")
 
 	var terrain = main.vertical_slice.terrain_map

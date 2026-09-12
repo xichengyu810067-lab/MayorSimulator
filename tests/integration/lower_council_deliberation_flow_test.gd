@@ -189,6 +189,8 @@ func _test_main_stage_and_single_autosave() -> void:
 	resumed.start_screen.continue_game_button.emit_signal("pressed")
 	await _wait_for_loading(resumed)
 	_check(resumed._game_started, "completed governance save reloads through the Main Continue path")
+	resumed._open_municipal_center()
+	await process_frame
 	resumed.municipal_overlay.open_page("governance")
 	await _settle(2)
 	var reloaded_signature: Dictionary = resumed.lower_council_stage.debug_signature()
