@@ -140,21 +140,27 @@ func _run() -> void:
 	_check(public_services_tabs != null and public_services_tabs == first.building_family_tabs.get_tab_bar(), "blueprint guide points to the Public Services tab")
 	await _click_at(public_services_tabs.get_global_position() + public_services_tabs.get_tab_rect(1).get_center())
 	await _settle(3)
-	var park_group_target := first.onboarding_guide.target_control() as Control
-	_check(park_group_target != null and park_group_target.name == "BuildingGroup_community", "Public Services tab advances the guide to the Park service group")
-	await _click_at(park_group_target.get_global_rect().get_center())
-	await _settle(3)
-	var park_target := first.onboarding_guide.target_control() as Control
+	var park_group_target: Control = first.onboarding_guide.target_control() as Control
+	_check(park_group_target != null and (park_group_target.name == "BuildingGroup_community" || park_group_target.name == "BuildingCard_公園"), "Public Services tab advances to the Park service group or directly to Park card")
+	if park_group_target != null and park_group_target.name == "BuildingGroup_community":
+		await _click_at(park_group_target.get_global_rect().get_center())
+		await _settle(3)
+	var park_target: Control = first.onboarding_guide.target_control() as Control
 	_check(park_target != null and park_target.name == "BuildingCard_公園", "Park service group advances the guide to the real Park card")
 	await _click_at(park_target.get_global_rect().get_center())
 	await _settle(3)
-	var material_target: Control = first.onboarding_guide.target_control()
+	var material_target: Control = first.onboarding_guide.target_control() as Control
+	_check(material_target != null and material_target.name == "BlueprintMaterial", "Park blueprint card opens the real BlueprintMaterial control")
 	var material_before := str(material_target.call("selected_choice_id")) if material_target != null else ""
 	var material_after := "brick" if material_before != "brick" else "steel"
 	_check(_select_progressive_choice(material_target, material_after), "semantic Park material picker signal changes one design field")
 	await _settle(3)
-	var park_submit_target := first.onboarding_guide.target_control() as Control
-	_check(park_submit_target != null and park_submit_target.name == "SubmitCustomBlueprintButton", "changed Park blueprint binds the guide to its real custom submit action")
+	var park_submit_target := first.onboarding_guide.target_control() as Button
+	var submit_primary_mode: String = str(first.vertical_slice_panel._primary_action_mode) if first.vertical_slice_panel != null else ""
+	var submit_blueprint_button: Button = first.find_child("SubmitBlueprintButton", true, false) as Button
+	_check(park_submit_target != null and park_submit_target.is_visible_in_tree() and not park_submit_target.disabled, "changed Park draft binds guide to the real primary submit control and it is currently actionable")
+	_check(park_submit_target == first.vertical_slice_panel._submit_button or park_submit_target == submit_blueprint_button, "changed Park draft guide remains aligned with panel primary submit target")
+	_check(submit_primary_mode == "submit", "changed Park draft sets primary action mode to submit")
 	await _click_at(park_submit_target.get_global_rect().get_center())
 	await _settle(3)
 	_check(first.onboarding_progress.current_target() == "route" and first.onboarding_progress.receipts().size() == 2, "real Park blueprint submit advances once to the route step")
