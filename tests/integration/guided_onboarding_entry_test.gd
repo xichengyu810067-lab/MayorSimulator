@@ -205,6 +205,238 @@ func _run() -> void:
 	await _settle(3)
 	_check(resumed.onboarding_progress.current_target() == "route" and resumed.onboarding_progress.receipts().size() == 2, "replay completion cannot reset, complete, or skip the authoritative route guide")
 
+	var route_entry_target := resumed.onboarding_guide.target_control() as Control
+	for expected_name: String in ["MunicipalButton", "BuildingsButton", "BuildingGroup_mobility", "BuildingCard_公車站"]:
+		if route_entry_target == null or route_entry_target.name != expected_name:
+			continue
+		await _click_at(route_entry_target.get_global_rect().get_center())
+		await _settle(4)
+		route_entry_target = resumed.onboarding_guide.target_control() as Control
+	_check(route_entry_target != null and route_entry_target.name == "SubmitBlueprintButton", "restored route guide reaches the real Bus Stop continuous-planning action through product controls")
+	if route_entry_target == null:
+		_fail("restored route guide has no actionable Bus Stop submit target")
+		_cleanup_save()
+		await TestCleanup.finish(self, [resumed], 1)
+		return
+	await _click_at(route_entry_target.get_global_rect().get_center())
+	await _settle(5)
+	var route_session: Dictionary = resumed.vertical_slice.transport_planning_session_snapshot()
+	_check(str(route_session.get("workflow", "")) == "route_package_v1" and str(route_session.get("state", "")) == "station_placement", "real guided Bus Stop action begins the authoritative route package")
+	_check(resumed.placement_mode_active and resumed.placement_building_name == "公車站", "route package begins real continuous station placement")
+
+	var station_resolution_before := _route_guide_authority_snapshot(resumed)
+	var first_station_target := resumed.onboarding_guide.target_control() as Button
+	var repeated_first_station_target := resumed._resolve_route_onboarding_target() as Button
+	var illegal_generic_station_target := _find_illegal_station_grid_target(resumed, route_session)
+	_check(first_station_target != null and repeated_first_station_target == first_station_target, "repeated first-station resolution is deterministic")
+	_check(_route_guide_authority_snapshot(resumed) == station_resolution_before, "repeated first-station resolution mutates terrain, drafts, jobs, ledger, network, population, grid, or receipts")
+	_check(illegal_generic_station_target != null and first_station_target != illegal_generic_station_target, "route package rejects the first generic illegal or obscured grid tile")
+	if first_station_target == null:
+		await TestCleanup.finish(self, [resumed], 1)
+		return
+	var first_station_index : int = resumed.grid_buttons.find(first_station_target)
+	var station_workers := int(resumed.vertical_slice_panel.selected_worker_count()) if resumed.vertical_slice_panel != null else 5
+	var first_station_quote: Dictionary = resumed.vertical_slice.placement_footprint_quote("公車站", first_station_index, station_workers)
+	_check(_approved_station_target(resumed, first_station_target, first_station_quote), "first guided station is visible, enabled, affordable, legal, and full-footprint HUD/banner safe")
+	await _click_at(first_station_target.get_global_rect().get_center())
+	await _settle(5)
+	route_session = resumed.vertical_slice.transport_planning_session_snapshot()
+	var first_placements: Array = Dictionary(route_session.get("route_draft", {})).get("station_placements", [])
+	_check(first_placements.size() == 1 and int(Dictionary(first_placements[0]).get("anchor_tile_id", -1)) == first_station_index, "first real guided click retains exactly one station draft")
+	if first_placements.size() != 1 or not first_placements[0] is Dictionary:
+		await TestCleanup.finish(self, [resumed], 1)
+		return
+
+	var stale_session := route_session.duplicate(true)
+	var stale_placement: Dictionary = stale_session["route_draft"]["station_placements"][0]
+	stale_placement["footprint_id"] = "stale_guide_fixture"
+	stale_session["route_draft"]["station_placements"][0] = stale_placement
+	var stale_resolution_before := _route_guide_authority_snapshot(resumed)
+	_check(resumed._route_package_station_onboarding_target(stale_session) == null, "stale selected station fails closed instead of guiding a second placement")
+	_check(_route_guide_authority_snapshot(resumed) == stale_resolution_before, "stale station resolution mutates authoritative state")
+
+	var second_station_target := resumed.onboarding_guide.target_control() as Button
+	var repeated_second_station_target := resumed._resolve_route_onboarding_target() as Button
+	if second_station_target == null:
+		_fail("second station guide did not bind a real grid target")
+		await TestCleanup.finish(self, [resumed], 1)
+		return
+	var second_station_index : int = resumed.grid_buttons.find(second_station_target)
+	var second_station_quote: Dictionary = resumed.vertical_slice.placement_footprint_quote("公車站", second_station_index, station_workers)
+	_check(second_station_target != null and repeated_second_station_target == second_station_target and second_station_index != first_station_index, "second station guide is stable and chooses a distinct anchor")
+	_check(_approved_station_target(resumed, second_station_target, second_station_quote), "second guided station is visible, enabled, affordable, legal, and full-footprint HUD/banner safe")
+	_check(_tile_arrays_do_not_overlap(first_station_quote.get("occupied_tile_ids", []), second_station_quote.get("occupied_tile_ids", [])), "guided station footprints do not overlap")
+	await _click_at(second_station_target.get_global_rect().get_center())
+	await _settle(5)
+	route_session = resumed.vertical_slice.transport_planning_session_snapshot()
+	var station_placements: Array = Dictionary(route_session.get("route_draft", {})).get("station_placements", [])
+	_check(station_placements.size() == 2 and _station_placements_are_distinct(station_placements), "second real guided click preserves both distinct nonoverlapping drafts")
+	_check(resumed.onboarding_guide.target_control() == resumed.placement_confirm_button and not resumed.placement_confirm_button.disabled, "two valid station drafts guide to the real station-phase confirmation")
+	await _click_at(resumed.placement_confirm_button.get_global_rect().get_center())
+	await _settle(6)
+	route_session = resumed.vertical_slice.transport_planning_session_snapshot()
+	var road_action_target := resumed.onboarding_guide.target_control() as Button
+	_check(str(route_session.get("state", "")) == "network_placement", "station confirmation advances the same package to network placement")
+	_check(road_action_target != null and road_action_target.name == "InfrastructureAdd_road" and not road_action_target.disabled, "bus package guide chooses the real road action")
+	if road_action_target == null:
+		await TestCleanup.finish(self, [resumed], 1)
+		return
+	await _click_at(road_action_target.get_global_rect().get_center())
+	await _settle(4)
+	_check(resumed.map_action_mode == "transport_infrastructure" and resumed.transport_plan_kind == "road", "real road action enters guided corridor placement")
+
+	route_session = resumed.vertical_slice.transport_planning_session_snapshot()
+	var resolved_stations: Array[Dictionary] = resumed._route_package_current_station_candidates(route_session)
+	var planned_corridor: Array[int] = resumed._route_package_corridor_completion(route_session, resolved_stations, [])
+	_check(planned_corridor.size() > 1, "dynamic guided fixture exposes a multi-cell corridor for incomplete-corridor coverage")
+	if resolved_stations.size() < 2 or planned_corridor.size() <= 1:
+		await TestCleanup.finish(self, [resumed], 1)
+		return
+	var illegal_first_tile := _find_illegal_route_first_tile(resumed, resolved_stations)
+	var corridor_resolution_before := _route_guide_authority_snapshot(resumed)
+	resumed.transport_plan_tiles.clear()
+	resumed.transport_plan_tiles.append(illegal_first_tile)
+	_check(illegal_first_tile >= 0 and resumed._resolve_route_onboarding_target() == null, "illegal first corridor tile cannot become valid guidance or premature Confirm")
+	resumed.transport_plan_tiles.clear()
+	_check(_route_guide_authority_snapshot(resumed) == corridor_resolution_before, "illegal corridor resolution mutates authoritative state")
+	var incomplete_prefix: Array[int] = [planned_corridor[0]]
+	resumed.transport_plan_tiles = incomplete_prefix.duplicate()
+	var incomplete_target := resumed._resolve_route_onboarding_target() as Control
+	_check(incomplete_target != null and incomplete_target != resumed.placement_confirm_button, "incomplete legal corridor resolves to the next adjacent cell instead of Confirm")
+	resumed.transport_plan_tiles.clear()
+
+	var corridor_steps := 0
+	while corridor_steps <= resumed.grid_buttons.size():
+		var corridor_target := resumed.onboarding_guide.target_control() as Control
+		if corridor_target == resumed.placement_confirm_button:
+			break
+		var corridor_index : int = resumed.grid_buttons.find(corridor_target)
+		_check(corridor_target != null and corridor_index >= 0, "corridor guide always binds a real grid button before completion")
+		if corridor_target == null or corridor_index < 0:
+			break
+		if not resumed.transport_plan_tiles.is_empty():
+			_check(not resumed._transport_direction_pair(resumed.transport_plan_tiles.back(), corridor_index).is_empty(), "corridor guide selects the next cardinally adjacent cell")
+		var candidate_path: Array[int] = resumed.transport_plan_tiles.duplicate()
+		candidate_path.append(corridor_index)
+		var corridor_quote: Dictionary = resumed.vertical_slice.transport_project_quote("road", "build", candidate_path, station_workers, resumed.city_grid)
+		_check(bool(corridor_quote.get("ok", false)) and bool(corridor_quote.get("can_afford", false)), "every guided corridor prefix has an approved affordable pure project quote")
+		await _click_at(corridor_target.get_global_rect().get_center())
+		await _settle(4)
+		corridor_steps += 1
+	_check(resumed.onboarding_guide.target_control() == resumed.placement_confirm_button and not resumed.placement_confirm_button.disabled, "only a complete valid affordable station-connecting corridor guides to Confirm")
+	var completed_corridor: Array[int] = resumed.transport_plan_tiles.duplicate()
+	var corridor_model_quote: Dictionary = resumed.vertical_slice.transport.quote_completed_corridor(
+		"bus",
+		completed_corridor,
+		resumed.vertical_slice.terrain_map,
+		_station_footprint_tiles(station_placements),
+		[]
+	)
+	_check(bool(corridor_model_quote.get("ok", false)), "completed guided corridor passes the pure topology quote")
+	await _click_at(resumed.placement_confirm_button.get_global_rect().get_center())
+	await _settle(7)
+	route_session = resumed.vertical_slice.transport_planning_session_snapshot()
+	var package_wait_target := resumed.onboarding_guide.target_control() as Button
+	var package_continue_control := resumed.find_child("TransportPlanningSessionContinue", true, false) as Button
+	var route_draft: Dictionary = route_session.get("route_draft", {})
+	_check(str(route_session.get("state", "")) == "route_edit" and not Array(route_draft.get("station_placements", [])).is_empty() and not Array(route_session.get("network_draft", {}).get("tile_ids", [])).is_empty(), "corridor confirmation reaches route_edit with station placements and network draft")
+	var plan_route_bus := resumed.find_child("PlanRoute_bus", true, false) as Button
+	var package_quote: Dictionary = resumed.vertical_slice.transport_session_package_quote(resumed.city_grid)
+	var package_active_jobs: Array = resumed.vertical_slice.construction.active_jobs()
+	var package_available_workers: int = int(resumed.vertical_slice.construction.available_workers())
+	var package_requested_workers: int = int(package_quote.get("requested_workers", -1))
+	route_session = resumed.vertical_slice.transport_planning_session_snapshot()
+	_check(bool(package_quote.get("ok", false)) and bool(package_quote.get("can_afford", false)) and not bool(package_quote.get("can_start", true)), "route-edit package waits when the otherwise valid affordable quote lacks workers")
+	_check(package_available_workers < package_requested_workers and package_active_jobs.size() == 1 and int(Dictionary(package_active_jobs[0]).get("worker_count", 0)) == 5, "natural-wait fixture has one five-worker blocker and the exact package worker shortage")
+	_check(package_continue_control != null and package_continue_control.is_visible_in_tree() and package_continue_control.disabled, "worker shortage keeps the actual package Continue visible and disabled")
+	_check(package_wait_target != null and package_wait_target.name == "CloseButton" and package_wait_target.is_visible_in_tree() and not package_wait_target.disabled, "disabled package Continue guides to the real municipal Close control")
+	_check(package_wait_target != plan_route_bus, "route package wait guide does not target PlanRoute_bus or require legacy station_tile_ids")
+	if package_wait_target == null or package_active_jobs.size() != 1:
+		await TestCleanup.finish(self, [resumed], 1)
+		return
+
+	var blocking_job: Dictionary = Dictionary(package_active_jobs[0]).duplicate(true)
+	var blocking_job_id := str(blocking_job.get("id", ""))
+	var blocking_remaining_days := int(blocking_job.get("projected_remaining_days", 0))
+	var wait_session_before: Dictionary = route_session.duplicate(true)
+	var wait_transport_before: Dictionary = resumed.vertical_slice.transport.to_dict()
+	var wait_job_count_before: int = resumed.vertical_slice.construction.jobs.size()
+	var wait_receipt_count_before: int = resumed.onboarding_progress.receipts().size()
+	var wait_package_ledger_before := _ledger_reason_count(resumed, "construction.transport_package_total")
+	await _click_at(package_wait_target.get_global_rect().get_center())
+	await _settle(4)
+	var municipal_wait_target := resumed.onboarding_guide.target_control() as Button
+	_check(not resumed.municipal_overlay.is_open() and not resumed.vertical_slice.is_time_paused(), "actual Close hides the municipal modal and resumes the city clock")
+	_check(municipal_wait_target != null and municipal_wait_target.name == "MunicipalButton" and municipal_wait_target.is_visible_in_tree(), "closed route package keeps the guide on the real Municipal entry while time runs")
+	_check(resumed.vertical_slice.transport_planning_session_snapshot() == wait_session_before, "closing the modal preserves the complete route-package draft")
+	if municipal_wait_target == null or blocking_job_id.is_empty() or blocking_remaining_days <= 0:
+		await TestCleanup.finish(self, [resumed], 1)
+		return
+
+	var clock_seconds_per_day := float(resumed.vertical_slice.session.clock.day_length_seconds)
+	var wait_tick_limit: int = int(ceil(clock_seconds_per_day)) * (blocking_remaining_days + 1)
+	var wait_tick_count := 0
+	while wait_tick_count < wait_tick_limit and str(Dictionary(resumed.vertical_slice.construction.jobs.get(blocking_job_id, {})).get("status", "")) == "active":
+		resumed._process(1.0)
+		wait_tick_count += 1
+	var completed_blocking_job: Dictionary = Dictionary(resumed.vertical_slice.construction.jobs.get(blocking_job_id, {}))
+	_check(wait_tick_count > 0 and wait_tick_count <= wait_tick_limit and str(completed_blocking_job.get("status", "")) == "completed", "bounded Main process-frame time naturally completes the original blocking Residence job")
+	_check(resumed.vertical_slice.transport_planning_session_snapshot() == wait_session_before, "natural construction completion preserves the uncommitted route-package session and drafts")
+	_check(resumed.vertical_slice.transport.to_dict() == wait_transport_before and resumed.vertical_slice.construction.jobs.size() == wait_job_count_before, "natural wait creates no route, transport project, station, or package construction job")
+	_check(resumed.onboarding_progress.receipts().size() == wait_receipt_count_before and _ledger_reason_count(resumed, "construction.transport_package_total") == wait_package_ledger_before, "natural wait produces no route receipt or package ledger transaction")
+	_check(resumed.onboarding_guide.target_control() == municipal_wait_target and not resumed.vertical_slice.is_time_paused(), "natural completion leaves the visible Municipal guide available without pausing time")
+	print("ROUTE_GUIDE_R8_NATURAL_WAIT_JSON=" + JSON.stringify({
+		"blocking_job_id": blocking_job_id,
+		"blocking_remaining_days": blocking_remaining_days,
+		"clock_seconds_per_day": clock_seconds_per_day,
+		"wait_tick_count": wait_tick_count,
+		"available_workers_before": package_available_workers,
+		"requested_workers": package_requested_workers,
+		"available_workers_after": resumed.vertical_slice.construction.available_workers(),
+	}))
+
+	await _click_at(municipal_wait_target.get_global_rect().get_center())
+	await _settle(6)
+	package_quote = resumed.vertical_slice.transport_session_package_quote(resumed.city_grid)
+	var package_continue_target := resumed.onboarding_guide.target_control() as Button
+	_check(resumed.municipal_overlay.current_page() == "transport_planning" and resumed.vertical_slice.is_time_paused(), "actual Municipal input re-enters the active route package directly and pauses the modal")
+	_check(bool(package_quote.get("ok", false)) and bool(package_quote.get("can_start", false)), "natural worker release makes the same package quote startable")
+	_check(package_continue_target != null and package_continue_target == package_continue_control and package_continue_target.name == "TransportPlanningSessionContinue" and not package_continue_target.disabled, "re-entered route_edit automatically guides the visible enabled Continue for the actual package commit")
+	if package_continue_target == null or not bool(package_quote.get("can_start", false)):
+		await TestCleanup.finish(self, [resumed], 1)
+		return
+	var package_treasury_before := int(resumed.vertical_slice.treasury_balance())
+	var package_jobs_before : int = resumed.vertical_slice.construction.jobs.size()
+	var package_negative_ledger_before := _negative_ledger_count(resumed)
+	var package_receipts_before : int = resumed.onboarding_progress.receipts().size()
+	await _click_at(package_continue_target.get_global_rect().get_center())
+	await _settle(7)
+	var committed_session: Dictionary = resumed.vertical_slice.transport_planning_session_snapshot()
+	var expected_new_jobs := Array(package_quote.get("station_placements", [])).size() + Array(package_quote.get("support_plans", [])).size()
+	if not Array(Dictionary(package_quote.get("route_project_plan", {})).get("segments", [])).is_empty():
+		expected_new_jobs += 1
+	_check(str(committed_session.get("state", "")) == "waiting_construction" and str(committed_session.get("resume_state", "")) == "route_edit", "actual Continue commits one package into the expected waiting session")
+	_check(Array(committed_session.get("station_refs", [])).size() == 2 and not Array(committed_session.get("network_refs", [])).is_empty(), "committed package owns station and network job references")
+	_check(resumed.vertical_slice.construction.jobs.size() == package_jobs_before + expected_new_jobs, "actual package commit creates exactly the quoted station, corridor, and support jobs")
+	_check(package_treasury_before - int(resumed.vertical_slice.treasury_balance()) == int(package_quote.get("total_cost", -1)), "actual package commit posts the exact quoted debit")
+	_check(_negative_ledger_count(resumed) == package_negative_ledger_before + 1, "actual package commit posts exactly one negative ledger entry")
+	_check(resumed.onboarding_progress.current_target() == "fiscal" and resumed.onboarding_progress.receipts().size() == package_receipts_before + 1, "one successful package produces exactly one route receipt and advances to fiscal")
+	var fiscal_back_target := resumed.onboarding_guide.target_control() as Control
+	_check(fiscal_back_target != null and fiscal_back_target.name == "BackButton" and fiscal_back_target.is_visible_in_tree(), "post-package fiscal guide retains the foreground municipal Back target")
+	if fiscal_back_target == null:
+		await TestCleanup.finish(self, [resumed], 1)
+		return
+	await _click_at(fiscal_back_target.get_global_rect().get_center())
+	await _settle(4)
+	var finance_target := resumed.onboarding_guide.target_control() as Control
+	_check(finance_target != null and finance_target.name == "FinanceButton" and finance_target.is_visible_in_tree(), "foreground Back returns the fiscal guide to Finance")
+	if finance_target == null:
+		await TestCleanup.finish(self, [resumed], 1)
+		return
+	await _click_at(finance_target.get_global_rect().get_center())
+	await _settle(4)
+	_check(resumed.municipal_overlay.current_page() == "finance", "guided Finance remains reachable after the real route package commit")
+
 	_cleanup_save()
 	var exit_code := 1 if _failed else 0
 	if not _failed:
@@ -324,6 +556,127 @@ func _presentation_authority_snapshot(main) -> Dictionary:
 		"report_history": main.city_report_history_service.snapshot(),
 		"receipts": main.onboarding_progress.receipts(),
 	}
+
+
+func _route_guide_authority_snapshot(main) -> Dictionary:
+	return {
+		"terrain": main.vertical_slice.terrain_map.to_dict(),
+		"planning_session": main.vertical_slice.transport_planning_session_snapshot(),
+		"construction": main.vertical_slice.construction.to_dict(),
+		"ledger": main.vertical_slice.session.state.ledger.get_entries(),
+		"treasury": main.vertical_slice.treasury_balance(),
+		"transport": main.vertical_slice.transport.to_dict(),
+		"population": main.vertical_slice.population.to_dict(),
+		"city_grid": main.city_grid.duplicate(),
+		"receipts": main.onboarding_progress.receipts(),
+	}
+
+
+func _approved_station_target(main, target: Button, quote: Dictionary) -> bool:
+	if target == null or target.disabled or not target.is_visible_in_tree():
+		return false
+	if not bool(quote.get("ok", false)) or str(quote.get("status", "")) != "approved" or not bool(quote.get("can_afford", false)):
+		return false
+	var footprint: Array[int] = _int_array(quote.get("occupied_tile_ids", []))
+	if footprint.is_empty():
+		return false
+	for tile_id: int in footprint:
+		if not main._route_onboarding_grid_button_is_safe(tile_id):
+			return false
+	return true
+
+
+func _find_illegal_station_grid_target(main, session: Dictionary) -> Button:
+	var workers := int(main.vertical_slice_panel.selected_worker_count()) if main.vertical_slice_panel != null else 5
+	for tile_id in main.grid_buttons.size():
+		var button := main.grid_buttons[tile_id] as Button
+		if button == null or button.disabled or not button.is_visible_in_tree():
+			continue
+		var quote: Dictionary = main.vertical_slice.placement_footprint_quote(str(session.get("station_blueprint_name", "")), tile_id, workers)
+		if (
+			not bool(quote.get("ok", false))
+			or str(quote.get("status", "")) != "approved"
+			or not bool(quote.get("can_afford", false))
+			or not main._route_onboarding_grid_footprint_is_safe(_int_array(quote.get("occupied_tile_ids", [])))
+		):
+			return button
+	return null
+
+
+func _find_illegal_route_first_tile(main, stations: Array[Dictionary]) -> int:
+	var reserved := _station_candidate_footprint_tiles(stations)
+	var first_access: Array[int] = main._route_package_corridor_access_tiles(int(stations[0].get("anchor_tile_id", -1)), reserved)
+	var second_access: Array[int] = main._route_package_corridor_access_tiles(int(stations[1].get("anchor_tile_id", -1)), reserved)
+	for tile_id in main.grid_buttons.size():
+		if tile_id not in first_access and tile_id not in second_access and main._route_package_corridor_tile_is_available(tile_id, reserved):
+			return tile_id
+	return -1
+
+
+func _station_placements_are_distinct(placements: Array) -> bool:
+	if placements.size() != 2 or not placements[0] is Dictionary or not placements[1] is Dictionary:
+		return false
+	var first: Dictionary = placements[0]
+	var second: Dictionary = placements[1]
+	return (
+		int(first.get("anchor_tile_id", -1)) != int(second.get("anchor_tile_id", -1))
+		and _tile_arrays_do_not_overlap(first.get("occupied_tile_ids", []), second.get("occupied_tile_ids", []))
+	)
+
+
+func _tile_arrays_do_not_overlap(first: Variant, second: Variant) -> bool:
+	var first_tiles := _int_array(first)
+	for tile_id: int in _int_array(second):
+		if first_tiles.has(tile_id):
+			return false
+	return true
+
+
+func _station_candidate_footprint_tiles(stations: Array[Dictionary]) -> Array[int]:
+	var result: Array[int] = []
+	for station: Dictionary in stations:
+		for tile_id: int in _int_array(station.get("occupied_tile_ids", [])):
+			if not result.has(tile_id):
+				result.append(tile_id)
+	return result
+
+
+func _station_footprint_tiles(placements: Array) -> Array[int]:
+	var result: Array[int] = []
+	for placement_value: Variant in placements:
+		if not placement_value is Dictionary:
+			continue
+		for tile_id: int in _int_array(Dictionary(placement_value).get("occupied_tile_ids", [])):
+			if not result.has(tile_id):
+				result.append(tile_id)
+	return result
+
+
+func _int_array(value: Variant) -> Array[int]:
+	var result: Array[int] = []
+	if not value is Array and not value is PackedInt32Array and not value is PackedInt64Array:
+		return result
+	for item: Variant in value:
+		var number := int(item)
+		if not result.has(number):
+			result.append(number)
+	return result
+
+
+func _negative_ledger_count(main) -> int:
+	var result := 0
+	for entry: Dictionary in main.vertical_slice.session.state.ledger.get_entries():
+		if int(entry.get("amount", 0)) < 0:
+			result += 1
+	return result
+
+
+func _ledger_reason_count(main, reason_tag: String) -> int:
+	var result := 0
+	for entry: Dictionary in main.vertical_slice.session.state.ledger.get_entries():
+		if str(entry.get("reason_tag", "")) == reason_tag:
+			result += 1
+	return result
 
 
 func _scroll_ancestor(control: Control) -> ScrollContainer:

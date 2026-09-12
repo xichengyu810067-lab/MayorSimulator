@@ -1551,6 +1551,12 @@ func _open_municipal_center() -> void:
 	if overlay == null:
 		return
 	_set_map_interaction_enabled(false)
+	var session := _transport_session_snapshot()
+	if str(session.get("state", "")) == "route_edit" and _transport_session_is_route_package(session):
+		overlay.open_hub()
+		_refresh_transport_planning_panel()
+		overlay.open_page("transport_planning")
+		return
 	overlay.open_hub()
 
 
@@ -1773,8 +1779,16 @@ func _resolve_route_onboarding_target() -> Control:
 		var minimum_stops := 1 if str(session.get("mode", "")) == "air" else 2
 		if _transport_session_station_count(session) >= minimum_stops:
 			return placement_confirm_button
+		if _transport_session_is_route_package(session):
+			return _route_package_station_onboarding_target(session)
 		return _first_onboarding_grid_target()
 	if map_action_mode in ["transport_infrastructure", "transport_route_stops"]:
+		if (
+			map_action_mode == "transport_infrastructure"
+			and state == "network_placement"
+			and _transport_session_is_route_package(session)
+		):
+			return _route_package_network_onboarding_target(session)
 		if not transport_plan_tiles.is_empty() or transport_route_station_tiles.size() >= 2:
 			return placement_confirm_button
 		return _first_onboarding_grid_target()
@@ -1789,6 +1803,9 @@ func _resolve_route_onboarding_target() -> Control:
 		if state == "network_placement" and Dictionary(session.get("network_draft", {})).get("tile_ids", []).is_empty():
 			var infrastructure_target := _visible_control_named("InfrastructureAdd_road")
 			return infrastructure_target if infrastructure_target != null else back_target
+		if state == "route_edit" and _transport_session_is_route_package(session):
+			var package_continue_target := _visible_enabled_control_named("TransportPlanningSessionContinue")
+			return package_continue_target if package_continue_target != null else _visible_enabled_control_named("CloseButton")
 		if state == "route_edit" and Dictionary(session.get("route_draft", {})).get("station_tile_ids", []).is_empty():
 			var route_target := _visible_control_named("PlanRoute_bus")
 			return route_target if route_target != null else back_target
@@ -1951,6 +1968,13 @@ func _visible_control_named(control_name: String) -> Control:
 	return node as Control if node is Control and (node as Control).is_visible_in_tree() else null
 
 
+func _visible_enabled_control_named(control_name: String) -> Control:
+	var control := _visible_control_named(control_name)
+	if control is BaseButton and (control as BaseButton).disabled:
+		return null
+	return control
+
+
 func _visible_municipal_back_target() -> Control:
 	if municipal_overlay == null or not municipal_overlay.is_open():
 		return null
@@ -1997,6 +2021,358 @@ func _first_build_onboarding_grid_target() -> Control:
 		if footprint_is_hud_safe:
 			return button
 	return null
+
+
+func _route_package_station_onboarding_target(session: Dictionary) -> Control:
+	if vertical_slice == null or str(session.get("state", "")) != "station_placement":
+		return null
+	var placements: Array = Dictionary(session.get("route_draft", {})).get("station_placements", [])
+	if placements.size() > 1:
+		return null
+	var selected: Array[Dictionary] = []
+	if placements.size() == 1:
+		if not placements[0] is Dictionary:
+			return null
+		var current := _route_package_current_station_candidate(session, placements[0])
+		if current.is_empty():
+			return null
+		selected.append(current)
+	var candidates := _route_package_station_candidates(session, selected)
+	if selected.is_empty():
+		for first: Dictionary in candidates:
+			for second: Dictionary in candidates:
+				if not _route_package_station_candidates_are_distinct(first, second):
+					continue
+				var corridor := _route_package_corridor_completion(session, [first, second], [])
+				if corridor.size() > 1:
+					return grid_buttons[int(first.get("anchor_tile_id", -1))] as Control
+		return null
+	var first: Dictionary = selected[0]
+	for second: Dictionary in candidates:
+		if not _route_package_station_candidates_are_distinct(first, second):
+			continue
+		var corridor := _route_package_corridor_completion(session, [first, second], [])
+		if corridor.size() > 1:
+			return grid_buttons[int(second.get("anchor_tile_id", -1))] as Control
+	return null
+
+
+func _route_package_network_onboarding_target(session: Dictionary) -> Control:
+	var stations := _route_package_current_station_candidates(session)
+	if stations.size() < 2:
+		return null
+	var completion := _route_package_corridor_completion(session, stations, transport_plan_tiles)
+	if completion.is_empty():
+		return null
+	if completion.size() == transport_plan_tiles.size():
+		return placement_confirm_button if (
+			placement_confirm_button != null
+			and placement_confirm_button.is_visible_in_tree()
+			and not placement_confirm_button.disabled
+		) else null
+	var next_tile := int(completion[transport_plan_tiles.size()])
+	return grid_buttons[next_tile] as Control if _route_onboarding_grid_button_is_safe(next_tile) else null
+
+
+func _route_package_station_candidates(
+	session: Dictionary,
+	excluded: Array
+) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for tile_id in grid_buttons.size():
+		var candidate := _route_package_station_candidate(session, tile_id, excluded)
+		if not candidate.is_empty():
+			result.append(candidate)
+	return result
+
+
+func _route_package_current_station_candidates(session: Dictionary) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for placement_value: Variant in Dictionary(session.get("route_draft", {})).get("station_placements", []):
+		if not placement_value is Dictionary:
+			return []
+		var candidate := _route_package_current_station_candidate(session, placement_value)
+		if candidate.is_empty():
+			return []
+		for existing: Dictionary in result:
+			if not _route_package_station_candidates_are_distinct(existing, candidate):
+				return []
+		result.append(candidate)
+	return result
+
+
+func _route_package_current_station_candidate(session: Dictionary, placement: Dictionary) -> Dictionary:
+	if bool(placement.get("reuse_existing_station", false)):
+		return {}
+	var anchor_tile_id := int(placement.get("anchor_tile_id", -1))
+	var candidate := _route_package_station_candidate(session, anchor_tile_id, [])
+	if candidate.is_empty():
+		return {}
+	var quote: Dictionary = candidate.get("quote", {})
+	if (
+		str(placement.get("footprint_id", "")) != str(quote.get("footprint_id", ""))
+		or str(placement.get("library_id", "")) != str(quote.get("library_id", ""))
+		or _route_onboarding_int_array(placement.get("occupied_tile_ids", [])) != _route_onboarding_int_array(quote.get("occupied_tile_ids", []))
+		or int(placement.get("building_cost", -1)) != int(quote.get("total_cost", -2))
+	):
+		return {}
+	return candidate
+
+
+func _route_package_station_candidate(
+	session: Dictionary,
+	anchor_tile_id: int,
+	excluded: Array
+) -> Dictionary:
+	if vertical_slice == null or anchor_tile_id < 0 or anchor_tile_id >= grid_buttons.size():
+		return {}
+	var station_name := str(session.get("station_blueprint_name", ""))
+	if station_name.is_empty():
+		return {}
+	var workers := int(vertical_slice_panel.selected_worker_count()) if vertical_slice_panel != null else 5
+	var quote: Dictionary = vertical_slice.placement_footprint_quote(station_name, anchor_tile_id, workers)
+	if (
+		not bool(quote.get("ok", false))
+		or str(quote.get("status", "")) != "approved"
+		or not bool(quote.get("can_place", false))
+		or not bool(quote.get("can_afford", false))
+	):
+		return {}
+	var occupied_tile_ids := _route_onboarding_int_array(quote.get("occupied_tile_ids", []))
+	if occupied_tile_ids.is_empty() or not occupied_tile_ids.has(anchor_tile_id):
+		return {}
+	if not _route_onboarding_grid_footprint_is_safe(occupied_tile_ids):
+		return {}
+	for existing: Dictionary in excluded:
+		for occupied_tile_id: int in _route_onboarding_int_array(existing.get("occupied_tile_ids", [])):
+			if occupied_tile_ids.has(occupied_tile_id):
+				return {}
+	return {
+		"anchor_tile_id": anchor_tile_id,
+		"occupied_tile_ids": occupied_tile_ids,
+		"total_cost": int(quote.get("total_cost", 0)),
+		"quote": quote,
+	}
+
+
+func _route_package_station_candidates_are_distinct(first: Dictionary, second: Dictionary) -> bool:
+	if int(first.get("anchor_tile_id", -1)) == int(second.get("anchor_tile_id", -1)):
+		return false
+	var first_tiles := _route_onboarding_int_array(first.get("occupied_tile_ids", []))
+	for tile_id: int in _route_onboarding_int_array(second.get("occupied_tile_ids", [])):
+		if first_tiles.has(tile_id):
+			return false
+	return true
+
+
+func _route_package_corridor_completion(
+	session: Dictionary,
+	stations: Array,
+	selected_tiles: Array
+) -> Array[int]:
+	if vertical_slice == null or stations.size() < 2:
+		return []
+	var reserved: Array[int] = []
+	var station_cost := 0
+	for station: Dictionary in stations:
+		station_cost += int(station.get("total_cost", 0))
+		for tile_id: int in _route_onboarding_int_array(station.get("occupied_tile_ids", [])):
+			if not reserved.has(tile_id):
+				reserved.append(tile_id)
+	var first_anchor := int(stations[0].get("anchor_tile_id", -1))
+	var second_anchor := int(stations[1].get("anchor_tile_id", -1))
+	var first_access := _route_package_corridor_access_tiles(first_anchor, reserved)
+	var second_access := _route_package_corridor_access_tiles(second_anchor, reserved)
+	if first_access.is_empty() or second_access.is_empty():
+		return []
+	var prefix := _route_onboarding_int_array(selected_tiles)
+	var starts: Array[int] = first_access
+	var goals: Array[int] = second_access
+	if not prefix.is_empty():
+		if first_access.has(prefix[0]):
+			pass
+		elif second_access.has(prefix[0]):
+			starts = second_access
+			goals = first_access
+		else:
+			return []
+		for index in prefix.size():
+			var tile_id := prefix[index]
+			if not _route_package_corridor_tile_is_available(tile_id, reserved):
+				return []
+			if index > 0 and _transport_direction_pair(prefix[index - 1], tile_id).is_empty():
+				return []
+	var candidate: Array[int]
+	if prefix.is_empty():
+		candidate = _route_package_shortest_corridor(starts, goals, reserved, [])
+	elif goals.has(prefix.back()):
+		candidate = prefix.duplicate()
+	else:
+		var suffix := _route_package_shortest_corridor([prefix.back()], goals, reserved, prefix)
+		if suffix.is_empty():
+			return []
+		candidate = prefix.duplicate()
+		for suffix_index in range(1, suffix.size()):
+			candidate.append(suffix[suffix_index])
+	if candidate.is_empty() or not _route_package_corridor_plan_is_approved(session, stations, candidate, reserved, station_cost):
+		return []
+	return candidate
+
+
+func _route_package_shortest_corridor(
+	starts: Array,
+	goals: Array,
+	reserved: Array,
+	blocked_path: Array
+) -> Array[int]:
+	var queue: Array[int] = []
+	var previous: Dictionary = {}
+	var seen: Dictionary = {}
+	for start: int in starts:
+		if not _route_package_corridor_tile_is_available(start, reserved):
+			continue
+		if blocked_path.has(start) and (blocked_path.is_empty() or start != blocked_path.back()):
+			continue
+		queue.append(start)
+		seen[start] = true
+		previous[start] = -1
+	var cursor := 0
+	var reached := -1
+	while cursor < queue.size():
+		var current := queue[cursor]
+		cursor += 1
+		if goals.has(current):
+			reached = current
+			break
+		for neighbour: int in _route_package_cardinal_neighbours(current):
+			if seen.has(neighbour) or not _route_package_corridor_tile_is_available(neighbour, reserved):
+				continue
+			if blocked_path.has(neighbour) and (blocked_path.is_empty() or neighbour != blocked_path.back()):
+				continue
+			seen[neighbour] = true
+			previous[neighbour] = current
+			queue.append(neighbour)
+	if reached < 0:
+		return []
+	var reversed: Array[int] = []
+	var current := reached
+	while current >= 0:
+		reversed.append(current)
+		current = int(previous.get(current, -1))
+	reversed.reverse()
+	return reversed
+
+
+func _route_package_corridor_plan_is_approved(
+	session: Dictionary,
+	stations: Array,
+	path: Array[int],
+	reserved: Array[int],
+	station_cost: int
+) -> bool:
+	var transport = vertical_slice.transport
+	var terrain = _terrain_map()
+	if transport == null or terrain == null:
+		return false
+	var construction_tiles: Array[int] = []
+	for tile_id in city_grid.size():
+		if not vertical_slice.active_construction_for_tile(tile_id).is_empty():
+			construction_tiles.append(tile_id)
+	var model_quote: Dictionary = transport.quote_completed_corridor(
+		str(session.get("mode", "")), path, terrain, reserved, construction_tiles
+	)
+	if not bool(model_quote.get("ok", false)):
+		return false
+	var workers := int(vertical_slice_panel.selected_worker_count()) if vertical_slice_panel != null else 5
+	var project_quote: Dictionary = vertical_slice.transport_project_quote(
+		_transport_session_guideway(str(session.get("mode", ""))),
+		"build",
+		path,
+		workers,
+		city_grid
+	)
+	if not bool(project_quote.get("ok", false)) or not bool(project_quote.get("can_afford", false)):
+		return false
+	var combined_cost := station_cost + int(project_quote.get("total_cost", 0))
+	return vertical_slice.treasury_balance() >= combined_cost and stations.size() >= 2
+
+
+func _route_package_corridor_access_tiles(anchor_tile_id: int, reserved: Array[int]) -> Array[int]:
+	var result: Array[int] = []
+	for neighbour: int in _route_package_cardinal_neighbours(anchor_tile_id):
+		if _route_package_corridor_tile_is_available(neighbour, reserved):
+			result.append(neighbour)
+	return result
+
+
+func _route_package_cardinal_neighbours(tile_id: int) -> Array[int]:
+	var result: Array[int] = []
+	var terrain = _terrain_map()
+	if terrain == null or not terrain.is_valid_tile_id(tile_id):
+		return result
+	var coordinate: Vector2i = terrain.coordinate_for_tile_id(tile_id)
+	for offset: Vector2i in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
+		var neighbour := int(terrain.tile_id_for_coordinate(coordinate + offset))
+		if neighbour >= 0:
+			result.append(neighbour)
+	return result
+
+
+func _route_package_corridor_tile_is_available(tile_id: int, reserved: Array[int]) -> bool:
+	var terrain = _terrain_map()
+	return (
+		terrain != null
+		and terrain.is_valid_tile_id(tile_id)
+		and terrain.is_buildable(tile_id)
+		and not reserved.has(tile_id)
+		and tile_id >= 0
+		and tile_id < city_grid.size()
+		and str(city_grid[tile_id]).is_empty()
+		and vertical_slice.get_building_by_tile(tile_id).is_empty()
+		and vertical_slice.active_construction_for_tile(tile_id).is_empty()
+		and _route_onboarding_grid_button_is_safe(tile_id)
+	)
+
+
+func _route_onboarding_grid_footprint_is_safe(tile_ids: Array[int]) -> bool:
+	for tile_id: int in tile_ids:
+		if not _route_onboarding_grid_button_is_safe(tile_id):
+			return false
+	return true
+
+
+func _route_onboarding_grid_button_is_safe(tile_id: int) -> bool:
+	if tile_id < 0 or tile_id >= grid_buttons.size():
+		return false
+	var button := grid_buttons[tile_id] as Button
+	if button == null or not is_instance_valid(button) or not button.is_visible_in_tree() or button.disabled:
+		return false
+	if not _is_tile_inside_hud_safe_area(tile_id):
+		return false
+	var button_rect := button.get_global_rect()
+	if not button_rect.has_area() or not get_viewport().get_visible_rect().encloses(button_rect):
+		return false
+	var ancestor := button.get_parent()
+	while ancestor != null and ancestor != self:
+		if ancestor is Control and (ancestor as Control).clip_contents and not (ancestor as Control).get_global_rect().encloses(button_rect):
+			return false
+		ancestor = ancestor.get_parent()
+	for overlay_value: Variant in [status_hud, placement_banner, action_dock]:
+		var overlay := overlay_value as Control
+		if overlay != null and overlay.is_visible_in_tree() and button_rect.intersects(overlay.get_global_rect()):
+			return false
+	return true
+
+
+func _route_onboarding_int_array(value: Variant) -> Array[int]:
+	var result: Array[int] = []
+	if not value is Array and not value is PackedInt32Array and not value is PackedInt64Array:
+		return result
+	for tile_value: Variant in value:
+		var tile_id := int(tile_value)
+		if not result.has(tile_id):
+			result.append(tile_id)
+	return result
 
 
 func _onboarding_target_message(target: Control) -> String:
