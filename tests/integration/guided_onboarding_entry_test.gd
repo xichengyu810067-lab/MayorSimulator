@@ -93,6 +93,31 @@ func _run() -> void:
 	_check(first.placement_mode_active, "real SubmitBlueprintButton click enters placement mode")
 	_check(first.onboarding_progress.receipts().is_empty(), "entering placement from SubmitBlueprintButton creates no build receipt")
 	_check(_presentation_authority_snapshot(first) == blueprint_authority_before, "SubmitBlueprintButton click changes neither date, funds, report history, nor authoritative receipts")
+	var placement_target := first.onboarding_guide.target_control() as Button
+	var placement_index := first.grid_buttons.find(placement_target)
+	var placement_workers: int = int(first.vertical_slice_panel.selected_worker_count()) if first.vertical_slice_panel != null else 5
+	var placement_quote: Dictionary = first.vertical_slice.placement_footprint_quote(first.placement_building_name, placement_index, placement_workers)
+	var placement_viewport := Rect2(Vector2.ZERO, root.get_visible_rect().size)
+	var placement_target_rect := placement_target.get_global_rect() if placement_target != null else Rect2()
+	var placement_effective_rect := placement_target_rect.intersection(placement_viewport)
+	var placement_scroll := _scroll_ancestor(placement_target)
+	if placement_scroll != null:
+		placement_effective_rect = placement_effective_rect.intersection(placement_scroll.get_global_rect())
+	_check(placement_target != null and placement_index >= 0, "build guide binds a real dynamic grid tile")
+	_check(bool(placement_quote.get("ok", false)) and str(placement_quote.get("status", "")) == "approved" and bool(placement_quote.get("can_afford", false)), "build guide tile has an approved affordable authoritative placement quote")
+	_check(placement_effective_rect.encloses(placement_target_rect) and placement_effective_rect.has_point(placement_target_rect.get_center()), "build guide tile center is fully visible through viewport and clipping ancestors")
+	var occupied_tile_ids: Array = placement_quote.get("occupied_tile_ids", [])
+	_check(not occupied_tile_ids.is_empty(), "build guide quote exposes its complete dynamic footprint")
+	for occupied_tile_variant: Variant in occupied_tile_ids:
+		_check(first._is_tile_inside_hud_safe_area(int(occupied_tile_variant)), "build guide quote keeps every occupied footprint tile outside the HUD safe area")
+	var placement_authority_before := _presentation_authority_snapshot(first)
+	await _click_at(placement_target_rect.get_center())
+	await _settle(4)
+	_check(first._pending_construction_tile == placement_index, "real guided grid click selects the dynamic quoted anchor tile")
+	_check(first.construction_confirmation != null and first.construction_confirmation.is_open(), "real guided grid click opens construction confirmation")
+	var confirmation_target := first.onboarding_guide.target_control() as Control
+	_check(confirmation_target != null and confirmation_target.name == "ConfirmConstructionButton", "guide rebinds to the real construction confirmation action")
+	_check(_presentation_authority_snapshot(first) == placement_authority_before, "construction confirmation opens before changing date, funds, jobs, report history, or receipts")
 
 	await TestCleanup.release_fixtures(self, [first])
 	var resumed = _new_main()
@@ -208,6 +233,7 @@ func _presentation_authority_snapshot(main) -> Dictionary:
 	return {
 		"game_day": main.vertical_slice.game_day(),
 		"treasury": main.vertical_slice.treasury_balance(),
+		"construction_jobs": main.vertical_slice.session.state.construction.jobs.duplicate(true),
 		"report_history": main.city_report_history_service.snapshot(),
 		"receipts": main.onboarding_progress.receipts(),
 	}

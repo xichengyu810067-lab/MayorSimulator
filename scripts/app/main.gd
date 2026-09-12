@@ -1731,7 +1731,7 @@ func _resolve_build_onboarding_target() -> Control:
 	if construction_confirmation != null and construction_confirmation.is_open():
 		return _visible_control_named("ConfirmConstructionButton")
 	if placement_mode_active:
-		return _first_onboarding_grid_target()
+		return _first_build_onboarding_grid_target()
 	if municipal_overlay == null or not municipal_overlay.is_open():
 		return municipal_button
 	match municipal_overlay.current_page():
@@ -1959,6 +1959,30 @@ func _first_onboarding_grid_target() -> Control:
 	for button_variant: Variant in grid_buttons:
 		var button := button_variant as Button
 		if button != null and is_instance_valid(button) and button.is_visible_in_tree() and not button.disabled:
+			return button
+	return null
+
+
+func _first_build_onboarding_grid_target() -> Control:
+	if vertical_slice == null or placement_building_name.is_empty():
+		return null
+	var workers: int = int(vertical_slice_panel.selected_worker_count()) if vertical_slice_panel else 5
+	for index in grid_buttons.size():
+		var button := grid_buttons[index] as Button
+		if button == null or not is_instance_valid(button) or not button.is_visible_in_tree() or button.disabled:
+			continue
+		if not _is_tile_inside_hud_safe_area(index):
+			continue
+		var quote: Dictionary = vertical_slice.placement_footprint_quote(placement_building_name, index, workers)
+		if not bool(quote.get("ok", false)) or str(quote.get("status", "")) != "approved" or not bool(quote.get("can_afford", false)):
+			continue
+		var occupied_tile_ids: Array = quote.get("occupied_tile_ids", [])
+		var footprint_is_hud_safe := not occupied_tile_ids.is_empty()
+		for tile_variant: Variant in occupied_tile_ids:
+			if not _is_tile_inside_hud_safe_area(int(tile_variant)):
+				footprint_is_hud_safe = false
+				break
+		if footprint_is_hud_safe:
 			return button
 	return null
 
