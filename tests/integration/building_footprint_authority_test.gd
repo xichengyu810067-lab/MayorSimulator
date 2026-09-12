@@ -35,7 +35,7 @@ const DEFAULT_FIRST_BLOCKER_OFFSETS := {
 	},
 	"large": {
 		"trees": [0, 1, 2],
-		"river_lake": [0, 1],
+		"river_lake": [0, 1, 2],
 		"hill_cliff": [0],
 	},
 }

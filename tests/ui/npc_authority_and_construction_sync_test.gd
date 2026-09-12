@@ -51,7 +51,12 @@ func _test_immediate_construction_obstacle(main) -> void:
 	main.call("_consume_vertical_events", review_events)
 	_check(str(main.vertical_slice.blueprint_review_status("公園").get("status", "")) == "approved", "park blueprint was not approved")
 
-	var tile_index := 12
+	var tile_index: int = _find_legal_park_tile(main, 20)
+	_check(tile_index >= 0, "construction fixture finds a legal complete park footprint")
+	if tile_index < 0:
+		return
+	var placement_quote: Dictionary = main.vertical_slice.placement_footprint_quote("公園", tile_index, 20)
+	_check(bool(placement_quote.get("ok", false)) and Array(placement_quote.get("occupied_tile_ids", [])).size() == 1, "construction fixture quote is a legal complete footprint")
 	var before_replans: Array[int] = []
 	for npc_index in main.get_visible_npc_count():
 		before_replans.append(int(main.get_npc_acceptance_snapshot(npc_index).get("replan_count", 0)))
@@ -194,6 +199,19 @@ func _blocker_by_id(navigation, blocker_id: String) -> Dictionary:
 		if str(blocker.get("id", "")) == blocker_id:
 			return blocker
 	return {}
+
+
+func _find_legal_park_tile(main, workers: int) -> int:
+	for candidate_tile: int in range(main.city_grid.size()):
+		var quote: Dictionary = main.vertical_slice.placement_footprint_quote("公園", candidate_tile, workers)
+		var occupied_tiles: Array = quote.get("occupied_tile_ids", [])
+		if (
+			bool(quote.get("ok", false))
+			and str(quote.get("status", "")) == "approved"
+			and occupied_tiles.size() == 1
+		):
+			return candidate_tile
+	return -1
 
 
 func _check(condition: bool, message: String) -> void:

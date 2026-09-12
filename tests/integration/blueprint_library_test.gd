@@ -28,11 +28,25 @@ func _initialize() -> void:
 		_check(coordinator.has_approved_blueprint(str(building_name)), "starter blueprint missing: %s" % building_name)
 		_check(coordinator.approved_blueprints(str(building_name)).size() == 1, "starter library must begin with exactly one version: %s" % building_name)
 
-	var first: Dictionary = coordinator.start_approved_building("公園", 12, 5)
+	var first_anchor: int = _find_legal_park_anchor(coordinator, [])
+	_check(first_anchor >= 0, "starter park fixture finds a legal complete footprint")
+	if first_anchor < 0:
+		quit(1)
+		return
+	var first_quote: Dictionary = coordinator.placement_footprint_quote("公園", first_anchor, 5)
+	_check(bool(first_quote.get("ok", false)) and Array(first_quote.get("occupied_tile_ids", [])).size() == 1, "starter park fixture quote is a legal complete footprint")
+	var first: Dictionary = coordinator.start_approved_building("公園", first_anchor, 5)
 	_check(bool(first.get("ok", false)), "starter park blueprint starts without an introductory review burden")
 	if bool(first.get("ok", false)):
 		coordinator.advance_days(int(first.get("job", {}).get("projected_remaining_days", 0)), CITY_CONTEXT, false)
-	var second: Dictionary = coordinator.start_approved_building("公園", 13, 5)
+	var second_anchor: int = _find_legal_park_anchor(coordinator, Array(first_quote.get("occupied_tile_ids", [])))
+	_check(second_anchor >= 0 and second_anchor != first_anchor, "reused park fixture finds a distinct legal complete footprint")
+	if second_anchor < 0:
+		quit(1)
+		return
+	var second_quote: Dictionary = coordinator.placement_footprint_quote("公園", second_anchor, 5)
+	_check(bool(second_quote.get("ok", false)) and Array(second_quote.get("occupied_tile_ids", [])).size() == 1, "reused park fixture quote is a legal complete footprint")
+	var second: Dictionary = coordinator.start_approved_building("公園", second_anchor, 5)
 	_check(bool(second.get("ok", false)), "same starter park blueprint can be reused")
 	_check(int(coordinator.active_blueprint_status("公園").get("usage_count", 0)) == 2, "library entry tracks both construction uses")
 
@@ -61,7 +75,14 @@ func _initialize() -> void:
 	_check(restored.blueprint_library.size() == coordinator.blueprint_library.size(), "save round trip retains the complete blueprint library")
 	_check(str(restored.active_blueprint_status("公園").get("library_id", "")) == "default_park", "historical review replay does not overwrite the player's persisted active blueprint selection")
 	_check(restored.approved_blueprints("公園").size() == 2, "save round trip retains every approved park version")
-	var restored_build: Dictionary = restored.start_approved_building("公園", 15, 5)
+	var restored_anchor: int = _find_legal_park_anchor(restored, [])
+	_check(restored_anchor >= 0, "restored park fixture finds a legal complete footprint")
+	if restored_anchor < 0:
+		quit(1)
+		return
+	var restored_quote: Dictionary = restored.placement_footprint_quote("公園", restored_anchor, 5)
+	_check(bool(restored_quote.get("ok", false)) and Array(restored_quote.get("occupied_tile_ids", [])).size() == 1, "restored park fixture quote is a legal complete footprint")
+	var restored_build: Dictionary = restored.start_approved_building("公園", restored_anchor, 5)
 	_check(bool(restored_build.get("ok", false)), "restored active starter blueprint can start a new construction job")
 	_check(str(restored_build.get("blueprint_library_id", "")) == "default_park", "construction after restore uses the player's persisted active blueprint")
 	_check(str(restored_build.get("job", {}).get("metadata", {}).get("blueprint_library_id", "")) == "default_park", "restored construction job records the persisted blueprint library ID")
@@ -81,3 +102,23 @@ func _check(condition: bool, message: String) -> void:
 		return
 	_failed = true
 	push_error("Blueprint library test failed: %s" % message)
+
+
+func _find_legal_park_anchor(coordinator, excluded_tiles: Array) -> int:
+	for tile_id: int in coordinator.terrain_map.tile_ids_in_display_order():
+		var quote: Dictionary = coordinator.placement_footprint_quote("公園", tile_id, 5)
+		var occupied_tiles: Array = quote.get("occupied_tile_ids", [])
+		if (
+			not bool(quote.get("ok", false))
+			or str(quote.get("status", "")) != "approved"
+			or occupied_tiles.size() != 1
+		):
+			continue
+		var overlaps_excluded := false
+		for occupied_tile: Variant in occupied_tiles:
+			if excluded_tiles.has(int(occupied_tile)):
+				overlaps_excluded = true
+				break
+		if not overlaps_excluded:
+			return tile_id
+	return -1
