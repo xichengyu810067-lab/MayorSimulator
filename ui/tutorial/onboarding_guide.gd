@@ -33,7 +33,7 @@ func _init() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	z_as_relative = false
-	z_index = RenderingServer.CANVAS_ITEM_Z_MAX - 1
+	z_index = RenderingServer.CANVAS_ITEM_Z_MAX
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_build()
 	set_process_input(true)
@@ -295,16 +295,28 @@ func _layout_hole() -> void:
 	_set_rect(_masks[1], Rect2(0.0, hole.end.y, size.x, maxf(0.0, size.y - hole.end.y)))
 	_set_rect(_masks[2], Rect2(0.0, hole.position.y, hole.position.x, hole.size.y))
 	_set_rect(_masks[3], Rect2(hole.end.x, hole.position.y, maxf(0.0, size.x - hole.end.x), hole.size.y))
-	_arrow.position = Vector2(maxf(8.0, hole.position.x - 52.0), hole.position.y + hole.size.y * 0.5 - 24.0)
-	var guide_position := Vector2(
-		clampf(hole.position.x, 116.0, maxf(116.0, size.x - 340.0)),
-		minf(size.y - 76.0, hole.end.y + 10.0)
+	var edge_margin := 8.0
+	var companion_gap := 12.0
+	var arrow_size := _arrow.get_combined_minimum_size()
+	_arrow.position = Vector2(
+		clampf(hole.position.x - arrow_size.x - companion_gap, edge_margin, maxf(edge_margin, size.x - arrow_size.x - edge_margin)),
+		clampf(hole.position.y + hole.size.y * 0.5 - arrow_size.y * 0.5, edge_margin, maxf(edge_margin, size.y - arrow_size.y - edge_margin))
 	)
-	_guide.position = guide_position
-	_fairy.position = Vector2(
-		clampf(guide_position.x - FAIRY_SIZE.x - 12.0, 8.0, maxf(8.0, size.x - FAIRY_SIZE.x - 8.0)),
-		clampf(guide_position.y - 16.0, 8.0, maxf(8.0, size.y - FAIRY_SIZE.y - 8.0))
+	var guide_size := _guide.get_combined_minimum_size()
+	_guide.size = guide_size
+	_fairy.size = FAIRY_SIZE
+	var companion_height := maxf(guide_size.y, FAIRY_SIZE.y)
+	var below_y := hole.end.y + companion_gap
+	var above_y := hole.position.y - companion_gap - companion_height
+	var companion_y := below_y if below_y + companion_height <= size.y - edge_margin else above_y
+	companion_y = clampf(companion_y, edge_margin, maxf(edge_margin, size.y - companion_height - edge_margin))
+	var guide_x := clampf(
+		hole.position.x,
+		edge_margin + FAIRY_SIZE.x + companion_gap,
+		maxf(edge_margin + FAIRY_SIZE.x + companion_gap, size.x - guide_size.x - edge_margin)
 	)
+	_guide.position = Vector2(guide_x, companion_y + maxf(0.0, (companion_height - guide_size.y) * 0.5))
+	_fairy.position = Vector2(guide_x - FAIRY_SIZE.x - companion_gap, companion_y)
 
 
 func _set_rect(control: Control, rect: Rect2) -> void:

@@ -42,6 +42,8 @@ func _init() -> void:
 	visible = false
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	mouse_filter = Control.MOUSE_FILTER_STOP
+	z_as_relative = false
+	z_index = RenderingServer.CANVAS_ITEM_Z_MAX
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_build()
 
@@ -58,6 +60,7 @@ func open(reset_to_start: bool = true) -> bool:
 	if not _set_initial_shot():
 		return false
 	show()
+	move_to_front()
 	modulate.a = 0.0
 	var fade := create_tween().set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
 	fade.tween_property(self, "modulate:a", 1.0, 0.28)

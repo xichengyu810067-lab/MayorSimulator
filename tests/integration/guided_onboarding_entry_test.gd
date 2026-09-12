@@ -31,6 +31,15 @@ func _run() -> void:
 	_check(first.tutorial_overlay.skip_button != null and first.tutorial_overlay.skip_button.visible, "the previously supported skip action remains available")
 	_check(first.onboarding_progress.is_story_pending() and first.onboarding_progress.receipts().is_empty(), "CG presentation cannot create an authoritative receipt")
 	_check(not first.onboarding_guide.is_open() and first.vertical_slice.is_time_paused(), "CG blocks the guide and pauses simulation until completion")
+	_assert_cinematic_modal_order(first, "initial CG")
+	root.content_scale_size = Vector2i(1440, 900)
+	root.size = Vector2i(1440, 900)
+	await _settle(3)
+	_assert_cinematic_modal_order(first, "resized initial CG")
+	var cg_authority_before := _presentation_authority_snapshot(first)
+	await _click_at(first.municipal_button.get_global_rect().get_center())
+	_check(first.municipal_overlay == null, "CG consumes the pointer before the underlying Municipal button can open its lazy overlay")
+	_check(_presentation_authority_snapshot(first) == cg_authority_before, "CG pointer handling cannot change date, funds, report history, or guide receipts")
 
 	first.tutorial_overlay.skip_button.emit_signal("pressed")
 	await _settle(5)
@@ -41,6 +50,23 @@ func _run() -> void:
 	_check(first.onboarding_guide.target_control() != null, "build guide binds a real visible product control")
 	_check(not first.vertical_slice.is_time_paused(), "product guide does not freeze the game clock")
 	_check(first.vertical_slice.has_save_game(TEST_SAVE_PATH), "story-to-guide transition is persisted for continue")
+	_assert_guide_presentation(first, first.municipal_button, "bottom-edge Municipal target")
+	var guide_authority_before := _presentation_authority_snapshot(first)
+	await _click_at(first.municipal_button.get_global_rect().get_center())
+	await _settle(4)
+	_check(first.municipal_overlay != null and first.municipal_overlay.is_open(), "guided Municipal target opens the real lazy modal")
+	var buildings_target := first.onboarding_guide.target_control() as Control
+	_check(buildings_target != null and buildings_target.name == "BuildingsButton", "guide rebinds to the real Buildings destination inside the Municipal modal")
+	_assert_guide_presentation(first, buildings_target, "Municipal modal target")
+	_check(_presentation_authority_snapshot(first) == guide_authority_before, "opening the guided Municipal modal cannot change date, funds, report history, or guide receipts")
+	first.settings_overlay.open()
+	await _settle(2)
+	_check(_draws_after(first.settings_overlay, first.onboarding_guide), "Settings opened after the guide retains modal priority")
+	first.settings_overlay.close()
+	first.exit_confirmation.open()
+	await _settle(2)
+	_check(_draws_after(first.exit_confirmation, first.onboarding_guide), "Exit confirmation opened after the guide retains terminal modal priority")
+	first.exit_confirmation.close()
 
 	await TestCleanup.release_fixtures(self, [first])
 	var resumed = _new_main()
@@ -56,9 +82,12 @@ func _run() -> void:
 	_check(not resumed.tutorial_overlay.is_open(), "continue does not replay an already-seen CG")
 	_check(resumed.onboarding_guide.is_open() and resumed.onboarding_guide.is_product_mode(), "continue restores the real target guide")
 
+	var replay_authority_before := _presentation_authority_snapshot(resumed)
 	resumed.call("_replay_tutorial")
 	await _settle(3)
 	_check(resumed.tutorial_overlay.is_open() and resumed.tutorial_overlay.current_index == 0, "settings replay reopens the CG from shot one")
+	_assert_cinematic_modal_order(resumed, "settings replay CG")
+	_check(_presentation_authority_snapshot(resumed) == replay_authority_before, "replaying the CG cannot change date, funds, report history, or guide receipts")
 	resumed.tutorial_overlay.skip_button.emit_signal("pressed")
 	await _settle(3)
 	_check(resumed.onboarding_progress.current_target() == "build" and resumed.onboarding_progress.receipts().is_empty(), "replay completion cannot reset, complete, or skip the authoritative guide")
@@ -88,6 +117,74 @@ func _wait_for_loading(main) -> void:
 func _settle(frames: int) -> void:
 	for _frame in range(frames):
 		await process_frame
+
+
+func _click_at(position: Vector2) -> void:
+	var down := InputEventMouseButton.new()
+	down.button_index = MOUSE_BUTTON_LEFT
+	down.button_mask = MOUSE_BUTTON_MASK_LEFT
+	down.pressed = true
+	down.position = position
+	down.global_position = position
+	root.push_input(down, true)
+	await process_frame
+	var up := InputEventMouseButton.new()
+	up.button_index = MOUSE_BUTTON_LEFT
+	up.pressed = false
+	up.position = position
+	up.global_position = position
+	root.push_input(up, true)
+	await _settle(2)
+
+
+func _assert_cinematic_modal_order(main, phase: String) -> void:
+	var cinematic := main.tutorial_overlay as Control
+	var viewport_rect := Rect2(Vector2.ZERO, root.get_visible_rect().size)
+	_check(cinematic != null and not cinematic.z_as_relative and cinematic.z_index == RenderingServer.CANVAS_ITEM_Z_MAX, "%s owns an absolute top-level canvas order" % phase)
+	_check(cinematic != null and viewport_rect.encloses(cinematic.get_global_rect()), "%s covers the resized viewport" % phase)
+	_check(_draws_after(cinematic, main.status_hud) and _draws_after(cinematic, main.action_dock), "%s draws above every persistent HUD surface" % phase)
+	for actor: Button in main.get_visible_npc_actors():
+		_check(cinematic.z_index > actor.z_index, "%s draws above each depth-sorted NPC actor" % phase)
+	_check(cinematic.get_parent() == main and cinematic.get_index() == main.get_child_count() - 1, "%s moves to the front of the real Main sibling stack" % phase)
+
+
+func _assert_guide_presentation(main, expected_target: Control, phase: String) -> void:
+	var guide := main.onboarding_guide as Control
+	var viewport_rect := Rect2(Vector2.ZERO, root.get_visible_rect().size)
+	_check(guide != null and guide.target_control() == expected_target, "%s keeps the authoritative product target" % phase)
+	_check(guide != null and not guide.z_as_relative and guide.z_index == RenderingServer.CANVAS_ITEM_Z_MAX, "%s owns absolute modal presentation order" % phase)
+	if main.municipal_overlay != null and main.municipal_overlay.is_open():
+		_check(_draws_after(guide, main.municipal_overlay), "%s remains visible above the Municipal modal containing its target" % phase)
+	var target_rect := expected_target.get_global_rect() if expected_target != null else Rect2()
+	for node_name in ["OnboardingFairy", "OnboardingMessage", "OnboardingArrow"]:
+		var companion := guide.get_node_or_null(node_name) as Control
+		_check(companion != null and companion.is_visible_in_tree(), "%s keeps %s visible" % [phase, node_name])
+		if companion != null:
+			_check(viewport_rect.encloses(companion.get_global_rect()), "%s keeps %s inside the viewport" % [phase, node_name])
+	var fairy := guide.get_node_or_null("OnboardingFairy") as Control
+	var message := guide.get_node_or_null("OnboardingMessage") as Control
+	_check(fairy != null and not fairy.get_global_rect().intersects(target_rect), "%s keeps the fairy outside the target hit area" % phase)
+	_check(message != null and not message.get_global_rect().intersects(target_rect), "%s keeps the readable message outside the target hit area" % phase)
+	var target_center := target_rect.get_center()
+	for index in 4:
+		_check(not (guide.get_child(index) as Control).get_global_rect().has_point(target_center), "%s keeps mask %d outside the target hole" % [phase, index])
+
+
+func _draws_after(front: Control, back: Control) -> bool:
+	if front == null or back == null:
+		return false
+	if front.z_index != back.z_index:
+		return front.z_index > back.z_index
+	return front.get_parent() == back.get_parent() and front.get_index() > back.get_index()
+
+
+func _presentation_authority_snapshot(main) -> Dictionary:
+	return {
+		"game_day": main.vertical_slice.game_day(),
+		"treasury": main.vertical_slice.treasury_balance(),
+		"report_history": main.city_report_history_service.snapshot(),
+		"receipts": main.onboarding_progress.receipts(),
+	}
 
 
 func _cleanup_save() -> void:
