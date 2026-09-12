@@ -103,14 +103,19 @@ func _run() -> void:
 	var placement_scroll := _scroll_ancestor(placement_target)
 	if placement_scroll != null:
 		placement_effective_rect = placement_effective_rect.intersection(placement_scroll.get_global_rect())
+	var placement_banner_rect: Rect2 = first.placement_banner.get_global_rect() if first.placement_banner != null else Rect2()
 	_check(placement_target != null and placement_index >= 0, "build guide binds a real dynamic grid tile")
 	_check(bool(placement_quote.get("ok", false)) and str(placement_quote.get("status", "")) == "approved" and bool(placement_quote.get("can_afford", false)), "build guide tile has an approved affordable authoritative placement quote")
 	_check(placement_effective_rect.encloses(placement_target_rect) and placement_effective_rect.has_point(placement_target_rect.get_center()), "build guide tile center is fully visible through viewport and clipping ancestors")
+	_check(first.placement_banner != null and first.placement_banner.is_visible_in_tree() and not placement_target_rect.intersects(placement_banner_rect), "build guide tile has a full clickable rect outside the visible placement banner")
 	var occupied_tile_ids: Array = placement_quote.get("occupied_tile_ids", [])
 	_check(not occupied_tile_ids.is_empty(), "build guide quote exposes its complete dynamic footprint")
 	for occupied_tile_variant: Variant in occupied_tile_ids:
 		_check(first._is_tile_inside_hud_safe_area(int(occupied_tile_variant)), "build guide quote keeps every occupied footprint tile outside the HUD safe area")
 	var placement_authority_before := _presentation_authority_snapshot(first)
+	var construction_jobs_before: int = first.vertical_slice.session.state.construction_jobs.size()
+	var treasury_before_construction: int = first.vertical_slice.treasury_balance()
+	var placement_cost := int(placement_quote.get("total_cost", placement_quote.get("cost", 0)))
 	await _click_at(placement_target_rect.get_center())
 	await _settle(4)
 	_check(first._pending_construction_tile == placement_index, "real guided grid click selects the dynamic quoted anchor tile")
@@ -118,6 +123,57 @@ func _run() -> void:
 	var confirmation_target := first.onboarding_guide.target_control() as Control
 	_check(confirmation_target != null and confirmation_target.name == "ConfirmConstructionButton", "guide rebinds to the real construction confirmation action")
 	_check(_presentation_authority_snapshot(first) == placement_authority_before, "construction confirmation opens before changing date, funds, jobs, report history, or receipts")
+	await _click_at(confirmation_target.get_global_rect().get_center())
+	await _settle(4)
+	_check(first.vertical_slice.session.state.construction_jobs.size() == construction_jobs_before + 1, "real confirmation creates exactly one authoritative construction job")
+	_check(first.vertical_slice.treasury_balance() == treasury_before_construction - placement_cost, "real confirmation deducts the approved quoted construction cost from the authoritative treasury")
+	_check(first.onboarding_progress.current_target() == "blueprint" and first.onboarding_progress.receipts().size() == 1, "real construction confirmation advances the guide once to blueprint")
+	var blueprint_municipal_target := first.onboarding_guide.target_control() as Control
+	_check(blueprint_municipal_target == first.municipal_button, "blueprint step returns to the real Municipal entry after construction")
+	await _click_at(blueprint_municipal_target.get_global_rect().get_center())
+	await _settle(3)
+	var park_buildings_target := first.onboarding_guide.target_control() as Control
+	_check(park_buildings_target != null and park_buildings_target.name == "BuildingsButton", "blueprint guide enters Buildings through the real Municipal modal")
+	await _click_at(park_buildings_target.get_global_rect().get_center())
+	await _settle(3)
+	var public_services_tabs := first.onboarding_guide.target_control() as TabBar
+	_check(public_services_tabs != null and public_services_tabs == first.building_family_tabs.get_tab_bar(), "blueprint guide points to the Public Services tab")
+	await _click_at(public_services_tabs.get_global_position() + public_services_tabs.get_tab_rect(1).get_center())
+	await _settle(3)
+	var park_group_target := first.onboarding_guide.target_control() as Control
+	_check(park_group_target != null and park_group_target.name == "BuildingGroup_community", "Public Services tab advances the guide to the Park service group")
+	await _click_at(park_group_target.get_global_rect().get_center())
+	await _settle(3)
+	var park_target := first.onboarding_guide.target_control() as Control
+	_check(park_target != null and park_target.name == "BuildingCard_公園", "Park service group advances the guide to the real Park card")
+	await _click_at(park_target.get_global_rect().get_center())
+	await _settle(3)
+	var material_target: Control = first.onboarding_guide.target_control()
+	var material_before := str(material_target.call("selected_choice_id")) if material_target != null else ""
+	var material_after := "brick" if material_before != "brick" else "steel"
+	_check(_select_progressive_choice(material_target, material_after), "semantic Park material picker signal changes one design field")
+	await _settle(3)
+	var park_submit_target := first.onboarding_guide.target_control() as Control
+	_check(park_submit_target != null and park_submit_target.name == "SubmitCustomBlueprintButton", "changed Park blueprint binds the guide to its real custom submit action")
+	await _click_at(park_submit_target.get_global_rect().get_center())
+	await _settle(3)
+	_check(first.onboarding_progress.current_target() == "route" and first.onboarding_progress.receipts().size() == 2, "real Park blueprint submit advances once to the route step")
+	var route_back_target := first.onboarding_guide.target_control() as Control
+	_check(first.municipal_overlay != null and first.municipal_overlay.is_open() and first.municipal_overlay.current_page() == "blueprint", "successful Park blueprint leaves the real Municipal blueprint page open")
+	_check(route_back_target != null and route_back_target.name == "BackButton" and route_back_target.is_visible_in_tree() and route_back_target != first.municipal_button, "route guide uses the visible Municipal BackButton instead of the hidden background Municipal button")
+	_assert_wrong_page_resolvers_use_foreground_back(first, route_back_target)
+	await _click_at(route_back_target.get_global_rect().get_center())
+	await _settle(3)
+	var mobility_group_target := first.onboarding_guide.target_control() as Control
+	_check(first.municipal_overlay.current_page() == "buildings" and mobility_group_target != null and mobility_group_target.name == "BuildingGroup_mobility", "Municipal Back returns to Buildings and route guide advances to mobility")
+	await _click_at(mobility_group_target.get_global_rect().get_center())
+	await _settle(3)
+	var bus_stop_target := first.onboarding_guide.target_control() as Control
+	_check(bus_stop_target != null and bus_stop_target.name == "BuildingCard_公車站", "mobility guide advances to the real Bus Stop card")
+	await _click_at(bus_stop_target.get_global_rect().get_center())
+	await _settle(3)
+	var bus_stop_blueprint_target := first.onboarding_guide.target_control() as Control
+	_check(first.selected_building == "公車站" and bus_stop_blueprint_target != null and bus_stop_blueprint_target.name == "SubmitBlueprintButton", "Bus Stop card enters its real route blueprint action")
 
 	await TestCleanup.release_fixtures(self, [first])
 	var resumed = _new_main()
@@ -128,8 +184,8 @@ func _run() -> void:
 	resumed.start_screen.continue_game_button.emit_signal("pressed")
 	await _wait_for_loading(resumed)
 	await _settle(5)
-	_check(resumed.onboarding_progress.is_active() and resumed.onboarding_progress.current_target() == "build", "continue restores the exact first actionable target")
-	_check(resumed.onboarding_progress.receipts().is_empty(), "continue cannot synthesize receipts")
+	_check(resumed.onboarding_progress.is_active() and resumed.onboarding_progress.current_target() == "route", "continue restores the exact route target after completed build and blueprint steps")
+	_check(resumed.onboarding_progress.receipts().size() == 2, "continue restores the two authoritative completed-step receipts without synthesizing more")
 	_check(not resumed.tutorial_overlay.is_open(), "continue does not replay an already-seen CG")
 	_check(resumed.onboarding_guide.is_open() and resumed.onboarding_guide.is_product_mode(), "continue restores the real target guide")
 
@@ -141,7 +197,7 @@ func _run() -> void:
 	_check(_presentation_authority_snapshot(resumed) == replay_authority_before, "replaying the CG cannot change date, funds, report history, or guide receipts")
 	resumed.tutorial_overlay.skip_button.emit_signal("pressed")
 	await _settle(3)
-	_check(resumed.onboarding_progress.current_target() == "build" and resumed.onboarding_progress.receipts().is_empty(), "replay completion cannot reset, complete, or skip the authoritative guide")
+	_check(resumed.onboarding_progress.current_target() == "route" and resumed.onboarding_progress.receipts().size() == 2, "replay completion cannot reset, complete, or skip the authoritative route guide")
 
 	_cleanup_save()
 	var exit_code := 1 if _failed else 0
@@ -186,6 +242,31 @@ func _click_at(position: Vector2) -> void:
 	up.global_position = position
 	root.push_input(up, true)
 	await _settle(2)
+
+
+func _select_progressive_choice(control, choice_id: String) -> bool:
+	if control == null:
+		return false
+	for index in control.item_count:
+		if str(control.get_item_metadata(index)) == choice_id:
+			control.item_selected.emit(index)
+			return true
+	return false
+
+
+func _assert_wrong_page_resolvers_use_foreground_back(main, expected_back: Control) -> void:
+	for resolver_call in [
+		["_resolve_fiscal_onboarding_target"],
+		["_resolve_city_data_onboarding_target"],
+		["_resolve_public_affairs_onboarding_target"],
+		["_resolve_governance_onboarding_target"],
+		["_resolve_justice_onboarding_target", "judicial"],
+		["_resolve_justice_onboarding_target", "oversight"],
+	]:
+		var method_name := str(resolver_call[0])
+		var target_variant: Variant = main.call(method_name, resolver_call[1]) if resolver_call.size() > 1 else main.call(method_name)
+		var target := target_variant as Control
+		_check(target == expected_back and target != main.municipal_button, "%s keeps the visible Municipal BackButton in the foreground on an unrelated open page" % method_name)
 
 
 func _assert_cinematic_modal_order(main, phase: String) -> void:

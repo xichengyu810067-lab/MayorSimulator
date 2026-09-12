@@ -1781,15 +1781,19 @@ func _resolve_route_onboarding_target() -> Control:
 	if state not in ["inactive", "closed"]:
 		if municipal_overlay == null or not municipal_overlay.is_open():
 			return municipal_button
+		var back_target := _visible_municipal_back_target()
 		if municipal_overlay.current_page() == "hub":
 			return _visible_control_named("BuildingsButton")
 		if municipal_overlay.current_page() != "transport_planning":
-			return municipal_button
+			return back_target
 		if state == "network_placement" and Dictionary(session.get("network_draft", {})).get("tile_ids", []).is_empty():
-			return _visible_control_named("InfrastructureAdd_road")
+			var infrastructure_target := _visible_control_named("InfrastructureAdd_road")
+			return infrastructure_target if infrastructure_target != null else back_target
 		if state == "route_edit" and Dictionary(session.get("route_draft", {})).get("station_tile_ids", []).is_empty():
-			return _visible_control_named("PlanRoute_bus")
-		return _visible_control_named("TransportPlanningSessionContinue")
+			var route_target := _visible_control_named("PlanRoute_bus")
+			return route_target if route_target != null else back_target
+		var continue_target := _visible_control_named("TransportPlanningSessionContinue")
+		return continue_target if continue_target != null else back_target
 	if municipal_overlay == null or not municipal_overlay.is_open():
 		return municipal_button
 	match municipal_overlay.current_page():
@@ -1800,7 +1804,7 @@ func _resolve_route_onboarding_target() -> Control:
 		"blueprint":
 			if selected_building == "公車站":
 				return _visible_control_named("SubmitBlueprintButton")
-	return municipal_button
+	return _visible_municipal_back_target()
 
 
 func _resolve_fiscal_onboarding_target() -> Control:
@@ -1809,7 +1813,7 @@ func _resolve_fiscal_onboarding_target() -> Control:
 	if municipal_overlay.current_page() == "hub":
 		return _visible_control_named("FinanceButton")
 	if municipal_overlay.current_page() != "finance":
-		return municipal_button
+		return _visible_municipal_back_target()
 	if _fiscal_flow_step == "preview":
 		return fiscal_apply_button
 	if _fiscal_dirty_count() > 0:
@@ -1823,7 +1827,7 @@ func _resolve_city_data_onboarding_target() -> Control:
 	if municipal_overlay.current_page() == "hub":
 		return _visible_control_named("City DataButton")
 	if municipal_overlay.current_page() != "city_data" or city_data_dashboard == null:
-		return municipal_button
+		return _visible_municipal_back_target()
 	onboarding_action_router.note_city_data_opened(city_data_dashboard.current_tab, city_data_dashboard.get_tab_count())
 	return city_data_dashboard.get_tab_bar()
 
@@ -1834,7 +1838,7 @@ func _resolve_public_affairs_onboarding_target() -> Control:
 	if municipal_overlay.current_page() == "hub":
 		return _visible_control_named("Public AffairsButton")
 	if municipal_overlay.current_page() != "public_affairs":
-		return municipal_button
+		return _visible_municipal_back_target()
 	for request_variant: Variant in vertical_slice.get_view_model(selected_cell_index).get("citizen_requests", []):
 		if request_variant is Dictionary and str(Dictionary(request_variant).get("status", "")) == "pending":
 			var request_id := str(Dictionary(request_variant).get("request_id", ""))
@@ -1858,7 +1862,7 @@ func _resolve_governance_onboarding_target() -> Control:
 	if municipal_overlay.current_page() == "hub":
 		return _visible_control_named("GovernanceButton")
 	if municipal_overlay.current_page() != "governance":
-		return municipal_button
+		return _visible_municipal_back_target()
 	var visible_stage_signature: Dictionary = lower_council_stage.debug_signature() if lower_council_stage != null else {}
 	if str(visible_stage_signature.get("stage_state", "")) == "final_vote":
 		return _visible_control_named("BackButton")
@@ -1917,7 +1921,7 @@ func _resolve_justice_onboarding_target(mode: String) -> Control:
 	if municipal_overlay.current_page() == "hub":
 		return _visible_control_named("JudicialButton" if mode == "judicial" else "OversightButton")
 	if municipal_overlay.current_page() != mode:
-		return municipal_button
+		return _visible_municipal_back_target()
 	var panel = judicial_panel if mode == "judicial" else oversight_panel
 	var expected_case_id := onboarding_action_router.linked_case_id(
 		mode,
@@ -1947,6 +1951,12 @@ func _visible_control_named(control_name: String) -> Control:
 	return node as Control if node is Control and (node as Control).is_visible_in_tree() else null
 
 
+func _visible_municipal_back_target() -> Control:
+	if municipal_overlay == null or not municipal_overlay.is_open():
+		return null
+	return _visible_control_named("BackButton")
+
+
 func _ensure_onboarding_target_visible(target: Control) -> void:
 	var ancestor := target.get_parent()
 	while ancestor != null and ancestor != self:
@@ -1970,6 +1980,8 @@ func _first_build_onboarding_grid_target() -> Control:
 	for index in grid_buttons.size():
 		var button := grid_buttons[index] as Button
 		if button == null or not is_instance_valid(button) or not button.is_visible_in_tree() or button.disabled:
+			continue
+		if placement_banner != null and placement_banner.is_visible_in_tree() and button.get_global_rect().intersects(placement_banner.get_global_rect()):
 			continue
 		if not _is_tile_inside_hud_safe_area(index):
 			continue
