@@ -453,6 +453,7 @@ func _click_target(main, button: Button, target_tile: int, phase: String) -> voi
 	_last_tile_pressed = -1
 	var center := button.get_global_rect().get_center()
 	_check(main.map_viewport.get_global_rect().has_point(center), "%s click target remains inside the map viewport" % phase)
+	main.call("_set_map_npc_tooltips_enabled", false)
 
 	var motion := InputEventMouseMotion.new()
 	motion.position = center
