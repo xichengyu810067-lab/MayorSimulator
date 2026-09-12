@@ -233,7 +233,7 @@ func _presentation_authority_snapshot(main) -> Dictionary:
 	return {
 		"game_day": main.vertical_slice.game_day(),
 		"treasury": main.vertical_slice.treasury_balance(),
-		"construction_jobs": main.vertical_slice.session.state.construction.jobs.duplicate(true),
+		"construction_jobs": main.vertical_slice.session.state.construction_jobs.duplicate(true),
 		"report_history": main.city_report_history_service.snapshot(),
 		"receipts": main.onboarding_progress.receipts(),
 	}
