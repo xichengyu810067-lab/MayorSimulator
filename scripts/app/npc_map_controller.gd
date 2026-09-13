@@ -71,6 +71,8 @@ var _blocked_tiles: Dictionary = {}
 var _crossing_tile_ids := PackedInt32Array()
 var _crossing_states: Dictionary = {}
 var _grid_cell_size := SquareGridLayoutScript.CELL_SIZE
+var _source_map_snapshot: Dictionary = {}
+var _tutorial_reserved_tile_ids := PackedInt32Array()
 
 
 func mount(
@@ -89,6 +91,8 @@ func unmount() -> void:
 	_clear_actors()
 	_layer = null
 	_navigation = null
+	_source_map_snapshot.clear()
+	_tutorial_reserved_tile_ids.clear()
 	_tile_centers.clear()
 	_tile_ids_by_display_order.clear()
 	_blocked_tiles.clear()
@@ -222,7 +226,9 @@ func configure_navigation(map_snapshot: Dictionary) -> void:
 	sync_map_snapshot(map_snapshot)
 
 
-func sync_map_snapshot(map_snapshot: Dictionary) -> void:
+func sync_map_snapshot(map_snapshot: Dictionary, remember_source: bool = true) -> void:
+	if remember_source:
+		_source_map_snapshot = map_snapshot.duplicate(true)
 	_tile_centers = PackedVector2Array(map_snapshot.get("tile_centers", PackedVector2Array())).duplicate()
 	_tile_ids_by_display_order = PackedInt32Array(
 		map_snapshot.get("tile_ids_by_display_order", PackedInt32Array())
@@ -252,6 +258,11 @@ func sync_map_snapshot(map_snapshot: Dictionary) -> void:
 		return
 	var building_centers := Dictionary(map_snapshot.get("building_centers", {})).duplicate(true)
 	var construction_centers := Dictionary(map_snapshot.get("construction_centers", {})).duplicate(true)
+	for tile_id: int in _tutorial_reserved_tile_ids:
+		if tile_id < 0 or tile_id >= _tile_centers.size():
+			continue
+		construction_centers[tile_id] = _tile_centers[tile_id]
+		_blocked_tiles[tile_id] = true
 	var derived_half_extents := Vector2(
 		maxf(0.5, _grid_cell_size.x * 0.5),
 		maxf(0.5, _grid_cell_size.y * 0.5)
@@ -301,6 +312,40 @@ func sync_map_snapshot(map_snapshot: Dictionary) -> void:
 				structure_half_extents
 			)
 	_sync_navigation_crossing_apertures()
+
+
+func set_tutorial_reserved_tiles(tile_ids: Array) -> void:
+	var normalized := PackedInt32Array()
+	for tile_variant: Variant in tile_ids:
+		var tile_id := int(tile_variant)
+		if tile_id < 0 or tile_id >= _tile_centers.size() or normalized.has(tile_id):
+			continue
+		normalized.append(tile_id)
+	normalized.sort()
+	if normalized == _tutorial_reserved_tile_ids:
+		return
+	_tutorial_reserved_tile_ids = normalized
+	if not _source_map_snapshot.is_empty():
+		sync_map_snapshot(_source_map_snapshot, false)
+	if not _proxy_states.is_empty():
+		repath_all()
+
+
+func clear_tutorial_reserved_tiles() -> void:
+	set_tutorial_reserved_tiles([])
+
+
+func tutorial_reservation_snapshot() -> Dictionary:
+	var inside_indices: Array[int] = []
+	for index in _proxy_states.size():
+		var feet := Vector2(_proxy_states[index].get("foot_position", Vector2.ZERO))
+		if _tutorial_reserved_tile_ids.has(_npc_tile_at_feet(feet)):
+			inside_indices.append(index)
+	return {
+		"active": not _tutorial_reserved_tile_ids.is_empty(),
+		"tile_ids": Array(_tutorial_reserved_tile_ids),
+		"npc_indices_inside": inside_indices,
+	}
 
 
 ## Crossing animation and NPC navigation share the same authoritative closed

@@ -101,15 +101,16 @@ func _run() -> void:
 
 	var defer_progress = OnboardingProgressScript.new()
 	defer_progress.begin_guide()
-	_check(guide.show_waiting(defer_progress, "下一段教學：第 1 年 1 月 4 日"), "waiting presentation opens without a product target")
-	_check(guide.is_waiting_mode() and not guide.is_open() and guide.target_control() == null, "waiting presentation owns no guided target or input hole")
+	_check(guide.show_waiting(defer_progress, "目前工人不足；可先調整工人或延後教學。"), "active unavailable presentation opens without a product target")
+	_check(guide.is_waiting_mode() and not guide.is_open() and guide.target_control() == null, "active unavailable presentation owns no guided target or input hole")
 	var defer_button := guide.get_node("OnboardingDeferButton") as Button
-	_check(defer_button != null and defer_button.visible and defer_button.text == "延後教學", "waiting presentation exposes the exact defer action")
+	_check(defer_button != null and defer_button.visible and defer_button.text == "延後教學", "active unavailable presentation exposes the exact defer action")
+	_check(guide.get_node_or_null("OnboardingGuideCard") is PanelContainer, "active unavailable explanation uses the same solid guide card")
 	for index in 4:
-		_check(not (guide.get_child(index) as Control).visible, "waiting presentation hides input mask %d" % index)
+		_check(not (guide.get_child(index) as Control).visible, "active unavailable presentation hides input mask %d" % index)
 	var map_presses_before_waiting := _map_presses
 	await _click_at(map_button.get_global_rect().get_center())
-	_check(_map_presses == map_presses_before_waiting + 1 and guide.is_waiting_mode(), "waiting presentation leaves ordinary map input available")
+	_check(_map_presses == map_presses_before_waiting + 1 and guide.is_waiting_mode(), "active unavailable presentation leaves ordinary map input available")
 	defer_button.pressed.emit()
 	_check(_defer_requests == 1 and defer_progress.next_index() == 0 and defer_progress.receipts().is_empty(), "defer UI requests scheduling without fabricating completion")
 

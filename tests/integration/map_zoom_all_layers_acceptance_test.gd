@@ -98,8 +98,9 @@ func _run() -> void:
 	await _validate_zoom_snapshot(main, target_button, building_button, representative_npc, centers, transport_snapshot, target_tile, 1.00, "100%")
 	await _drive_zoom(main, main.MAP_ZOOM_MAX, MOUSE_BUTTON_WHEEL_UP, "wheel up to 175%")
 	await _validate_zoom_snapshot(main, target_button, building_button, representative_npc, centers, transport_snapshot, target_tile, 1.75, "175%")
-	await _drive_zoom(main, main.MAP_ZOOM_MIN, MOUSE_BUTTON_WHEEL_DOWN, "wheel down to 65%")
-	await _validate_zoom_snapshot(main, target_button, building_button, representative_npc, centers, transport_snapshot, target_tile, 0.65, "65%")
+	await _drive_zoom(main, main.MAP_ZOOM_MIN, MOUSE_BUTTON_WHEEL_DOWN, "wheel down to 80%")
+	await _validate_zoom_snapshot(main, target_button, building_button, representative_npc, centers, transport_snapshot, target_tile, 0.80, "80%")
+	_verify_edge_tile_reachability(main)
 	await _verify_left_drag_and_reset_contract(main, target_button, target_tile)
 	await _verify_tile_release_cancellation(main)
 	await _verify_left_drag_lifecycle_cleanup(main, target_button, target_tile)
@@ -126,13 +127,13 @@ func _validate_zoom_snapshot(
 	main.transport_vehicle_controller.set_runtime_snapshot(transport_snapshot, centers)
 	_check(is_equal_approx(main.map_zoom, expected_zoom), "%s reaches the exact map zoom contract" % phase)
 	_check(_viewport_is_covered_by_terrain_background(main), "%s map_viewport is fully covered by terrain background visual" % phase)
-	var expected_stage_scale := float(main.call("_base_map_scale")) * expected_zoom
-	_check(is_equal_approx(main.map_stage.scale.x, expected_stage_scale), "%s map_stage applies base scale times map zoom" % phase)
+	var expected_stage_scale := float(main.call("_map_scale_for_zoom", expected_zoom))
+	_check(is_equal_approx(main.map_stage.scale.x, expected_stage_scale), "%s map_stage applies the cover-safe map zoom scale" % phase)
 	_check(is_equal_approx(main.map_stage.scale.x, main.map_stage.scale.y), "%s map_stage scale remains uniform" % phase)
 	if is_equal_approx(expected_zoom, 1.0):
 		_check(
-			is_equal_approx(float(main.call("_base_map_scale")), _legacy_base_map_scale(main)),
-			"100% preserves the established content base scale"
+			is_equal_approx(float(main.call("_base_map_scale")), _configured_base_map_scale(main)),
+			"100% uses exactly 125% of viewport cover"
 		)
 
 	var local_probe := Vector2(centers.get(str(target_tile), Vector2.INF))
@@ -209,16 +210,14 @@ func _validate_zoom_snapshot(
 func _viewport_is_covered_by_terrain_background(main) -> bool:
 	if (
 		main.map_viewport == null
-		or main.map_viewport_background == null
-		or main.map_viewport_background.get_parent() != main.map_viewport
-		or main.map_viewport_background.texture == null
-		or main.map_viewport_background.mouse_filter != Control.MOUSE_FILTER_IGNORE
-		or main.map_viewport_background.z_index != main.map_stage.z_index
-		or main.map_viewport_background.get_index() >= main.map_stage.get_index()
+		or main.map_stage == null
+		or main.city_backdrop == null
+		or main.city_backdrop.get_parent() != main.map_stage
+		or main.map_viewport.get_node_or_null("ViewportTerrainBackground") != null
 	):
 		return false
 	var viewport_rect: Rect2 = main.map_viewport.get_global_rect()
-	var background_rect: Rect2 = main.map_viewport_background.get_global_rect().grow(MAP_COVERAGE_EPSILON)
+	var background_rect: Rect2 = main.city_backdrop.get_global_rect().grow(MAP_COVERAGE_EPSILON)
 	var viewport_corners: Array[Vector2] = [
 		viewport_rect.position,
 		Vector2(viewport_rect.end.x, viewport_rect.position.y),
@@ -231,13 +230,39 @@ func _viewport_is_covered_by_terrain_background(main) -> bool:
 	return true
 
 
-func _legacy_base_map_scale(main) -> float:
+func _configured_base_map_scale(main) -> float:
 	if main.map_viewport == null or main.map_viewport.size.x <= 0.0 or main.map_viewport.size.y <= 0.0:
 		return 1.0
 	var viewport_size: Vector2 = main.map_viewport.size
 	var fill_scale: float = maxf(viewport_size.x / main.MAP_STAGE_SIZE.x, viewport_size.y / main.MAP_STAGE_SIZE.y)
-	var fit_scale: float = minf(viewport_size.x / main.MAP_STAGE_SIZE.x, viewport_size.y / main.MAP_STAGE_SIZE.y)
-	return maxf(0.72, minf(2.55, maxf(fill_scale * 1.04, fit_scale)))
+	return fill_scale * 1.25
+
+
+func _verify_edge_tile_reachability(main) -> void:
+	var previous_zoom: float = main.map_zoom
+	var previous_pan: Vector2 = main.map_pan_offset
+	main.call("_reset_map_camera")
+	var target_scale := float(main.call("_map_scale_for_zoom", 1.0))
+	var centered_position: Vector2 = (main.map_viewport.size - main.MAP_STAGE_SIZE * target_scale) * 0.5
+	var viewport_rect: Rect2 = main.map_viewport.get_global_rect()
+	var safe_global := viewport_rect.get_center()
+	if main.status_hud != null:
+		safe_global.y = maxf(safe_global.y, main.status_hud.get_global_rect().end.y + 72.0)
+	var safe_viewport_local: Vector2 = main.map_viewport.get_global_transform_with_canvas().affine_inverse() * safe_global
+	for tile_id: int in [0, 9, 90, 99]:
+		var button := main.grid_buttons[tile_id] as Button
+		_check(button != null, "edge tile %d has a concrete map control" % tile_id)
+		if button == null:
+			continue
+		var local_center := button.position + button.size * 0.5
+		main.map_pan_offset = safe_viewport_local - local_center * target_scale - centered_position
+		main.call("_layout_map_stage")
+		var reached_center := button.get_global_rect().get_center()
+		_check(viewport_rect.has_point(reached_center), "edge tile %d can be panned into the viewport" % tile_id)
+		_check(main.call("_is_tile_inside_hud_safe_area", tile_id), "edge tile %d can be panned below the HUD safe boundary" % tile_id)
+	main.map_zoom = previous_zoom
+	main.map_pan_offset = previous_pan
+	main.call("_layout_map_stage")
 
 
 func _drive_zoom(main, target_zoom: float, wheel_button: int, phase: String) -> void:
@@ -267,7 +292,7 @@ func _verify_left_drag_and_reset_contract(main, target_button: Button, target_ti
 	var cursor: Vector2 = main.map_viewport.get_global_rect().get_center()
 	# Establish an arbitrary, non-default wheel state before testing a direct
 	# right-click reset. This is intentionally independent from the min/max test.
-	await _drive_zoom(main, 1.15, MOUSE_BUTTON_WHEEL_UP, "wheel from minimum into enlarged left-drag contract")
+	await _drive_zoom(main, 1.20, MOUSE_BUTTON_WHEEL_UP, "wheel from minimum into enlarged left-drag contract")
 	_check(main.map_zoom > 1.0, "left-drag contract starts from an enlarged map")
 
 	var pan_before_click: Vector2 = main.map_pan_offset

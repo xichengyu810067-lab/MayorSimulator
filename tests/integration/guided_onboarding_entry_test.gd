@@ -170,7 +170,7 @@ func _run() -> void:
 	await _settle(3)
 	_check(first.onboarding_progress.current_target() == "route" and first.onboarding_progress.receipts().size() == 2, "real Park blueprint submit advances once to the route step")
 	_check(first.municipal_overlay != null and first.municipal_overlay.is_open() and first.municipal_overlay.current_page() == "blueprint", "successful Park blueprint leaves the real Municipal blueprint page open")
-	_check(first.onboarding_guide.is_waiting_mode() and not first.onboarding_guide.is_open(), "new route segment waits without inserting an actionable target into the still-open real modal")
+	_check(not first.onboarding_guide.visible and not first.onboarding_guide.is_open(), "new route D+3 interval hides the guide and inserts no actionable target into the still-open real modal")
 	var route_foreground_back := first.call("_visible_municipal_back_target") as Control
 	_check(route_foreground_back != null and route_foreground_back.name == "BackButton", "the still-open blueprint page keeps its real foreground Back control while the next segment waits")
 	_assert_wrong_page_resolvers_use_foreground_back(first, route_foreground_back)
@@ -187,7 +187,7 @@ func _run() -> void:
 	_check(resumed.onboarding_progress.is_active() and resumed.onboarding_progress.current_target() == "route", "continue restores the exact route target after completed build and blueprint steps")
 	_check(resumed.onboarding_progress.receipts().size() == 2, "continue restores the two authoritative completed-step receipts without synthesizing more")
 	_check(not resumed.tutorial_overlay.is_open(), "continue does not replay an already-seen CG")
-	_check(resumed.onboarding_guide.is_waiting_mode() and not resumed.onboarding_guide.is_open(), "continue restores the exact route schedule without an early target")
+	_check(not resumed.onboarding_guide.visible and not resumed.onboarding_guide.is_open() and resumed.onboarding_progress.is_waiting(resumed.vertical_slice.game_day()), "continue restores the exact hidden route schedule without an early target")
 
 	var replay_authority_before := _presentation_authority_snapshot(resumed)
 	resumed.call("_replay_tutorial")
@@ -198,7 +198,7 @@ func _run() -> void:
 	resumed.tutorial_overlay.skip_button.emit_signal("pressed")
 	await _settle(3)
 	_check(resumed.onboarding_progress.current_target() == "route" and resumed.onboarding_progress.receipts().size() == 2, "replay completion cannot reset, complete, or skip the authoritative route guide")
-	_check(resumed.onboarding_guide.is_waiting_mode(), "replay completion preserves the route waiting schedule")
+	_check(not resumed.onboarding_guide.visible and resumed.onboarding_progress.is_waiting(resumed.vertical_slice.game_day()), "replay completion preserves the hidden route waiting schedule")
 	await _advance_to_onboarding_due(resumed, "route")
 
 	var route_entry_target := resumed.onboarding_guide.target_control() as Control
@@ -444,7 +444,7 @@ func _run() -> void:
 	_check(package_treasury_before - int(resumed.vertical_slice.treasury_balance()) == int(package_quote.get("total_cost", -1)), "actual package commit posts the exact quoted debit")
 	_check(_negative_ledger_count(resumed) == package_negative_ledger_before + 1, "actual package commit posts exactly one negative ledger entry")
 	_check(resumed.onboarding_progress.current_target() == "fiscal" and resumed.onboarding_progress.receipts().size() == package_receipts_before + 1, "one successful package produces exactly one route receipt and advances to fiscal")
-	_check(resumed.onboarding_guide.is_waiting_mode() and resumed.onboarding_guide.target_control() == null, "post-package fiscal segment waits instead of inserting guidance into the foreground modal")
+	_check(not resumed.onboarding_guide.visible and resumed.onboarding_guide.target_control() == null, "post-package fiscal D+3 interval hides guidance from the foreground modal")
 	await _advance_to_onboarding_due(resumed, "fiscal")
 	var fiscal_municipal_target := resumed.onboarding_guide.target_control() as Control
 	_check(fiscal_municipal_target != null and fiscal_municipal_target.name == "MunicipalButton" and fiscal_municipal_target.is_visible_in_tree(), "due fiscal segment resumes at the real Municipal entry")

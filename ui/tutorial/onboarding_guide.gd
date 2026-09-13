@@ -26,6 +26,7 @@ var _target_input_callable := Callable()
 var _target_exit_callable := Callable()
 var _generation := 0
 var _masks: Array[ColorRect] = []
+var _card: PanelContainer
 var _arrow: Label
 var _guide: Label
 var _fairy: TextureRect
@@ -193,6 +194,9 @@ func invalidate_target() -> void:
 	_receipt.clear()
 	_target_input_callable = Callable()
 	_target_exit_callable = Callable()
+	_card.hide()
+	_defer_button.hide()
+	_result_review_button.hide()
 	hide()
 
 
@@ -239,6 +243,20 @@ func set_dark_mode(enabled: bool) -> void:
 		mask.color = mask_color
 	_guide.add_theme_color_override("font_color", Color.WHITE)
 	_arrow.add_theme_color_override("font_color", Color(1.0, 0.76, 0.18))
+	var card_style := StyleBoxFlat.new()
+	card_style.bg_color = Color(0.035, 0.09, 0.15, 0.96) if enabled else Color(0.055, 0.16, 0.25, 0.96)
+	card_style.border_color = Color(0.20, 0.66, 0.90, 0.95)
+	card_style.set_border_width_all(2)
+	card_style.set_corner_radius_all(10)
+	_card.add_theme_stylebox_override("panel", card_style)
+	var defer_style := StyleBoxFlat.new()
+	defer_style.bg_color = Color(0.08, 0.43, 0.68)
+	defer_style.border_color = Color(0.68, 0.90, 1.0)
+	defer_style.set_border_width_all(2)
+	defer_style.set_corner_radius_all(7)
+	_defer_button.add_theme_stylebox_override("normal", defer_style)
+	_defer_button.add_theme_color_override("font_color", Color.WHITE)
+	_defer_button.add_theme_color_override("font_hover_color", Color.WHITE)
 
 
 func refresh_localization() -> void:
@@ -332,6 +350,10 @@ func _build() -> void:
 		mask.gui_input.connect(_consume_mask_input)
 		add_child(mask)
 		_masks.append(mask)
+	_card = PanelContainer.new()
+	_card.name = "OnboardingGuideCard"
+	_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_card)
 	_fairy = TextureRect.new()
 	_fairy.name = "OnboardingFairy"
 	_fairy.custom_minimum_size = FAIRY_SIZE
@@ -440,6 +462,7 @@ func _layout_hole() -> void:
 		guide_x,
 		minf(size.y - defer_size.y - edge_margin, _guide.position.y + guide_size.y + 8.0)
 	)
+	_layout_card(false)
 
 
 func _layout_waiting() -> void:
@@ -458,20 +481,24 @@ func _layout_waiting() -> void:
 	if is_result_review_mode():
 		actions_width += 8.0 + review_size.x
 	var total_width := FAIRY_SIZE.x + companion_gap + maxf(guide_size.x, actions_width)
+	var total_height := maxf(FAIRY_SIZE.y, guide_size.y + 8.0 + maxf(defer_size.y, review_size.y))
 	var left := maxf(edge_margin, size.x - total_width - edge_margin)
-	_fairy.position = Vector2(left, edge_margin)
-	_guide.position = Vector2(left + FAIRY_SIZE.x + companion_gap, edge_margin)
+	var top := clampf(96.0, edge_margin, maxf(edge_margin, size.y - total_height - edge_margin))
+	_fairy.position = Vector2(left, top)
+	_guide.position = Vector2(left + FAIRY_SIZE.x + companion_gap, top)
 	_defer_button.position = Vector2(_guide.position.x, _guide.position.y + guide_size.y + 8.0)
 	_result_review_button.position = Vector2(
 		_defer_button.position.x + defer_size.x + 8.0,
 		_defer_button.position.y
 	)
+	_layout_card(is_result_review_mode())
 
 
 func _set_target_presentation() -> void:
 	for mask in _masks:
 		mask.show()
 	_arrow.show()
+	_card.show()
 	_defer_button.show()
 	_result_review_button.hide()
 
@@ -480,6 +507,7 @@ func _set_waiting_presentation() -> void:
 	for mask in _masks:
 		mask.hide()
 	_arrow.hide()
+	_card.show()
 	_defer_button.show()
 	_result_review_button.hide()
 
@@ -488,8 +516,19 @@ func _set_result_review_presentation() -> void:
 	for mask in _masks:
 		mask.hide()
 	_arrow.hide()
+	_card.show()
 	_defer_button.show()
 	_result_review_button.show()
+
+
+func _layout_card(include_review: bool) -> void:
+	var bounds := Rect2(_guide.position, _guide.size)
+	bounds = bounds.merge(Rect2(_defer_button.position, _defer_button.size))
+	if include_review:
+		bounds = bounds.merge(Rect2(_result_review_button.position, _result_review_button.size))
+	var padding := Vector2(12.0, 10.0)
+	_card.position = bounds.position - padding
+	_card.size = bounds.size + padding * 2.0
 
 
 func _set_rect(control: Control, rect: Rect2) -> void:

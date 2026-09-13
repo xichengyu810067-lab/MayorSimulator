@@ -61,7 +61,7 @@ const ISO_TILE_STEP := GRID_CELL_SIZE
 const ISO_MAP_ORIGIN := SquareGridLayoutScript.GRID_ORIGIN
 const MAP_STAGE_SIZE := SquareGridLayoutScript.STAGE_SIZE
 const MAP_BACKGROUND_PATH := "res://assets/images/world/backgrounds/city-map-background.png"
-const MAP_ZOOM_MIN := 0.65
+const MAP_ZOOM_MIN := 0.80
 const MAP_ZOOM_MAX := 1.75
 const MAP_ZOOM_STEP := 0.10
 const MAP_LEFT_DRAG_THRESHOLD := 8.0
@@ -280,7 +280,6 @@ var bill_status_label: Label
 var map_viewport: Control
 var map_stage: Control
 var city_backdrop: Control
-var map_viewport_background: TextureRect
 var tile_layer: Control
 var npc_layer: Control
 var transport_network_layer
@@ -380,6 +379,7 @@ var _map_pan_drag_last_position := Vector2.ZERO
 var _npc_dialogue_remaining_seconds := 0.0
 var _active_npc_dialogue_index := -1
 var _npc_proxy_refresh_pending := false
+var _onboarding_reserved_tile_ids: Array[int] = []
 
 var month := 1
 var day := 1
@@ -793,7 +793,7 @@ func _input(event: InputEvent) -> void:
 		var pan_delta := pan_event.position - _map_pan_drag_last_position
 		_map_pan_drag_last_position = pan_event.position
 		map_pan_offset += pan_delta
-		_clamp_map_pan(_base_map_scale() * map_zoom)
+		_clamp_map_pan(_map_scale_for_zoom(map_zoom))
 		_layout_map_stage()
 		get_viewport().set_input_as_handled()
 		return
@@ -876,7 +876,7 @@ func _zoom_map_at(global_position: Vector2, zoom_delta: float) -> void:
 	var viewport_local := map_viewport.get_global_transform_with_canvas().affine_inverse() * global_position
 	var previous_scale := maxf(0.001, map_stage.scale.x)
 	var stage_anchor := (viewport_local - map_stage.position) / previous_scale
-	var next_scale := _base_map_scale() * map_zoom
+	var next_scale := _map_scale_for_zoom(map_zoom)
 	var centered_position := (map_viewport.size - MAP_STAGE_SIZE * next_scale) * 0.5
 	map_pan_offset = viewport_local - stage_anchor * next_scale - centered_position
 	_clamp_map_pan(next_scale)
@@ -1699,7 +1699,10 @@ func _sync_map_interaction_for_ui() -> void:
 	# controls separate prevents a moving resident from stealing a route/track
 	# tile while preserving ordinary map interaction.
 	_set_map_tile_tooltips_enabled(true)
-	_set_map_npc_tooltips_enabled(not _transport_planning_owns_map_input())
+	_set_map_npc_tooltips_enabled(
+		not _transport_planning_owns_map_input()
+		and _onboarding_reserved_tile_ids.is_empty()
+	)
 
 
 func _on_municipal_overlay_closed() -> void:
@@ -1751,27 +1754,28 @@ func _refresh_onboarding_guide() -> void:
 	if onboarding_guide == null or not is_instance_valid(onboarding_guide):
 		return
 	if not _game_started or not onboarding_progress.is_active() or not onboarding_action_router.supports_current_target():
+		_set_onboarding_npc_reservation([])
 		onboarding_guide.invalidate_target()
 		_sync_time_pause_for_ui()
 		_sync_map_interaction_for_ui()
 		return
 	var current_game_day: int = int(vertical_slice.game_day()) if vertical_slice != null else 0
 	if onboarding_progress.is_waiting(current_game_day):
-		onboarding_guide.show_waiting(
-			onboarding_progress,
-			_onboarding_waiting_message(onboarding_progress.due_game_day())
-		)
+		_set_onboarding_npc_reservation([])
+		onboarding_guide.invalidate_target()
 		_sync_time_pause_for_ui()
 		_sync_map_interaction_for_ui()
 		return
 	var route_waiting_message := _route_onboarding_unavailable_message()
 	if not route_waiting_message.is_empty():
+		_set_onboarding_npc_reservation([])
 		onboarding_guide.show_waiting(onboarding_progress, route_waiting_message)
 		_sync_time_pause_for_ui()
 		_sync_map_interaction_for_ui()
 		return
 	var case_presentation := _onboarding_case_non_target_presentation()
 	if not case_presentation.is_empty():
+		_set_onboarding_npc_reservation([])
 		if str(case_presentation.get("mode", "")) == "result_review":
 			onboarding_guide.show_result_review(onboarding_progress, str(case_presentation.get("message", "")))
 		else:
@@ -1781,17 +1785,21 @@ func _refresh_onboarding_guide() -> void:
 		return
 	var target := _resolve_onboarding_target()
 	if target == null or not is_instance_valid(target) or not target.is_visible_in_tree():
+		_set_onboarding_npc_reservation([])
 		onboarding_guide.invalidate_target()
 		_sync_time_pause_for_ui()
 		_sync_map_interaction_for_ui()
 		return
 	_ensure_onboarding_target_visible(target)
 	if target is BaseButton and (target as BaseButton).disabled:
+		_set_onboarding_npc_reservation([])
 		onboarding_guide.invalidate_target()
 		_sync_time_pause_for_ui()
 		_sync_map_interaction_for_ui()
 		return
+	_sync_onboarding_npc_reservation(target)
 	if onboarding_guide.is_product_mode() and onboarding_guide.target_control() == target:
+		_sync_map_interaction_for_ui()
 		return
 	onboarding_guide.open_product_target(
 		onboarding_progress,
@@ -1802,6 +1810,41 @@ func _refresh_onboarding_guide() -> void:
 	)
 	_sync_time_pause_for_ui()
 	_sync_map_interaction_for_ui()
+
+
+func _sync_onboarding_npc_reservation(target: Control) -> void:
+	var tile_ids: Array[int] = []
+	if (
+		onboarding_progress.is_active()
+		and onboarding_progress.current_target() == "build"
+		and placement_mode_active
+		and target != null
+		and vertical_slice != null
+	):
+		var target_index := grid_buttons.find(target)
+		if target_index >= 0:
+			var workers := int(vertical_slice_panel.selected_worker_count()) if vertical_slice_panel != null else 5
+			var quote: Dictionary = vertical_slice.placement_footprint_quote(
+				placement_building_name,
+				target_index,
+				workers,
+				placement_rotation_quarter_turns_ccw
+			)
+			if bool(quote.get("ok", false)) and str(quote.get("status", "")) == "approved":
+				for tile_variant: Variant in quote.get("occupied_tile_ids", []):
+					var tile_id := int(tile_variant)
+					if tile_id >= 0 and tile_id < CELL_COUNT and tile_id not in tile_ids:
+						tile_ids.append(tile_id)
+	_set_onboarding_npc_reservation(tile_ids)
+
+
+func _set_onboarding_npc_reservation(tile_ids: Array[int]) -> void:
+	if tile_ids == _onboarding_reserved_tile_ids:
+		return
+	_onboarding_reserved_tile_ids = tile_ids.duplicate()
+	_hide_npc_dialogue()
+	if npc_map_controller != null:
+		npc_map_controller.set_tutorial_reserved_tiles(_onboarding_reserved_tile_ids)
 
 
 func _resolve_onboarding_target() -> Control:
@@ -3444,25 +3487,6 @@ func _build_map_panel() -> Control:
 	map_viewport.set_anchors_preset(Control.PRESET_FULL_RECT)
 	map_viewport.resized.connect(Callable(self, "_layout_map_stage"))
 	panel.add_child(map_viewport)
-	# Keep a non-interactive viewport-sized copy of the existing terrain art
-	# behind map_stage. At zooms below one it fills only the newly exposed edges;
-	# buildings, tiles, vehicles, and residents retain their shared stage
-	# transform and hit targets.
-	map_viewport_background = TextureRect.new()
-	map_viewport_background.name = "ViewportTerrainBackground"
-	map_viewport_background.texture = load(MAP_BACKGROUND_PATH) as Texture2D
-	map_viewport_background.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	map_viewport_background.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	map_viewport_background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	map_viewport_background.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	# Keep the cover art in the viewport's normal canvas layer. A negative
-	# z-index places this descendant behind the root theme background as well,
-	# so the exposed area at zooms below 100% is still rendered white. Child
-	# order already keeps this node behind map_stage without crossing that
-	# sibling boundary.
-	map_viewport_background.z_index = 0
-	map_viewport.add_child(map_viewport_background)
-
 	map_stage = Control.new()
 	map_stage.custom_minimum_size = MAP_STAGE_SIZE
 	map_stage.size = MAP_STAGE_SIZE
@@ -3819,7 +3843,7 @@ func _layout_map_stage() -> void:
 	var viewport_size := map_viewport.size
 	if viewport_size.x <= 0.0 or viewport_size.y <= 0.0:
 		return
-	var target_scale := _base_map_scale() * map_zoom
+	var target_scale := _map_scale_for_zoom(map_zoom)
 	_clamp_map_pan(target_scale)
 	map_stage.scale = Vector2(target_scale, target_scale)
 	map_stage.position = (viewport_size - MAP_STAGE_SIZE * target_scale) * 0.5 + map_pan_offset
@@ -3830,8 +3854,17 @@ func _base_map_scale() -> float:
 		return 1.0
 	var viewport_size := map_viewport.size
 	var fill_scale: float = maxf(viewport_size.x / MAP_STAGE_SIZE.x, viewport_size.y / MAP_STAGE_SIZE.y)
-	var fit_scale: float = minf(viewport_size.x / MAP_STAGE_SIZE.x, viewport_size.y / MAP_STAGE_SIZE.y)
-	return maxf(0.72, minf(2.55, maxf(fill_scale * 1.04, fit_scale)))
+	return fill_scale * 1.25
+
+
+func _map_scale_for_zoom(zoom_value: float) -> float:
+	if map_viewport == null or map_viewport.size.x <= 0.0 or map_viewport.size.y <= 0.0:
+		return _base_map_scale() * zoom_value
+	var fill_scale := maxf(
+		map_viewport.size.x / MAP_STAGE_SIZE.x,
+		map_viewport.size.y / MAP_STAGE_SIZE.y
+	)
+	return maxf(fill_scale, _base_map_scale() * zoom_value)
 
 
 func _clamp_map_pan(target_scale: float) -> void:
@@ -3841,7 +3874,7 @@ func _clamp_map_pan(target_scale: float) -> void:
 		maxf(0.0, MAP_STAGE_SIZE.x * target_scale - map_viewport.size.x),
 		maxf(0.0, MAP_STAGE_SIZE.y * target_scale - map_viewport.size.y)
 	)
-	var limit := overflow * 0.5 + map_viewport.size * 0.18
+	var limit := overflow * 0.5
 	map_pan_offset.x = clampf(map_pan_offset.x, -limit.x, limit.x)
 	map_pan_offset.y = clampf(map_pan_offset.y, -limit.y, limit.y)
 
@@ -4058,7 +4091,7 @@ func format_npc_display_name(npc: Dictionary) -> String:
 
 
 func _show_npc_dialogue(npc_index: int) -> void:
-	if _transport_planning_owns_map_input():
+	if _transport_planning_owns_map_input() or not _onboarding_reserved_tile_ids.is_empty():
 		return
 	var npc: Dictionary = get_visible_npc_snapshot(npc_index)
 	if npc.is_empty():
@@ -8477,6 +8510,8 @@ func _on_onboarding_advanced(_target_id: String, _receipt: Dictionary) -> void:
 func _on_onboarding_defer_requested() -> void:
 	if vertical_slice == null:
 		return
+	if onboarding_progress.is_waiting(vertical_slice.game_day()):
+		return
 	if not onboarding_progress.defer_current_target(vertical_slice.game_day()):
 		return
 	_refresh_onboarding_guide()
@@ -8527,6 +8562,7 @@ func _wire_ui_sounds() -> void:
 			button.pressed.connect(click_callable)
 
 func _rebuild_ui() -> void:
+	_set_onboarding_npc_reservation([])
 	if npc_map_controller != null:
 		npc_map_controller.unmount()
 	onboarding_action_router.reset_transient_evidence()
@@ -8601,6 +8637,7 @@ func _rebuild_ui() -> void:
 	tile_layer = null
 	npc_layer = null
 	npc_map_controller = null
+	_onboarding_reserved_tile_ids.clear()
 	weather_visual_layer = null
 	npc_dialogue_card = null
 	npc_dialogue_label = null
