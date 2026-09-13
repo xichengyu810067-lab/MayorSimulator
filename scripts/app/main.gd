@@ -572,19 +572,42 @@ func _process(delta: float) -> void:
 	if npc_map_controller != null:
 		npc_map_controller.step(delta)
 	if vertical_slice != null:
-		var previous_game_day: int = vertical_slice.game_day()
-		var events: Array[Dictionary] = vertical_slice.process_frame(delta, _vertical_city_context(), false)
-		var day_changed: bool = vertical_slice.game_day() != previous_game_day
-		if day_changed or not events.is_empty():
-			_consume_vertical_events(events)
-			_sync_vertical_state()
-			_update_ui()
-			if day_changed:
-				_refresh_onboarding_guide()
-			if day_changed and events.is_empty():
-				_autosave("event:day_advanced")
+		_process_continuous_clock(delta)
 	_update_autosave_timer(delta)
 	_process_release_smoke_frame()
+
+
+func _process_continuous_clock(delta: float) -> void:
+	if vertical_slice == null or vertical_slice.is_time_paused():
+		_refresh_time_hud()
+		return
+	var remaining_seconds := maxf(0.0, delta)
+	while remaining_seconds > 0.0 and not _vertical_slice_has_terminal_failure():
+		var seconds_to_day_boundary := float(vertical_slice.seconds_until_next_game_day())
+		# A restored legacy clock can be exactly on the boundary. Consume a real,
+		# minimal portion of this frame so that state cannot spin forever at zero.
+		if seconds_to_day_boundary <= 0.0:
+			seconds_to_day_boundary = minf(remaining_seconds, 0.000001)
+		var slice_seconds := minf(remaining_seconds, seconds_to_day_boundary)
+		if slice_seconds <= 0.0:
+			break
+		var previous_game_day: int = vertical_slice.game_day()
+		var events: Array[Dictionary] = vertical_slice.process_frame(slice_seconds, _vertical_city_context(), false)
+		remaining_seconds -= slice_seconds
+		var day_changed: bool = vertical_slice.game_day() != previous_game_day
+		if not day_changed and events.is_empty():
+			continue
+		# Consume each completed day before the next one. A month_started event must
+		# settle against its own boundary-date city state, never a later day in a
+		# throttled/minimized frame.
+		_consume_vertical_events(events)
+		_sync_vertical_state()
+		_update_ui()
+		if day_changed:
+			_refresh_onboarding_guide()
+		if day_changed and events.is_empty():
+			_autosave("event:day_advanced")
+	_refresh_time_hud()
 
 func _build_ui() -> void:
 	var background := ColorRect.new()
@@ -669,8 +692,6 @@ func _notification(what: int) -> void:
 		_npc_keyboard_dismiss_waiting_for_cancel_release = false
 		_begin_map_button_release_cancellation()
 		_clear_map_pan_drag_state()
-		if vertical_slice != null:
-			vertical_slice.set_time_paused(true)
 	elif what == NOTIFICATION_APPLICATION_FOCUS_IN and vertical_slice != null:
 		_sync_time_pause_for_ui()
 
@@ -678,17 +699,7 @@ func _notification(what: int) -> void:
 func _sync_time_pause_for_ui(skip_terminal_failure_sync: bool = false) -> void:
 	if vertical_slice == null:
 		return
-	var should_pause := not _game_started
-	should_pause = should_pause or (municipal_overlay != null and municipal_overlay.is_open())
-	should_pause = should_pause or (settings_overlay != null and settings_overlay.is_open())
-	should_pause = should_pause or (construction_confirmation != null and construction_confirmation.is_open())
-	should_pause = should_pause or (exit_confirmation != null and exit_confirmation.visible)
-	should_pause = should_pause or (tutorial_overlay != null and tutorial_overlay.is_open())
-	should_pause = should_pause or (
-		onboarding_guide != null
-		and onboarding_guide.is_open()
-		and not onboarding_guide.is_product_mode()
-	)
+	var should_pause: bool = not _game_started or _vertical_slice_has_terminal_failure()
 	# A lazily added municipal overlay can emit visibility_changed while it is
 	# merely being attached.  Keep that presentation-only transition from using
 	# the coordinator's terminal-failure sealing method, which writes CityState.
@@ -697,6 +708,12 @@ func _sync_time_pause_for_ui(skip_terminal_failure_sync: bool = false) -> void:
 	else:
 		vertical_slice.set_time_paused(should_pause)
 	_refresh_time_hud()
+
+
+func _vertical_slice_has_terminal_failure() -> bool:
+	if vertical_slice == null or not vertical_slice.has_method("get_view_model"):
+		return false
+	return not str(Dictionary(vertical_slice.get_view_model()).get("failure", "")).is_empty()
 
 
 func _input(event: InputEvent) -> void:
@@ -1445,6 +1462,7 @@ func _confirm_application_quit() -> void:
 			if exit_confirmation != null:
 				exit_confirmation.show_save_error(int(save_error))
 			_set_hint("儲存失敗（錯誤 %d）" % int(save_error), true)
+			_sync_time_pause_for_ui()
 			return
 	if exit_confirmation != null:
 		exit_confirmation.close()
@@ -4106,7 +4124,9 @@ func _show_npc_dialogue(npc_index: int) -> void:
 		portrait_texture = actor.get("actor_texture") as Texture2D
 	var dialogue_text := L10n.text(_npc_dialogue(npc_type))
 	if vertical_slice != null and not npc_id.is_empty() and not npc_id.begins_with("legacy_"):
-		vertical_slice.select_npc(npc_id, _vertical_city_context())
+		var npc_city_context := _vertical_city_context()
+		npc_city_context[VerticalSliceCoordinatorScript.CONTEXT_SUPPRESS_NEW_RESIDENT_FEEDBACK] = true
+		vertical_slice.select_npc(npc_id, npc_city_context)
 		var view_model: Dictionary = vertical_slice.get_view_model(selected_cell_index)
 		if npc_dialogue_card != null:
 			var has_request := bool(view_model.get("can_accept_request", false))
@@ -7371,8 +7391,22 @@ func _vertical_city_context() -> Dictionary:
 		"housing_pressure": clampf(float(population - _building_count("住宅") * 28 - _building_count("社會住宅") * 48), 0.0, 100.0),
 		"mayor_argument_bonus": 2.0,
 		"regional_support": {},
-		"policy_effectiveness": {}
+		"policy_effectiveness": {},
+		VerticalSliceCoordinatorScript.CONTEXT_SUPPRESS_NEW_RESIDENT_FEEDBACK: _operation_window_suppresses_new_feedback(),
 	}
+
+
+func _operation_window_suppresses_new_feedback() -> bool:
+	return (
+		(municipal_overlay != null and municipal_overlay.is_open())
+		or (settings_overlay != null and settings_overlay.is_open())
+		or (construction_confirmation != null and construction_confirmation.is_open())
+		or (exit_confirmation != null and exit_confirmation.visible)
+		or (tutorial_overlay != null and tutorial_overlay.is_open())
+		or (onboarding_guide != null and onboarding_guide.is_open())
+		or (building_context_panel != null and building_context_panel.visible)
+		or (is_instance_valid(npc_dialogue_card) and npc_dialogue_card.visible)
+	)
 
 func _sync_vertical_state() -> void:
 	if vertical_slice == null:
@@ -8779,13 +8813,11 @@ func _refresh_time_hud() -> void:
 	if vertical_slice == null or not labels.has("month"):
 		return
 	var paused: bool = bool(vertical_slice.is_time_paused())
-	var status_text := L10n.text("暫停") if paused else L10n.text("自動")
-	labels["month"].text = "%d/%d · %s" % [month, day, status_text]
-	labels["month"].tooltip_text = L10n.text(
-		"管理或教學畫面開啟時會自動暫停，日期區不需點擊。"
-		if paused
-		else "遊戲時間每 120 秒自動推進一天，日期區不需點擊。"
-	)
+	var game_minutes := int(vertical_slice.game_minutes_into_day())
+	var game_hour := game_minutes / 60
+	var game_minute := game_minutes % 60
+	labels["month"].text = "%d/%d．%02d:%02d" % [month, day, game_hour, game_minute]
+	labels["month"].tooltip_text = L10n.text("遊戲時間每 120 秒自動推進一天，日期區不需點擊。")
 	if header_bars.has("month"):
 		_set_bar_visual(header_bars["month"], (float((month - 1) * 30 + day) / 360.0) * 100.0, COLOR_CAUTION if paused else COLOR_INFO)
 

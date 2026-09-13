@@ -24,6 +24,7 @@ const BuildingTerrainLabelsScript = preload("res://data/catalogs/building_terrai
 const DEFAULT_SEED := 20_260_715
 const DEFAULT_INITIAL_FUNDS := 250_000
 const GAME_DAY_LENGTH_SECONDS := 120.0
+const CONTEXT_SUPPRESS_NEW_RESIDENT_FEEDBACK := "suppress_new_resident_feedback"
 const SAVE_PATH := "user://mayor_simulator/vertical_slice_autosave.json"
 const TERRAIN_FLATTEN_COSTS := {
 	"trees": 300,
@@ -134,12 +135,25 @@ func set_time_paused(paused: bool) -> void:
 func is_time_paused() -> bool:
 	return bool(session.clock.paused)
 
+
+func game_minutes_into_day() -> int:
+	return session.clock.game_minutes_into_day()
+
+
+func seconds_until_next_game_day() -> float:
+	return maxf(0.0, session.clock.day_length_seconds - session.clock.accumulator_seconds)
+
+
 func advance_days(days: int, city_context: Dictionary = {}, autosave: bool = true) -> Array[Dictionary]:
 	if _seal_terminal_failure():
 		return drain_ui_events()
-	if not city_context.is_empty():
-		last_city_context = city_context.duplicate(true)
 	var resolved_context: Dictionary = last_city_context.duplicate(true)
+	if not city_context.is_empty():
+		resolved_context = city_context.duplicate(true)
+		last_city_context = city_context.duplicate(true)
+		# This is live UI state, not city data. Never retain it in a save or
+		# replay missed feedback after the operation window closes.
+		last_city_context.erase(CONTEXT_SUPPRESS_NEW_RESIDENT_FEEDBACK)
 	for _index in range(maxi(0, days)):
 		_advance_one_day(resolved_context, autosave)
 		if _seal_terminal_failure():
@@ -2363,7 +2377,7 @@ func settle_month(income_entries: Dictionary, expense_entries: Dictionary, maint
 			_post_ledger(-amount, "expense.%s" % reason, "city_monthly", {})
 			expense_total += amount
 		else:
-			governance.adjust_civic_metrics(1, -1)
+			governance.adjust_civic_metrics(0 if _new_resident_feedback_suppressed(city_context) else 1, -1)
 	var paid_maintenance := maintenance_payment_enabled and treasury_balance() >= maintenance_cost
 	if paid_maintenance and maintenance_cost > 0:
 		_post_ledger(-maintenance_cost, "expense.maintenance", "city_maintenance", {})
@@ -2376,7 +2390,7 @@ func settle_month(income_entries: Dictionary, expense_entries: Dictionary, maint
 		"reason_tag": str(maintenance_event.get("reason_tag", "maintenance.monthly"))
 	}, _operation_id("maintenance"))
 	if not paid_maintenance:
-		governance.adjust_civic_metrics(3, -1)
+		governance.adjust_civic_metrics(0 if _new_resident_feedback_suppressed(city_context) else 3, -1)
 	_sync_governance_to_core("governance.monthly_settlement")
 	complete_requests(city_context)
 	_seal_terminal_failure()
@@ -2479,6 +2493,8 @@ func refresh_requests(city_context: Dictionary) -> Array[Dictionary]:
 	if governance.has_failed():
 		_seal_terminal_failure()
 		return []
+	if _new_resident_feedback_suppressed(city_context):
+		return []
 	var created: Array[Dictionary] = population.generate_requests(game_day(), city_context, 4)
 	for request in created:
 		_record_fact({
@@ -2490,6 +2506,10 @@ func refresh_requests(city_context: Dictionary) -> Array[Dictionary]:
 		})
 	_emit_changed()
 	return created
+
+
+func _new_resident_feedback_suppressed(city_context: Dictionary) -> bool:
+	return bool(city_context.get(CONTEXT_SUPPRESS_NEW_RESIDENT_FEEDBACK, false))
 
 
 func initialize_requests_without_history(city_context: Dictionary) -> Array[Dictionary]:

@@ -3,6 +3,7 @@
   "name": "mayor-simulator-assertion-matrix",
   "tests": [
     { "id": "context_requests_time", "script": "res://tests/integration/context_requests_time_test.gd", "success_pattern": "Building context, NPC requests, and automatic time test passed." },
+    { "id": "continuous_clock_modal_suppression", "script": "res://tests/integration/continuous_clock_modal_suppression_test.gd", "success_pattern": "Continuous clock and modal suppression test passed." },
     { "id": "audio_settings_integration", "script": "res://tests/integration/audio_settings_integration_test.gd", "success_pattern": "Audio settings integration test passed." },
     { "id": "map_zoom_terrain_integration", "script": "res://tests/integration/map_zoom_terrain_integration_test.gd", "success_pattern": "Map zoom and terrain integration test passed.", "timeout_seconds": 240 },
     { "id": "map_zoom_all_layers_acceptance", "script": "res://tests/integration/map_zoom_all_layers_acceptance_test.gd", "success_pattern": "Map zoom all-layers acceptance test passed.", "timeout_seconds": 240 },

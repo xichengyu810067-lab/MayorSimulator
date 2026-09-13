@@ -48,7 +48,7 @@ func _run() -> void:
 			break
 	_check(not main.start_screen.visible and main._game_started, "new-game loading enters the playable map")
 	_check(main.tutorial_overlay != null and main.tutorial_overlay.is_open(), "new game opens the animated story tutorial")
-	_check(main.vertical_slice.is_time_paused(), "story tutorial pauses the simulation")
+	_check(not main.vertical_slice.is_time_paused(), "story tutorial keeps active-city time running")
 	main.tutorial_overlay.close_as_completed(false)
 	for _frame in range(30):
 		await process_frame
@@ -173,7 +173,7 @@ func _run() -> void:
 			_check(caption.get_theme_font_size("font_size") >= 18, "compact action '%s' caption remains readable" % action_name)
 			_check(caption.autowrap_mode == TextServer.AUTOWRAP_WORD_SMART, "compact action '%s' caption wraps instead of clipping" % action_name)
 	var date_hud := main.labels["month"] as Label
-	_check(not main.vertical_slice.is_time_paused() and date_hud.text.ends_with("· 自動"), "live map describes automatic time without a play-button affordance")
+	_check(not main.vertical_slice.is_time_paused() and date_hud.text.begins_with("1/1．") and date_hud.text.contains(":"), "live map shows the continuous 12-hour game clock")
 	_check(date_hud.tooltip_text == "遊戲時間每 120 秒自動推進一天，日期區不需點擊。", "running date HUD explains the automatic clock and that it is not a button")
 	var day_before_date_hud_input := int(main.vertical_slice.game_day())
 	var date_hud_click := InputEventMouseButton.new()
@@ -193,8 +193,8 @@ func _run() -> void:
 	await process_frame
 	await process_frame
 	_check(main.settings_overlay.is_open(), "settings button opens the unified settings overlay")
-	_check(main.vertical_slice.is_time_paused() and main.labels["month"].text.ends_with("· 暫停"), "settings pauses simulation and exposes the paused state without a pause-button affordance")
-	_check(main.labels["month"].tooltip_text == "管理或教學畫面開啟時會自動暫停，日期區不需點擊。", "paused date HUD explains automatic modal pausing and that it is not a button")
+	_check(not main.vertical_slice.is_time_paused() and main.labels["month"].text.contains("．"), "settings keeps continuous simulation and the in-day clock visible")
+	_check(main.labels["month"].tooltip_text == "遊戲時間每 120 秒自動推進一天，日期區不需點擊。", "settings keeps the continuous-time explanation visible")
 	_check(main.settings_overlay.language_selector.choice_count() == 5, "settings preserves all five language choices")
 	_check(main.settings_overlay.language_selector.visible_popup_item_count() == 5, "settings exposes all five language choices on one popup page")
 	_check(main.settings_overlay.language_selector.shows_all_choices(), "settings language selector disables More paging")
@@ -202,7 +202,7 @@ func _run() -> void:
 	_check(main.find_child("GameLanguageSelector", true, false) == null, "language selector is no longer exposed as a separate HUD control")
 	main.settings_overlay.close()
 	await process_frame
-	_check(not main.vertical_slice.is_time_paused() and main.labels["month"].text.ends_with("· 自動"), "closing settings resumes the automatic clock")
+	_check(not main.vertical_slice.is_time_paused() and main.labels["month"].text.contains("．"), "closing settings preserves the automatic clock")
 
 	# Bounds checks use the live viewport instead of assuming a fixed capture size.
 	for key in ["month", "funds", "population", "satisfaction", "grievance", "trust", "score", "rating"]:
@@ -251,7 +251,7 @@ func _run() -> void:
 	await process_frame
 	await process_frame
 	_check(main.municipal_overlay.is_open() and main.municipal_overlay.current_page() == "hub", "lazy municipal hub remains live across three frames after first open")
-	_check(main.vertical_slice.is_time_paused() and main.labels["month"].text.ends_with("· 暫停"), "municipal management pauses simulation while the player reads")
+	_check(not main.vertical_slice.is_time_paused() and main.labels["month"].text.contains("．"), "municipal management keeps simulation and the in-day clock running")
 	_check(main.get_visible_npc_actors().all(func(button: Button) -> bool: return button.tooltip_text.is_empty() and button.mouse_filter == Control.MOUSE_FILTER_IGNORE), "modal opening disables resident hover tooltips and pointer input")
 	_check(main.grid_buttons.all(func(button: Button) -> bool: return button.tooltip_text.is_empty() and button.mouse_filter == Control.MOUSE_FILTER_IGNORE), "modal opening disables tile hover tooltips and pointer input")
 	var municipal_root := main.municipal_overlay.find_child("MunicipalHubRoot", true, false) as Control
@@ -540,7 +540,7 @@ func _run() -> void:
 		overlay_close_button.emit_signal("pressed")
 	await process_frame
 	_check(not main.municipal_overlay.is_open(), "clicking the municipal close button restores the map")
-	_check(not main.vertical_slice.is_time_paused() and main.labels["month"].text.ends_with("· 自動"), "closing municipal management resumes the automatic clock")
+	_check(not main.vertical_slice.is_time_paused() and main.labels["month"].text.contains("．"), "closing municipal management preserves the automatic clock")
 	_check(main.get_visible_npc_actors().all(func(button: Button) -> bool: return not button.tooltip_text.is_empty() and button.mouse_filter == Control.MOUSE_FILTER_STOP), "closing the modal restores resident interaction")
 	_check(main.grid_buttons.all(func(button: Button) -> bool: return not button.tooltip_text.is_empty() and button.mouse_filter == Control.MOUSE_FILTER_STOP), "closing the modal restores tile interaction")
 
@@ -625,7 +625,7 @@ func _run() -> void:
 	_check(main.exit_confirmation.visible, "failed exit autosave keeps the confirmation overlay open")
 	_check(main.exit_confirmation.discard_button.visible, "failed exit autosave exposes an explicit exit-without-saving action")
 	_check(_quit_signal_count == 1, "failed exit autosave does not emit an application quit request")
-	_check(main.vertical_slice.is_time_paused(), "failed exit autosave keeps simulation paused")
+	_check(not main.vertical_slice.is_time_paused(), "failed exit autosave returns the still-open city to continuous simulation")
 	main.start_save_path = valid_exit_save_path
 	main.exit_confirmation.confirm_button.emit_signal("pressed")
 	await process_frame

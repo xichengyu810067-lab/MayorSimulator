@@ -30,7 +30,7 @@ func _run() -> void:
 	_check(first.tutorial_overlay.current_index == 0 and first.tutorial_overlay.PAGES.size() == 8, "first entry starts on shot one of eight")
 	_check(first.tutorial_overlay.skip_button != null and first.tutorial_overlay.skip_button.visible, "the previously supported skip action remains available")
 	_check(first.onboarding_progress.is_story_pending() and first.onboarding_progress.receipts().is_empty(), "CG presentation cannot create an authoritative receipt")
-	_check(not first.onboarding_guide.is_open() and first.vertical_slice.is_time_paused(), "CG blocks the guide and pauses simulation until completion")
+	_check(not first.onboarding_guide.is_open() and not first.vertical_slice.is_time_paused(), "CG blocks product guidance while active-city simulation continues")
 	_assert_cinematic_modal_order(first, "initial CG")
 	root.content_scale_size = Vector2i(1440, 900)
 	root.size = Vector2i(1440, 900)
@@ -422,7 +422,7 @@ func _run() -> void:
 	await _settle(6)
 	package_quote = resumed.vertical_slice.transport_session_package_quote(resumed.city_grid)
 	var package_continue_target := resumed.onboarding_guide.target_control() as Button
-	_check(resumed.municipal_overlay.current_page() == "transport_planning" and resumed.vertical_slice.is_time_paused(), "actual Municipal input re-enters the active route package directly and pauses the modal")
+	_check(resumed.municipal_overlay.current_page() == "transport_planning" and not resumed.vertical_slice.is_time_paused(), "actual Municipal input re-enters the active route package while simulation continues")
 	_check(bool(package_quote.get("ok", false)) and bool(package_quote.get("can_start", false)), "natural worker release makes the same package quote startable")
 	_check(package_continue_target != null and package_continue_target == package_continue_control and package_continue_target.name == "TransportPlanningSessionContinue" and not package_continue_target.disabled, "re-entered route_edit automatically guides the visible enabled Continue for the actual package commit")
 	if package_continue_target == null or not bool(package_quote.get("can_start", false)):

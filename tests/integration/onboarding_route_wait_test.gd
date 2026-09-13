@@ -41,6 +41,14 @@ class RouteAuthorityStub:
 		return paused
 
 
+	func game_minutes_into_day() -> int:
+		return 0
+
+
+	func seconds_until_next_game_day() -> float:
+		return 120.0
+
+
 func _initialize() -> void:
 	call_deferred("_run")
 
