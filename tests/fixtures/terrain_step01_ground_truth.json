@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "purpose": "Terrain step 01 diagnostic ground truth. Bitmap observations are assistant visual review pending human confirmation; they are not user acceptance.",
+  "source": {
+    "asset": "res://assets/images/world/backgrounds/city-map-background.png",
+    "sha256": "b968762c5f8756b26874d1b3610d889d2472b251c7e6f3d052b9c0533612e119",
+    "image_size": [1672, 941],
+    "stage_size": [1120, 820],
+    "stage_transform": {
+      "scale": 0.871413390010627,
+      "offset": [-168.50159404888416, 0]
+    },
+    "grid": {
+      "origin": [210, 60],
+      "cell_size": 70,
+      "columns": 10,
+      "rows": 10
+    }
+  },
+  "samples": [
+    {
+      "id": "flat_tile36",
+      "tile_id": 36,
+      "grid": [5, 5],
+      "witnesses": [[850, 500]],
+      "expected_obstacle_kinds": [],
+      "expectation": "visible flat tile has no observed natural obstacle"
+    },
+    {
+      "id": "lake_tile12",
+      "tile_id": 12,
+      "grid": [5, 2],
+      "witnesses": [[865, 280]],
+      "expected_obstacle_kinds": ["river_lake"],
+      "expectation": "water witness requires blocked placement and navigation; it does not claim the whole tile is water"
+    },
+    {
+      "id": "riverbank_tile14",
+      "tile_id": 14,
+      "grid": [7, 2],
+      "witnesses": [[1020, 260]],
+      "expected_obstacle_kinds": ["river_lake"],
+      "expectation": "riverbank witness requires a natural blocker"
+    },
+    {
+      "id": "hill_tile3",
+      "tile_id": 3,
+      "grid": [4, 1],
+      "witnesses": [[800, 182]],
+      "expected_obstacle_kinds": ["hill_cliff"],
+      "expectation": "hill/cliff witness requires a natural blocker"
+    },
+    {
+      "id": "trees_edge_tile59",
+      "tile_id": 59,
+      "grid": [4, 8],
+      "witnesses": [[795, 760]],
+      "expected_obstacle_kinds": ["trees"],
+      "expectation": "tree-edge witness requires a natural blocker"
+    },
+    {
+      "id": "mixed_tree_cliff_tile2",
+      "tile_id": 2,
+      "grid": [3, 1],
+      "witnesses": [[710, 160], [711, 220]],
+      "expected_obstacle_kinds": ["trees", "hill_cliff"],
+      "expectation": "two witnesses establish obstacle existence only; no unique winner kind or full-tile contour is claimed"
+    }
+  ],
+  "geometry_cases": [
+    {
+      "id": "no_intersection",
+      "polygons": [{"id": "outside", "kind": "hill_cliff", "points": [[110, 0], [120, 0], [120, 10], [110, 10]]}],
+      "expected": {"blocked": false, "union_area": 0.0}
+    },
+    {
+      "id": "edge_contact_only",
+      "polygons": [{"id": "edge", "kind": "hill_cliff", "points": [[100, 0], [110, 0], [110, 10], [100, 10]]}],
+      "expected": {"blocked": false, "union_area": 0.0}
+    },
+    {
+      "id": "positive_0_1_percent",
+      "polygons": [{"id": "tiny", "kind": "hill_cliff", "points": [[0, 0], [1, 0], [1, 10], [0, 10]]}],
+      "expected": {"blocked": true, "union_area": 10.0}
+    },
+    {
+      "id": "positive_1_percent",
+      "polygons": [{"id": "small", "kind": "hill_cliff", "points": [[0, 0], [10, 0], [10, 10], [0, 10]]}],
+      "expected": {"blocked": true, "union_area": 100.0}
+    },
+    {
+      "id": "positive_3_49_percent",
+      "polygons": [{"id": "threshold_minus", "kind": "hill_cliff", "points": [[0, 0], [34.9, 0], [34.9, 10], [0, 10]]}],
+      "expected": {"blocked": true, "union_area": 349.0}
+    },
+    {
+      "id": "two_separate_each_1_percent",
+      "polygons": [
+        {"id": "small_a", "kind": "hill_cliff", "points": [[0, 0], [10, 0], [10, 10], [0, 10]]},
+        {"id": "small_b", "kind": "hill_cliff", "points": [[20, 0], [30, 0], [30, 10], [20, 10]]}
+      ],
+      "expected": {"blocked": true, "union_area": 200.0}
+    },
+    {
+      "id": "same_kind_overlap_union_not_double_counted",
+      "polygons": [
+        {"id": "overlap_a", "kind": "hill_cliff", "points": [[0, 0], [40, 0], [40, 10], [0, 10]]},
+        {"id": "overlap_b", "kind": "hill_cliff", "points": [[30, 0], [70, 0], [70, 10], [30, 10]]}
+      ],
+      "expected": {"blocked": true, "union_area": 700.0, "winning_coverage": 0.07}
+    },
+    {
+      "id": "mixed_kind_positive_obstacles",
+      "polygons": [
+        {"id": "cliff", "kind": "hill_cliff", "points": [[0, 0], [40, 0], [40, 10], [0, 10]]},
+        {"id": "trees", "kind": "trees_scenery", "points": [[0, 20], [60, 20], [60, 30], [0, 30]]}
+      ],
+      "expected": {"blocked": true, "union_area": 1000.0, "winning_kind": "trees_scenery"}
+    }
+  ]
+}
