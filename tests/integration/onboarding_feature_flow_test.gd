@@ -27,6 +27,7 @@ func _run() -> void:
 	main.onboarding_progress.begin_guide()
 	main.call("_refresh_onboarding_guide")
 	await _settle(3)
+	_phase("build")
 
 	_check(main.onboarding_progress.current_target() == "build", "fresh guide starts at build")
 	_check(main.onboarding_guide.is_product_mode(), "product guide observes input without synthetic advancement")
@@ -35,6 +36,15 @@ func _run() -> void:
 	_check(main.onboarding_progress.receipts().is_empty(), "rejected results leave onboarding receipts unchanged")
 	var municipal := main.get_node_or_null("ActionDock/ActionButtonRow/MunicipalButton") as Button
 	_check(municipal != null and main.onboarding_guide.target_control() == municipal, "build arrow initially points to the real municipal button")
+	var defer_button := main.onboarding_guide.get_node("OnboardingDeferButton") as Button
+	var defer_autosaves := int(main.get("_autosave_count"))
+	if defer_button != null:
+		defer_button.pressed.emit()
+	await _settle(2)
+	_check(defer_button != null and main.onboarding_progress.due_game_day() == 3, "the visible defer action schedules the unfinished build segment from 1/1 to 1/4")
+	_check(main.onboarding_progress.receipts().is_empty() and main.onboarding_guide.is_waiting_mode(), "deferring an unfinished segment preserves receipts and enters non-target waiting")
+	_check(not main.vertical_slice.is_time_paused() and int(main.get("_autosave_count")) == defer_autosaves + 1, "defer keeps city time running and saves the schedule once")
+	await _advance_to_onboarding_due(main, "build")
 	if municipal != null:
 		await _click_at(municipal.get_global_rect().get_center())
 	_check(main.onboarding_progress.current_target() == "build", "clicking a guide target alone cannot advance without domain success")
@@ -64,6 +74,8 @@ func _run() -> void:
 	var build_autosaves_after := int(main.get("_autosave_count"))
 	main.call("_confirm_pending_construction", build_tile)
 	_check(int(main.get("_autosave_count")) == build_autosaves_after and main.onboarding_progress.receipts().size() == 1, "duplicate construction callback is zero-write")
+	await _advance_to_onboarding_due(main, "blueprint")
+	_phase("blueprint")
 
 	_open_hub(main)
 	_press_named(main, "BuildingsButton")
@@ -90,6 +102,8 @@ func _run() -> void:
 	_press_named(main, "SubmitCustomBlueprintButton")
 	await _settle(2)
 	_check(int(main.get("_autosave_count")) == blueprint_autosaves_after and main.onboarding_progress.receipts().size() == 2, "duplicate blueprint signal fails closed")
+	await _advance_to_onboarding_due(main, "route")
+	_phase("route")
 
 	var transport_setup := _prepare_route_package(main)
 	_check(bool(transport_setup.get("ok", false)), "route package reaches the authoritative ready-to-confirm state: %s" % [transport_setup])
@@ -112,6 +126,8 @@ func _run() -> void:
 		duplicate_route.pressed.emit()
 	await _settle(2)
 	_check(int(main.get("_autosave_count")) == route_autosaves_after and main.onboarding_progress.receipts().size() == 3, "duplicate route continue cannot replay the package")
+	await _advance_to_onboarding_due(main, "fiscal")
+	_phase("fiscal")
 
 	_open_hub(main)
 	await _settle(2)
@@ -138,6 +154,8 @@ func _run() -> void:
 	if duplicate_fiscal != null:
 		duplicate_fiscal.pressed.emit()
 	_check(int(main.get("_autosave_count")) == fiscal_autosaves_after and main.onboarding_progress.receipts().size() == 4, "stale fiscal apply is zero-write")
+	await _advance_to_onboarding_due(main, "city_data")
+	_phase("city_data")
 
 	_open_hub(main)
 	await _settle(2)
@@ -151,6 +169,8 @@ func _run() -> void:
 	_check(main.onboarding_progress.current_target() == "public_affairs", "opening data then switching to another valid tab advances")
 	_check(str(city_receipt.get("authority_id", "")) == "city_data_dashboard", "city data receipt identifies dashboard authority")
 	_check(int(main.get("_autosave_count")) == city_autosaves + 1, "city-data tab receipt autosaves once")
+	await _advance_to_onboarding_due(main, "public_affairs")
+	_phase("public_affairs")
 
 	_open_hub(main)
 	await _settle(2)
@@ -166,6 +186,8 @@ func _run() -> void:
 	_check(main.onboarding_progress.current_target() == "governance", "pending-to-accepted domain success advances public affairs")
 	_check(str(public_receipt.get("authority_id", "")) == "resident_request" and str(public_receipt.get("entity_id", "")) == pending_id, "public receipt binds the accepted request id")
 	_check(int(main.get("_autosave_count")) == public_autosaves + 1, "public accept, completion reconciliation, and receipt use one autosave")
+	await _advance_to_onboarding_due(main, "governance")
+	_phase("governance")
 	main.call("_refresh_onboarding_guide")
 	await _settle(2)
 	_check(main.onboarding_progress.current_target() == "governance" and main.onboarding_action_router.supports_current_target(), "governance adapter activates only after the first six authoritative receipts")
@@ -180,6 +202,8 @@ func _run() -> void:
 	var old_oversight_case_id := str(governance_step.get("old_oversight_case_id", ""))
 	_check(bool(governance_step.get("ok", false)), "real bill, hearing, rejection, and force-enact UI completes governance: %s" % governance_step)
 	_check(main.onboarding_progress.current_target() == "judicial", "unique force-enact authority advances to judicial defense")
+	await _advance_to_onboarding_due(main, "judicial")
+	_phase("judicial")
 	var ambiguous_event_book: Array = main.vertical_slice.session.state.event_book.duplicate(true)
 	for record_variant: Variant in main.vertical_slice.session.state.event_book:
 		if record_variant is Dictionary and str(Dictionary(record_variant).get("fact_type", "")) == "bill_force_enacted" and str(Dictionary(record_variant).get("case_id", "")) == judicial_case_id:
@@ -207,25 +231,39 @@ func _run() -> void:
 	_check(str(main.vertical_slice.governance.judiciary_cases.get(old_judicial_case_id, {}).get("defense_template_id", "")).is_empty(), "judicial onboarding defense does not mutate the pre-existing case")
 	_check(int(main.get("_autosave_count")) == judicial_autosaves + 1, "judicial defense and receipt share one autosave")
 	_check(not main.onboarding_action_router.record_oversight_defense_success(oversight_case_id, "full_disclosure", {"ok": false}, main.vertical_slice.governance, main.vertical_slice.session.state.event_book, main.vertical_slice.game_day()), "failed oversight result cannot advance the linked inquiry")
-
-	_open_hub(main)
-	await _settle(2)
-	main.call("_refresh_onboarding_guide")
-	await _settle(2)
-	_check(_target_name(main) == "OversightButton", "oversight arrow points to the real municipal destination")
-	_press_named(main, "OversightButton")
-	await _settle(3)
-	_check(str(main.oversight_panel.selected_case_id()) == oversight_case_id, "oversight page selects the exact force-linked inquiry")
-	_check(_target_name(main) == "FullDisclosureDefenseButton", "oversight arrow points to a real enabled defense")
+	await _advance_to_onboarding_due(main, "oversight")
+	_phase("oversight")
 	var oversight_autosaves := int(main.get("_autosave_count"))
-	_press_named(main, "FullDisclosureDefenseButton")
-	await _settle(3)
+	var oversight_authority_before: Dictionary = Dictionary(main.vertical_slice.governance.oversight_cases.get(oversight_case_id, {})).duplicate(true)
+	_check(main.vertical_slice.governance.justice_system.terminal_failure_reason().is_empty(), "nine-stage fixture remains outside the separate terminal game-over path")
+	if str(oversight_authority_before.get("status", "")) == "resolved":
+		var review_message := (main.onboarding_guide.get_node("OnboardingMessage") as Label).text
+		var review_button := main.onboarding_guide.get_node("OnboardingResultReviewButton") as Button
+		_check(main.onboarding_guide.is_result_review_mode() and review_button != null and review_button.visible, "resolved oversight inquiry uses an explicit non-modal result review")
+		_check(oversight_case_id in review_message and "結果：" in review_message and "結案日期：" in review_message and not "impeached" in review_message, "result review shows the linked authority id, localized outcome, and date")
+		if review_button != null:
+			review_button.pressed.emit()
+		await _settle(3)
+		_check(Dictionary(main.vertical_slice.governance.oversight_cases.get(oversight_case_id, {})) == oversight_authority_before, "reading a resolved result does not mutate governance authority")
+	else:
+		_open_hub(main)
+		await _settle(2)
+		main.call("_refresh_onboarding_guide")
+		await _settle(2)
+		_check(_target_name(main) == "OversightButton", "active oversight arrow points to the real municipal destination")
+		_press_named(main, "OversightButton")
+		await _settle(3)
+		_check(str(main.oversight_panel.selected_case_id()) == oversight_case_id, "oversight page selects the exact force-linked inquiry")
+		_check(_target_name(main) == "FullDisclosureDefenseButton", "oversight arrow points to a real enabled defense")
+		_press_named(main, "FullDisclosureDefenseButton")
+		await _settle(3)
 	var oversight_receipt := _receipt_at(main, 8)
 	_check(main.onboarding_progress.is_completed() and main.onboarding_progress.current_target().is_empty(), "ninth authoritative action completes onboarding")
-	_check(str(oversight_receipt.get("authority_id", "")) == "oversight_case" and str(oversight_receipt.get("entity_id", "")) == oversight_case_id, "oversight receipt binds the canonical force-linked inquiry")
-	_check(str(main.vertical_slice.governance.oversight_cases.get(oversight_case_id, {}).get("defense_template_id", "")) == "full_disclosure", "oversight authority stores the submitted defense")
+	_check(str(oversight_receipt.get("authority_id", "")) in ["oversight_case", "oversight_result_review"] and str(oversight_receipt.get("entity_id", "")) == oversight_case_id, "oversight receipt distinguishes a real defense from an explicit resolved-result review and binds the linked inquiry")
+	if str(oversight_authority_before.get("status", "")) == "investigating":
+		_check(str(main.vertical_slice.governance.oversight_cases.get(oversight_case_id, {}).get("defense_template_id", "")) == "full_disclosure", "oversight authority stores the submitted defense")
 	_check(str(main.vertical_slice.governance.oversight_cases.get(old_oversight_case_id, {}).get("defense_template_id", "")).is_empty(), "oversight onboarding defense does not mutate the pre-existing case")
-	_check(int(main.get("_autosave_count")) == oversight_autosaves + 1, "oversight defense, final receipt, and completion share one autosave")
+	_check(int(main.get("_autosave_count")) == oversight_autosaves + 1, "oversight authority action or explicit result review, final receipt, and completion share one autosave")
 	_check(main.tutorial_completed, "ninth step sets the legacy tutorial-completed compatibility flag")
 	main.call("_refresh_onboarding_guide")
 	await _settle(2)
@@ -312,7 +350,7 @@ func _complete_governance_step(main) -> Dictionary:
 		_check(not decision.is_empty() and (expected_status.is_empty() or str(decision.get("status", "")) == expected_status), "%s reaches its characterized terminal result" % bill_id)
 		if bill_id == "commerce_act":
 			var final_vote: Dictionary = decision.get("final_vote", {})
-			_check(int(final_vote.get("votes_for", -1)) == 14 and int(final_vote.get("votes_against", -1)) == 7, "commerce focus_primary preserves the exact 14/7 tally")
+			_check(int(final_vote.get("votes_for", -1)) < int(final_vote.get("majority_threshold", 0)) and not bool(decision.get("lower_passed", true)), "commerce focus_primary remains an authoritative lower-house rejection after scheduled game days advance")
 			_check((final_vote.get("votes", []) as Array).size() == 30 and int(final_vote.get("majority_threshold", 0)) == 16, "commerce rejection preserves 30 seats and threshold 16")
 		_check(_target_name(main) == "BackButton", "%s final stage guides back without faking another action" % bill_id)
 		_press_named(main, "BackButton")
@@ -331,7 +369,7 @@ func _complete_governance_step(main) -> Dictionary:
 	var old_oversight: Dictionary = justice_system.open_oversight_case(
 		"official_mayor",
 		["既有監察調查"],
-		65,
+		0,
 		main.vertical_slice.game_day()
 	)
 	var old_judicial_case_id := str(old_judicial.get("case", {}).get("id", ""))
@@ -598,6 +636,31 @@ func _click_at(position: Vector2) -> void:
 	await _settle(2)
 
 
+func _advance_to_onboarding_due(main, expected_target: String) -> void:
+	var current_day: int = main.vertical_slice.game_day()
+	var due_day: int = main.onboarding_progress.due_game_day()
+	_check(main.onboarding_progress.current_target() == expected_target, "%s is the scheduled next segment" % expected_target)
+	_check(due_day == current_day + 3 and main.onboarding_progress.is_waiting(current_day), "%s waits three full game days" % expected_target)
+	_check(main.onboarding_guide.is_waiting_mode() and not main.onboarding_guide.is_open(), "%s waiting presentation has no input gate" % expected_target)
+	if main.municipal_overlay != null and main.municipal_overlay.is_open():
+		main.municipal_overlay.close_overlay()
+	await _settle(2)
+	main.call("_sync_time_pause_for_ui")
+	_check(not main.vertical_slice.is_time_paused(), "%s schedule permits normal time progression" % expected_target)
+	var events: Array[Dictionary] = main.vertical_slice.advance_days(
+		due_day - current_day,
+		main.call("_vertical_city_context"),
+		false
+	)
+	main.call("_consume_vertical_events", events)
+	main.call("_sync_vertical_state")
+	main.call("_update_ui")
+	main.call("_refresh_onboarding_guide")
+	await _settle(3)
+	_check(main.vertical_slice.game_day() == due_day and main.onboarding_progress.is_current_target_available(due_day), "%s opens on its exact due day" % expected_target)
+	_check(main.onboarding_guide.is_product_mode(), "%s due segment restores product guidance" % expected_target)
+
+
 func _cleanup() -> void:
 	for path in [SAVE_PATH, "%s.bak" % SAVE_PATH, "%s.tmp" % SAVE_PATH]:
 		if FileAccess.file_exists(path):
@@ -607,6 +670,10 @@ func _cleanup() -> void:
 func _settle(frames: int) -> void:
 	for _frame in range(frames):
 		await process_frame
+
+
+func _phase(name: String) -> void:
+	print("Onboarding feature flow phase=%s" % name)
 
 
 func _check(condition: bool, message: String) -> void:

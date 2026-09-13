@@ -3,6 +3,8 @@ extends Control
 
 signal advanced(target_id: String, receipt: Dictionary)
 signal target_input_observed(target_id: String, input_kind: String)
+signal defer_requested
+signal result_review_confirmed
 
 const INPUT_MOUSE_LEFT := "mouse_left"
 const INPUT_KEY := "key"
@@ -18,6 +20,8 @@ var _expected_keycode := KEY_NONE
 var _receipt: Dictionary = {}
 var _bound_target_id := ""
 var _product_mode := false
+var _waiting_mode := false
+var _result_review_mode := false
 var _target_input_callable := Callable()
 var _target_exit_callable := Callable()
 var _generation := 0
@@ -25,6 +29,8 @@ var _masks: Array[ColorRect] = []
 var _arrow: Label
 var _guide: Label
 var _fairy: TextureRect
+var _defer_button: Button
+var _result_review_button: Button
 
 
 func _init() -> void:
@@ -62,6 +68,60 @@ func open_product_target(
 	return _open_target(progress, target, input_kind, expected_keycode, "", "", 0, message, true)
 
 
+func show_waiting(progress, message: String) -> bool:
+	if progress == null or not progress.has_method("is_active") or not bool(progress.call("is_active")):
+		invalidate_target()
+		return false
+	if not _ensure_fairy_texture():
+		invalidate_target()
+		return false
+	var target_id := str(progress.call("current_target"))
+	if target_id.is_empty():
+		invalidate_target()
+		return false
+	if is_waiting_mode() and _progress == progress and _bound_target_id == target_id:
+		_guide.text = message
+		_layout_waiting()
+		return true
+	invalidate_target()
+	_progress = progress
+	_bound_target_id = target_id
+	_waiting_mode = true
+	_guide.text = message
+	_set_waiting_presentation()
+	show()
+	move_to_front()
+	_layout_waiting()
+	return true
+
+
+func show_result_review(progress, message: String) -> bool:
+	if progress == null or not progress.has_method("is_active") or not bool(progress.call("is_active")):
+		invalidate_target()
+		return false
+	if not _ensure_fairy_texture():
+		invalidate_target()
+		return false
+	var target_id := str(progress.call("current_target"))
+	if target_id not in ["judicial", "oversight"]:
+		invalidate_target()
+		return false
+	if is_result_review_mode() and _progress == progress and _bound_target_id == target_id:
+		_guide.text = message
+		_layout_waiting()
+		return true
+	invalidate_target()
+	_progress = progress
+	_bound_target_id = target_id
+	_result_review_mode = true
+	_guide.text = message
+	_set_result_review_presentation()
+	show()
+	move_to_front()
+	_layout_waiting()
+	return true
+
+
 func _open_target(
 	progress,
 	target: Control,
@@ -92,6 +152,8 @@ func _open_target(
 	_expected_keycode = expected_keycode
 	_bound_target_id = str(progress.call("current_target"))
 	_product_mode = product_mode
+	_waiting_mode = false
+	_result_review_mode = false
 	if not _product_mode:
 		_receipt = {
 			"kind": _bound_target_id,
@@ -106,6 +168,7 @@ func _open_target(
 	_target.gui_input.connect(_target_input_callable)
 	_target.tree_exiting.connect(_target_exit_callable, CONNECT_ONE_SHOT)
 	_guide.text = message
+	_set_target_presentation()
 	show()
 	move_to_front()
 	_layout_hole()
@@ -125,6 +188,8 @@ func invalidate_target() -> void:
 	_expected_keycode = KEY_NONE
 	_bound_target_id = ""
 	_product_mode = false
+	_waiting_mode = false
+	_result_review_mode = false
 	_receipt.clear()
 	_target_input_callable = Callable()
 	_target_exit_callable = Callable()
@@ -142,6 +207,26 @@ func is_open() -> bool:
 
 func is_product_mode() -> bool:
 	return is_open() and _product_mode
+
+
+func is_waiting_mode() -> bool:
+	return (
+		visible
+		and _waiting_mode
+		and _progress != null
+		and bool(_progress.call("is_active"))
+		and str(_progress.call("current_target")) == _bound_target_id
+	)
+
+
+func is_result_review_mode() -> bool:
+	return (
+		visible
+		and _result_review_mode
+		and _progress != null
+		and bool(_progress.call("is_active"))
+		and str(_progress.call("current_target")) == _bound_target_id
+	)
 
 
 func target_control() -> Control:
@@ -163,7 +248,9 @@ func refresh_localization() -> void:
 
 
 func _process(_delta: float) -> void:
-	if visible:
+	if is_waiting_mode() or is_result_review_mode():
+		_layout_waiting()
+	elif visible:
 		if not is_instance_valid(_target) or not _target.is_inside_tree():
 			invalidate_target()
 			return
@@ -219,6 +306,18 @@ func _on_target_tree_exiting(binding_generation: int) -> void:
 		invalidate_target()
 
 
+func _on_defer_pressed() -> void:
+	if not is_open() and not is_waiting_mode() and not is_result_review_mode():
+		return
+	defer_requested.emit()
+
+
+func _on_result_review_pressed() -> void:
+	if not is_result_review_mode():
+		return
+	result_review_confirmed.emit()
+
+
 func _consume_mask_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton or event is InputEventScreenTouch:
 		accept_event()
@@ -254,6 +353,24 @@ func _build() -> void:
 	_guide.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_guide.custom_minimum_size = Vector2(320, 64)
 	add_child(_guide)
+	_defer_button = Button.new()
+	_defer_button.name = "OnboardingDeferButton"
+	_defer_button.text = "延後教學"
+	_defer_button.tooltip_text = "將目前教學延後 3 個遊戲天"
+	_defer_button.custom_minimum_size = Vector2(132, 44)
+	_defer_button.mouse_filter = Control.MOUSE_FILTER_STOP
+	_defer_button.pressed.connect(_on_defer_pressed)
+	add_child(_defer_button)
+	_defer_button.hide()
+	_result_review_button = Button.new()
+	_result_review_button.name = "OnboardingResultReviewButton"
+	_result_review_button.text = "已閱讀結果，繼續"
+	_result_review_button.tooltip_text = "確認已閱讀真實案件結果並繼續教學"
+	_result_review_button.custom_minimum_size = Vector2(180, 44)
+	_result_review_button.mouse_filter = Control.MOUSE_FILTER_STOP
+	_result_review_button.pressed.connect(_on_result_review_pressed)
+	add_child(_result_review_button)
+	_result_review_button.hide()
 	set_dark_mode(false)
 
 
@@ -304,8 +421,10 @@ func _layout_hole() -> void:
 	)
 	var guide_size := _guide.get_combined_minimum_size()
 	_guide.size = guide_size
+	var defer_size := _defer_button.get_combined_minimum_size()
+	_defer_button.size = defer_size
 	_fairy.size = FAIRY_SIZE
-	var companion_height := maxf(guide_size.y, FAIRY_SIZE.y)
+	var companion_height := maxf(guide_size.y + 8.0 + defer_size.y, FAIRY_SIZE.y)
 	var below_y := hole.end.y + companion_gap
 	var above_y := hole.position.y - companion_gap - companion_height
 	var companion_y := below_y if below_y + companion_height <= size.y - edge_margin else above_y
@@ -317,6 +436,60 @@ func _layout_hole() -> void:
 	)
 	_guide.position = Vector2(guide_x, companion_y + maxf(0.0, (companion_height - guide_size.y) * 0.5))
 	_fairy.position = Vector2(guide_x - FAIRY_SIZE.x - companion_gap, companion_y)
+	_defer_button.position = Vector2(
+		guide_x,
+		minf(size.y - defer_size.y - edge_margin, _guide.position.y + guide_size.y + 8.0)
+	)
+
+
+func _layout_waiting() -> void:
+	if size.x <= 0.0 or size.y <= 0.0:
+		return
+	var edge_margin := 12.0
+	var companion_gap := 12.0
+	var guide_size := _guide.get_combined_minimum_size()
+	var defer_size := _defer_button.get_combined_minimum_size()
+	var review_size := _result_review_button.get_combined_minimum_size()
+	_guide.size = guide_size
+	_defer_button.size = defer_size
+	_result_review_button.size = review_size
+	_fairy.size = FAIRY_SIZE
+	var actions_width := defer_size.x
+	if is_result_review_mode():
+		actions_width += 8.0 + review_size.x
+	var total_width := FAIRY_SIZE.x + companion_gap + maxf(guide_size.x, actions_width)
+	var left := maxf(edge_margin, size.x - total_width - edge_margin)
+	_fairy.position = Vector2(left, edge_margin)
+	_guide.position = Vector2(left + FAIRY_SIZE.x + companion_gap, edge_margin)
+	_defer_button.position = Vector2(_guide.position.x, _guide.position.y + guide_size.y + 8.0)
+	_result_review_button.position = Vector2(
+		_defer_button.position.x + defer_size.x + 8.0,
+		_defer_button.position.y
+	)
+
+
+func _set_target_presentation() -> void:
+	for mask in _masks:
+		mask.show()
+	_arrow.show()
+	_defer_button.show()
+	_result_review_button.hide()
+
+
+func _set_waiting_presentation() -> void:
+	for mask in _masks:
+		mask.hide()
+	_arrow.hide()
+	_defer_button.show()
+	_result_review_button.hide()
+
+
+func _set_result_review_presentation() -> void:
+	for mask in _masks:
+		mask.hide()
+	_arrow.hide()
+	_defer_button.show()
+	_result_review_button.show()
 
 
 func _set_rect(control: Control, rect: Rect2) -> void:

@@ -226,7 +226,7 @@ func record_oversight_defense_success(
 	var judicial_id := str(force_receipt.get("entity_id", ""))
 	if (
 		str(force_receipt.get("authority_id", "")) != "bill_force_enactment"
-		or str(judicial_receipt.get("authority_id", "")) != "judicial_case"
+		or str(judicial_receipt.get("authority_id", "")) not in ["judicial_case", "judicial_result_review"]
 		or str(judicial_receipt.get("entity_id", "")) != judicial_id
 	):
 		return false
@@ -235,6 +235,38 @@ func record_oversight_defense_success(
 	if not _defense_result_matches_authority(result, governance.oversight_cases, case_id, defense_id):
 		return false
 	return _commit("oversight", "oversight_case", case_id, game_day)
+
+
+func record_case_result_review_success(
+	mode: String,
+	case_payload: Dictionary,
+	governance,
+	event_book: Array,
+	game_day: int
+) -> bool:
+	if mode not in ["judicial", "oversight"] or not _is_current(mode) or governance == null:
+		return false
+	var case_id := str(case_payload.get("id", ""))
+	if case_id.is_empty() or linked_case_id(mode, event_book) != case_id:
+		return false
+	var force_receipt := _receipt_for_kind("governance")
+	var judicial_id := str(force_receipt.get("entity_id", ""))
+	if mode == "oversight":
+		var judicial_receipt := _receipt_for_kind("judicial")
+		if (
+			str(judicial_receipt.get("authority_id", "")) not in ["judicial_case", "judicial_result_review"]
+			or str(judicial_receipt.get("entity_id", "")) != judicial_id
+		):
+			return false
+	var cases: Dictionary = governance.judiciary_cases if mode == "judicial" else governance.oversight_cases
+	if not _resolved_case_matches_authority(mode, case_payload, cases, game_day):
+		return false
+	return _commit(
+		mode,
+		"judicial_result_review" if mode == "judicial" else "oversight_result_review",
+		case_id,
+		game_day
+	)
 
 
 func linked_case_id(mode: String, event_book: Array) -> String:
@@ -324,6 +356,43 @@ func _defense_result_matches_authority(
 		and str(returned_case.get("defense_template_id", "")) == defense_id
 		and cases.has(case_id)
 		and _dictionary(cases.get(case_id, {})) == returned_case
+	)
+
+
+func _resolved_case_matches_authority(
+	mode: String,
+	case_payload: Dictionary,
+	cases: Dictionary,
+	game_day: int
+) -> bool:
+	var case_id := str(case_payload.get("id", ""))
+	var opened_day := int(case_payload.get("opened_day", -1))
+	var resolved_day := int(case_payload.get("resolved_day", -1))
+	if (
+		case_id.is_empty()
+		or str(case_payload.get("status", "")) != "resolved"
+		or str(case_payload.get("outcome", "")).is_empty()
+		or opened_day < 0
+		or resolved_day < opened_day
+		or resolved_day > game_day
+		or not cases.has(case_id)
+		or _dictionary(cases.get(case_id, {})) != case_payload
+	):
+		return false
+	var votes: Array = case_payload.get("member_votes", [])
+	if votes.is_empty():
+		return false
+	if mode == "judicial":
+		return (
+			str(case_payload.get("outcome", "")) in ["fine", "stop_order", "prison"]
+			and case_payload.has("final_severity")
+			and case_payload.has("fine_amount")
+		)
+	return (
+		str(case_payload.get("outcome", "")) in ["impeached", "cleared"]
+		and int(case_payload.get("votes_for_impeachment", -1)) >= 0
+		and int(case_payload.get("votes_against_impeachment", -1)) >= 0
+		and int(case_payload.get("votes_for_impeachment", -1)) + int(case_payload.get("votes_against_impeachment", -1)) == votes.size()
 	)
 
 

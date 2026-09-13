@@ -35,17 +35,20 @@ func _run() -> void:
 
 	main.onboarding_progress.reset_for_new_game()
 	main.onboarding_progress.begin_guide()
-	main.onboarding_progress.record_current_target("build", _receipt("build", 0))
-	main.onboarding_progress.record_current_target("blueprint", _receipt("blueprint", 1))
+	main.onboarding_progress.record_current_target("build", _receipt("build", 1))
+	main.onboarding_progress.record_current_target("blueprint", _receipt("blueprint", 4))
+	main.onboarding_progress.defer_current_target(5)
 	main.tax_rates["income"] = 19
 	var schema9_active := main.call("_capture_player_shell_state") as Dictionary
 	_check(int(schema9_active["schema_version"]) == 9, "captured shell advances to schema 9")
+	_check(int(schema9_active["onboarding"]["schema_version"]) == 2 and int(schema9_active["onboarding"]["due_game_day"]) == 10, "captured shell persists the nested v2 deferred date")
 	var incoming_copy := schema9_active.duplicate(true)
 	main.tax_rates["income"] = 7
 	_check(bool(main.call("_restore_player_shell_state", schema9_active)), "schema 9 active shell restores")
 	_check(main.tutorial_completed, "schema 9 active restore preserves the legacy story-seen flag")
 	_check(main.onboarding_progress.current_target() == "route", "schema 9 resumes the exact current target")
 	_check(main.onboarding_progress.receipts().size() == 2, "schema 9 preserves bounded receipts")
+	_check(main.onboarding_progress.due_game_day() == 10 and main.onboarding_progress.is_waiting(9), "schema 9 resumes the exact deferred schedule")
 	var router_resume: Dictionary = main.onboarding_action_router.debug_snapshot()
 	_check(str(router_resume.get("current_target", "")) == "route" and bool(router_resume.get("supported", false)), "router binds the exact restored current target")
 	_check(Dictionary(router_resume.get("blueprint_baseline", {})).is_empty() and not bool(router_resume.get("blueprint_changed", true)) and int(router_resume.get("city_data_initial_tab", 0)) == -1, "reload restores no transient action evidence to replay")
@@ -81,8 +84,8 @@ func _run() -> void:
 	await TestCleanup.finish(self, [main], exit_code)
 
 
-func _receipt(kind: String, index: int) -> Dictionary:
-	return {"kind": kind, "authority_id": "authority_%d" % index, "entity_id": "entity_%d" % index, "game_day": index + 1}
+func _receipt(kind: String, game_day: int) -> Dictionary:
+	return {"kind": kind, "authority_id": "authority_%d" % game_day, "entity_id": "entity_%d" % game_day, "game_day": game_day}
 
 
 func _settle(frames: int) -> void:

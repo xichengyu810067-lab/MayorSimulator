@@ -9,6 +9,7 @@ const CityBackdrop = preload("res://scripts/world/city_backdrop.gd")
 const CityTileButton = preload("res://scripts/world/city_tile_button.gd")
 const SquareGridLayoutScript = preload("res://scripts/world/square_grid_layout.gd")
 const NpcMapControllerScript = preload("res://scripts/app/npc_map_controller.gd")
+const CityStateScript = preload("res://scripts/core/city_state.gd")
 const VerticalSliceCoordinatorScript = preload("res://scripts/app/vertical_slice_coordinator.gd")
 const CitySimulationServiceScript = preload("res://scripts/app/city_simulation_service.gd")
 const CityReportHistoryServiceScript = preload("res://scripts/app/city_report_history_service.gd")
@@ -578,6 +579,8 @@ func _process(delta: float) -> void:
 			_consume_vertical_events(events)
 			_sync_vertical_state()
 			_update_ui()
+			if day_changed:
+				_refresh_onboarding_guide()
 			if day_changed and events.is_empty():
 				_autosave("event:day_advanced")
 	_update_autosave_timer(delta)
@@ -645,6 +648,8 @@ func _build_ui() -> void:
 	onboarding_guide = OnboardingGuideScript.new()
 	onboarding_guide.set_dark_mode(is_dark_mode)
 	onboarding_guide.advanced.connect(Callable(self, "_on_onboarding_advanced"))
+	onboarding_guide.defer_requested.connect(Callable(self, "_on_onboarding_defer_requested"))
+	onboarding_guide.result_review_confirmed.connect(Callable(self, "_on_onboarding_result_review_confirmed"))
 	add_child(onboarding_guide)
 	call_deferred("_refresh_onboarding_guide")
 	for blocking_surface in [municipal_overlay, settings_overlay, construction_confirmation, exit_confirmation, tutorial_overlay, onboarding_guide]:
@@ -819,9 +824,11 @@ func _can_zoom_map_at(global_position: Vector2) -> bool:
 		return false
 	if not _game_started:
 		return false
-	for blocking_surface in [municipal_overlay, settings_overlay, construction_confirmation, exit_confirmation, tutorial_overlay, onboarding_guide]:
+	for blocking_surface in [municipal_overlay, settings_overlay, construction_confirmation, exit_confirmation, tutorial_overlay]:
 		if blocking_surface != null and blocking_surface.visible:
 			return false
+	if onboarding_guide != null and onboarding_guide.is_open():
+		return false
 	return true
 
 
@@ -1745,16 +1752,43 @@ func _refresh_onboarding_guide() -> void:
 		return
 	if not _game_started or not onboarding_progress.is_active() or not onboarding_action_router.supports_current_target():
 		onboarding_guide.invalidate_target()
+		_sync_time_pause_for_ui()
+		_sync_map_interaction_for_ui()
+		return
+	var current_game_day: int = int(vertical_slice.game_day()) if vertical_slice != null else 0
+	if onboarding_progress.is_waiting(current_game_day):
+		onboarding_guide.show_waiting(
+			onboarding_progress,
+			_onboarding_waiting_message(onboarding_progress.due_game_day())
+		)
+		_sync_time_pause_for_ui()
+		_sync_map_interaction_for_ui()
+		return
+	var route_waiting_message := _route_onboarding_unavailable_message()
+	if not route_waiting_message.is_empty():
+		onboarding_guide.show_waiting(onboarding_progress, route_waiting_message)
+		_sync_time_pause_for_ui()
+		_sync_map_interaction_for_ui()
+		return
+	var case_presentation := _onboarding_case_non_target_presentation()
+	if not case_presentation.is_empty():
+		if str(case_presentation.get("mode", "")) == "result_review":
+			onboarding_guide.show_result_review(onboarding_progress, str(case_presentation.get("message", "")))
+		else:
+			onboarding_guide.show_waiting(onboarding_progress, str(case_presentation.get("message", "")))
+		_sync_time_pause_for_ui()
 		_sync_map_interaction_for_ui()
 		return
 	var target := _resolve_onboarding_target()
 	if target == null or not is_instance_valid(target) or not target.is_visible_in_tree():
 		onboarding_guide.invalidate_target()
+		_sync_time_pause_for_ui()
 		_sync_map_interaction_for_ui()
 		return
 	_ensure_onboarding_target_visible(target)
 	if target is BaseButton and (target as BaseButton).disabled:
 		onboarding_guide.invalidate_target()
+		_sync_time_pause_for_ui()
 		_sync_map_interaction_for_ui()
 		return
 	if onboarding_guide.is_product_mode() and onboarding_guide.target_control() == target:
@@ -1854,6 +1888,8 @@ func _resolve_route_onboarding_target() -> Control:
 		return _first_onboarding_grid_target()
 	if state not in ["inactive", "closed"]:
 		if municipal_overlay == null or not municipal_overlay.is_open():
+			if not _route_package_resource_wait_quote(session).is_empty():
+				return null
 			return municipal_button
 		var back_target := _visible_municipal_back_target()
 		if municipal_overlay.current_page() == "hub":
@@ -1865,7 +1901,11 @@ func _resolve_route_onboarding_target() -> Control:
 			return infrastructure_target if infrastructure_target != null else back_target
 		if state == "route_edit" and _transport_session_is_route_package(session):
 			var package_continue_target := _visible_enabled_control_named("TransportPlanningSessionContinue")
-			return package_continue_target if package_continue_target != null else _visible_enabled_control_named("CloseButton")
+			if package_continue_target != null:
+				return package_continue_target
+			if not _route_package_resource_wait_quote(session).is_empty():
+				return _visible_enabled_control_named("CloseButton")
+			return null
 		if state == "route_edit" and Dictionary(session.get("route_draft", {})).get("station_tile_ids", []).is_empty():
 			var route_target := _visible_control_named("PlanRoute_bus")
 			return route_target if route_target != null else back_target
@@ -1882,6 +1922,65 @@ func _resolve_route_onboarding_target() -> Control:
 			if selected_building == "公車站":
 				return _visible_control_named("SubmitBlueprintButton")
 	return _visible_municipal_back_target()
+
+
+func _route_package_resource_wait_quote(session: Dictionary) -> Dictionary:
+	if (
+		str(session.get("state", "")) != "route_edit"
+		or not _transport_session_is_route_package(session)
+		or vertical_slice == null
+		or not vertical_slice.has_method("transport_session_package_quote")
+	):
+		return {}
+	var quote: Dictionary = vertical_slice.call("transport_session_package_quote", city_grid)
+	if not bool(quote.get("ok", false)) or bool(quote.get("can_start", false)):
+		return {}
+	var available_workers := int(quote.get("available_workers", -1))
+	var requested_workers := int(quote.get("requested_workers", -1))
+	var insufficient_workers := requested_workers > 0 and available_workers < requested_workers
+	var insufficient_funds := not bool(quote.get("can_afford", false))
+	return quote if insufficient_workers or insufficient_funds else {}
+
+
+func _route_onboarding_unavailable_message() -> String:
+	if onboarding_progress.current_target() != "route":
+		return ""
+	var session := _transport_session_snapshot()
+	if (
+		str(session.get("state", "")) != "route_edit"
+		or not _transport_session_is_route_package(session)
+		or vertical_slice == null
+		or not vertical_slice.has_method("transport_session_package_quote")
+	):
+		return ""
+	var quote: Dictionary = vertical_slice.call("transport_session_package_quote", city_grid)
+	if not bool(quote.get("ok", false)):
+		var repair_context := (
+			"請在目前交通規劃中檢查站點、道路與營運設定"
+			if municipal_overlay != null and municipal_overlay.is_open()
+			else "請重新開啟市政中心，在交通規劃中檢查站點、道路與營運設定"
+		)
+		return "交通套案資料尚未完整（%s）。%s；也可延後教學。" % [
+			_vertical_error_text(str(quote.get("error", "transport_route_invalid"))),
+			repair_context,
+		]
+	quote = _route_package_resource_wait_quote(session)
+	if quote.is_empty():
+		return ""
+	var available_workers := int(quote.get("available_workers", 0))
+	var requested_workers := int(quote.get("requested_workers", 0))
+	var insufficient_workers := requested_workers > 0 and available_workers < requested_workers
+	var insufficient_funds := not bool(quote.get("can_afford", false))
+	if insufficient_funds and insufficient_workers:
+		return "交通套案目前資金與人力不足（總工程費 $%d；人力 %d/%d）。可先處理城市財政與工程，再繼續；也可延後教學。" % [
+			int(quote.get("total_cost", 0)), available_workers, requested_workers,
+		]
+	if insufficient_funds:
+		return "交通套案目前資金不足（總工程費 $%d）。可先處理城市財政，再繼續；也可延後教學。" % int(quote.get("total_cost", 0))
+	return "交通套案目前人力不足（%d/%d）。可先處理城市與工程，準備完成後再繼續；也可延後教學。" % [
+		available_workers,
+		requested_workers,
+	]
 
 
 func _resolve_fiscal_onboarding_target() -> Control:
@@ -2206,6 +2305,12 @@ func _route_package_station_candidate(
 	var occupied_tile_ids := _route_onboarding_int_array(quote.get("occupied_tile_ids", []))
 	if occupied_tile_ids.is_empty() or not occupied_tile_ids.has(anchor_tile_id):
 		return {}
+	var terrain = _terrain_map()
+	if terrain == null:
+		return {}
+	for occupied_tile_id: int in occupied_tile_ids:
+		if not terrain.is_buildable(occupied_tile_id):
+			return {}
 	if not _route_onboarding_grid_footprint_is_safe(occupied_tile_ids):
 		return {}
 	for existing: Dictionary in excluded:
@@ -2450,6 +2555,79 @@ func _onboarding_target_message(target: Control) -> String:
 	if target is BaseButton:
 		return (target as BaseButton).text
 	return ""
+
+
+func _onboarding_waiting_message(due_game_day: int) -> String:
+	return "教學預定於%s繼續；等待期間可正常遊玩。" % _onboarding_date_label(due_game_day)
+
+
+func _onboarding_date_label(game_day: int) -> String:
+	var bounded_day := maxi(0, game_day)
+	var days_per_year := CityStateScript.DAYS_PER_MONTH * CityStateScript.MONTHS_PER_YEAR
+	var year := int(bounded_day / days_per_year) + 1
+	var year_day := bounded_day % days_per_year
+	var month := int(year_day / CityStateScript.DAYS_PER_MONTH) + 1
+	var day := year_day % CityStateScript.DAYS_PER_MONTH + 1
+	return "第 %d 年 %d 月 %d 日" % [year, month, day]
+
+
+func _onboarding_case_non_target_presentation() -> Dictionary:
+	var mode := onboarding_progress.current_target()
+	if mode not in ["judicial", "oversight"] or vertical_slice == null:
+		return {}
+	var event_book: Array = vertical_slice.session.state.event_book
+	var case_id := onboarding_action_router.linked_case_id(mode, event_book)
+	if case_id.is_empty():
+		return {}
+	var cases: Dictionary = (
+		vertical_slice.governance.judiciary_cases
+		if mode == "judicial"
+		else vertical_slice.governance.oversight_cases
+	)
+	if not cases.has(case_id) or not (cases[case_id] is Dictionary):
+		return {}
+	var case_payload: Dictionary = Dictionary(cases[case_id])
+	if str(case_payload.get("status", "")) == "resolved":
+		return {
+			"mode": "result_review",
+			"message": _onboarding_case_result_message(mode, case_payload),
+		}
+	if (
+		mode == "judicial"
+		and str(case_payload.get("status", "")) == "investigating"
+		and str(case_payload.get("procedural_stage", "")) in ["deliberation", "judgment"]
+	):
+		return {
+			"mode": "waiting",
+			"message": "司法案件 %s 已進入合議，答辯收件已結束。可正常遊玩，待裁決完成後將顯示真實結果；也可延後教學。" % case_id,
+		}
+	return {}
+
+
+func _onboarding_case_result_message(mode: String, case_payload: Dictionary) -> String:
+	var case_id := str(case_payload.get("id", ""))
+	var result_label := _onboarding_case_result_label(mode, str(case_payload.get("outcome", "")))
+	var resolved_date := _onboarding_date_label(int(case_payload.get("resolved_day", 0)))
+	var case_kind := "司法案件" if mode == "judicial" else "監察案件"
+	return "%s %s 已結案。結果：%s；結案日期：%s。案件已結案，無法再提交答辯；請閱讀結果後繼續教學。" % [
+		case_kind,
+		case_id,
+		result_label,
+		resolved_date,
+	]
+
+
+func _onboarding_case_result_label(mode: String, outcome: String) -> String:
+	if mode == "judicial":
+		return {
+			"fine": "裁處罰款",
+			"stop_order": "發布停止命令",
+			"prison": "判處監禁",
+		}.get(outcome, "司法裁決完成")
+	return {
+		"impeached": "彈劾成立",
+		"cleared": "調查後不予彈劾",
+	}.get(outcome, "監察調查完成")
 
 
 func _on_city_data_tab_changed(tab_index: int) -> void:
@@ -8294,6 +8472,45 @@ func _on_onboarding_advanced(_target_id: String, _receipt: Dictionary) -> void:
 	_sync_time_pause_for_ui()
 	_sync_map_interaction_for_ui()
 	_autosave("onboarding:step_completed")
+
+
+func _on_onboarding_defer_requested() -> void:
+	if vertical_slice == null:
+		return
+	if not onboarding_progress.defer_current_target(vertical_slice.game_day()):
+		return
+	_refresh_onboarding_guide()
+	_autosave("onboarding:deferred")
+
+
+func _on_onboarding_result_review_confirmed() -> void:
+	if vertical_slice == null or not onboarding_progress.is_active():
+		return
+	var mode := onboarding_progress.current_target()
+	if mode not in ["judicial", "oversight"] or onboarding_progress.is_waiting(vertical_slice.game_day()):
+		return
+	var event_book: Array = vertical_slice.session.state.event_book
+	var case_id := onboarding_action_router.linked_case_id(mode, event_book)
+	var cases: Dictionary = (
+		vertical_slice.governance.judiciary_cases
+		if mode == "judicial"
+		else vertical_slice.governance.oversight_cases
+	)
+	if case_id.is_empty() or not cases.has(case_id) or not (cases[case_id] is Dictionary):
+		return
+	if not onboarding_action_router.record_case_result_review_success(
+		mode,
+		Dictionary(cases[case_id]).duplicate(true),
+		vertical_slice.governance,
+		event_book,
+		vertical_slice.game_day()
+	):
+		return
+	if onboarding_progress.is_completed():
+		tutorial_completed = true
+	_set_hint("已閱讀%s結案結果。" % ("司法案件" if mode == "judicial" else "監察案件"), false)
+	_autosave("onboarding:%s_result_reviewed" % mode)
+	_refresh_onboarding_guide()
 
 
 func _wire_ui_sounds() -> void:
