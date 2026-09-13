@@ -19,6 +19,7 @@ const TransportPlanningSessionScript = preload("res://scripts/systems/city/trans
 const TransportModesScript = preload("res://data/catalogs/transport_modes.gd")
 const SaveSchemaAuthorityScript = preload("res://scripts/core/save_schema_authority.gd")
 const BuildingFootprintsScript = preload("res://data/catalogs/building_footprints.gd")
+const BuildingTerrainLabelsScript = preload("res://data/catalogs/building_terrain_labels.gd")
 
 const DEFAULT_SEED := 20_260_715
 const DEFAULT_INITIAL_FUNDS := 250_000
@@ -310,7 +311,8 @@ func draft_placement_quote(display_name: String, payload: Dictionary) -> Diction
 func placement_footprint_quote(
 	display_name: String,
 	anchor_tile_id: int,
-	worker_count: int = -1
+	worker_count: int = -1,
+	rotation_quarter_turns_ccw: int = 0
 ) -> Dictionary:
 	var quote := placement_quote(display_name, worker_count)
 	if not bool(quote.get("ok", false)):
@@ -319,7 +321,8 @@ func placement_footprint_quote(
 	var footprint := BuildingFootprintsScript.resolve_for_size(
 		str(blueprint.get("size_tier", "")),
 		anchor_tile_id,
-		terrain_map
+		terrain_map,
+		rotation_quarter_turns_ccw
 	)
 	if not bool(footprint.get("ok", false)):
 		return {
@@ -334,12 +337,13 @@ func placement_footprint_quote(
 	for tile_id: int in transport_navigation_blocked_tile_ids():
 		transport_tiles[tile_id] = true
 	for tile_id: int in occupied_tile_ids:
-		if not terrain_map.is_buildable(tile_id):
+		if not BuildingTerrainLabelsScript.is_buildable(tile_id):
 			return {
 				"ok": false,
 				"error": "terrain_not_flat",
 				"anchor_tile_id": anchor_tile_id,
 				"blocked_tile_id": tile_id,
+				"building_terrain_label": "non_buildable",
 				"terrain": terrain_map.tile_state(tile_id),
 			}
 		if not get_building_by_tile(tile_id).is_empty():
@@ -365,6 +369,7 @@ func placement_footprint_quote(
 			}
 	quote["anchor_tile_id"] = anchor_tile_id
 	quote["footprint_id"] = str(footprint.get("footprint_id", ""))
+	quote["rotation_quarter_turns_ccw"] = int(footprint.get("rotation_quarter_turns_ccw", 0))
 	quote["occupied_tile_ids"] = occupied_tile_ids
 	quote["can_place"] = true
 	return quote
@@ -373,7 +378,8 @@ func placement_footprint_quote(
 func placement_footprint_preview(
 	display_name: String,
 	anchor_tile_id: int,
-	worker_count: int = -1
+	worker_count: int = -1,
+	rotation_quarter_turns_ccw: int = 0
 ) -> Dictionary:
 	# Preview geometry is derived from the same size catalog as placement, while
 	# keeping invalid east-edge anchors visible as an all-red group in the map UI.
@@ -384,7 +390,10 @@ func placement_footprint_preview(
 	var footprint_id := BuildingFootprintsScript.footprint_id_for_size(
 		str(blueprint.get("size_tier", ""))
 	)
-	var offsets := BuildingFootprintsScript.offsets_for_footprint(footprint_id)
+	var offsets := BuildingFootprintsScript.offsets_for_footprint(
+		footprint_id,
+		rotation_quarter_turns_ccw
+	)
 	if footprint_id.is_empty() or offsets.is_empty():
 		return {"ok": false, "error": "unsupported_building_size"}
 	var preview := {
@@ -392,6 +401,7 @@ func placement_footprint_preview(
 		"can_place": false,
 		"anchor_tile_id": anchor_tile_id,
 		"footprint_id": footprint_id,
+		"rotation_quarter_turns_ccw": posmod(rotation_quarter_turns_ccw, 4),
 		"footprint_count": offsets.size(),
 		"occupied_tile_ids": [],
 		"error": "invalid_anchor_tile_id",
@@ -399,12 +409,18 @@ func placement_footprint_preview(
 	var resolved := BuildingFootprintsScript.resolve_for_footprint(
 		footprint_id,
 		anchor_tile_id,
-		terrain_map
+		terrain_map,
+		rotation_quarter_turns_ccw
 	)
 	if not bool(resolved.get("ok", false)):
 		preview["error"] = str(resolved.get("error", "invalid_footprint"))
 		return preview
-	var placement := placement_footprint_quote(display_name, anchor_tile_id, worker_count)
+	var placement := placement_footprint_quote(
+		display_name,
+		anchor_tile_id,
+		worker_count,
+		rotation_quarter_turns_ccw
+	)
 	preview["occupied_tile_ids"] = Array(resolved.get("occupied_tile_ids", [])).duplicate()
 	preview["can_place"] = bool(placement.get("ok", false))
 	preview["error"] = "" if bool(preview["can_place"]) else str(placement.get("error", "invalid_footprint"))
@@ -444,6 +460,10 @@ func footprint_cell_view(tile_index: int) -> Dictionary:
 
 func terrain_state_for_tile(tile_index: int) -> Dictionary:
 	return terrain_map.tile_state(tile_index) if terrain_map != null else {}
+
+
+func is_building_tile_buildable(tile_index: int) -> bool:
+	return BuildingTerrainLabelsScript.is_buildable(tile_index)
 
 
 func terrain_snapshot() -> Dictionary:
@@ -2100,12 +2120,22 @@ func flatten_terrain(tile_index: int, worker_count: int = DEFAULT_TERRAIN_FLATTE
 		"total_cost": total_cost,
 	}
 
-func start_approved_building(display_name: String, tile_index: int, worker_count: int) -> Dictionary:
+func start_approved_building(
+	display_name: String,
+	tile_index: int,
+	worker_count: int,
+	rotation_quarter_turns_ccw: int = 0
+) -> Dictionary:
 	if governance.has_failed():
 		return _terminal_command_error()
 	if terrain_map == null or not terrain_map.is_valid_tile_id(tile_index):
 		return {"ok": false, "error": "invalid_tile_id"}
-	var placement := placement_footprint_quote(display_name, tile_index, worker_count)
+	var placement := placement_footprint_quote(
+		display_name,
+		tile_index,
+		worker_count,
+		rotation_quarter_turns_ccw
+	)
 	if not bool(placement.get("ok", false)):
 		if str(placement.get("error", "")) == "blueprint_not_found":
 			return {"ok": false, "error": "approved_blueprint_required"}
@@ -2919,6 +2949,15 @@ func _complete_building_construction(job: Dictionary, metadata: Dictionary) -> b
 			"error": str(footprint_validation.get("error", "invalid_footprint")),
 		})
 		return false
+	for occupied_tile_id: int in footprint_validation.get("occupied_tile_ids", []):
+		if not BuildingTerrainLabelsScript.is_buildable(occupied_tile_id):
+			_push_ui_event("building_completion_failed", {
+				"job_id": job_id,
+				"error": "terrain_not_flat",
+				"blocked_tile_id": occupied_tile_id,
+				"building_terrain_label": "non_buildable",
+			})
+			return false
 	# Validate the immutable completion candidate before touching population,
 	# durability, building IDs, transport, or any save-visible operation sequence.
 	var instance_id := "building_%06d" % next_building_sequence

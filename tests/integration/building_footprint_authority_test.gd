@@ -1,12 +1,15 @@
 extends SceneTree
 
 const BuildingFootprintsScript = preload("res://data/catalogs/building_footprints.gd")
+const BuildingTerrainLabelsScript = preload("res://data/catalogs/building_terrain_labels.gd")
 const CityTerrainMapScript = preload("res://scripts/world/city_terrain_map.gd")
 const VerticalSliceCoordinatorScript = preload("res://scripts/app/vertical_slice_coordinator.gd")
 
 const MEDIUM_ACTIVE_SAVE_PATH := "user://tests/building_footprint_medium_active.json"
 const LARGE_ACTIVE_SAVE_PATH := "user://tests/building_footprint_large_active.json"
 const LARGE_COMPLETED_SAVE_PATH := "user://tests/building_footprint_large_completed.json"
+const LEGACY_REVIEWED_BLOCKER_SAVE_PATH := "user://tests/building_footprint_legacy_reviewed_blocker.json"
+const LEGACY_BLOCKED_ACTIVE_SAVE_PATH := "user://tests/building_footprint_legacy_blocked_active.json"
 
 const CITY_CONTEXT := {
 	"population": 300,
@@ -22,6 +25,33 @@ const FOOTPRINT_SCENARIOS := [
 	{"size": "medium", "display_name": "學校", "cell_count": 2},
 	{"size": "large", "display_name": "體育館", "cell_count": 3},
 ]
+const REVIEWED_BLOCKED_TILE_IDS := [
+	0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+	10, 11, 12, 13, 14, 19, 20,
+	50, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63,
+	65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77,
+	84, 86, 87, 89, 90, 91, 92, 93, 94, 95, 97, 98, 99,
+]
+const REVIEWED_MATRIX_COUNTS := {
+	"small": [
+		{"candidate": 46, "out_of_bounds": 0, "blocked": 54},
+		{"candidate": 46, "out_of_bounds": 0, "blocked": 54},
+		{"candidate": 46, "out_of_bounds": 0, "blocked": 54},
+		{"candidate": 46, "out_of_bounds": 0, "blocked": 54},
+	],
+	"medium": [
+		{"candidate": 35, "out_of_bounds": 10, "blocked": 55},
+		{"candidate": 33, "out_of_bounds": 10, "blocked": 57},
+		{"candidate": 35, "out_of_bounds": 10, "blocked": 55},
+		{"candidate": 33, "out_of_bounds": 10, "blocked": 57},
+	],
+	"large": [
+		{"candidate": 28, "out_of_bounds": 20, "blocked": 52},
+		{"candidate": 23, "out_of_bounds": 20, "blocked": 57},
+		{"candidate": 28, "out_of_bounds": 20, "blocked": 52},
+		{"candidate": 23, "out_of_bounds": 20, "blocked": 57},
+	],
+}
 const DEFAULT_FIRST_BLOCKER_OFFSETS := {
 	"small": {
 		"trees": [0],
@@ -89,11 +119,13 @@ class PendingCommandDurability:
 
 func _initialize() -> void:
 	_test_catalog_contract()
-	_test_natural_obstacle_feedback_for_every_footprint_cell()
+	_test_reviewed_label_rotation_matrix()
+	_test_legacy_reviewed_blocker_save_compatibility()
 	_test_current_existing_registration_contract()
 	_test_atomic_placement_and_single_building_identity()
 	_test_completion_command_fails_closed()
 	_test_coordinator_completion_preflight_atomicity()
+	_test_legacy_blocked_active_completion_atomicity()
 	_test_atomic_completion_observer_state()
 	_test_pending_command_station_completion()
 	_test_save_load_and_secondary_cell_lifecycle()
@@ -130,6 +162,153 @@ func _test_catalog_contract() -> void:
 	_check(not bool(BuildingFootprintsScript.resolve_for_size("large", east_anchor, terrain).get("ok", false)), "large rejects an east-edge anchor")
 	var next_to_east_anchor := terrain.tile_id_for_coordinate(Vector2i(8, 4))
 	_check(not bool(BuildingFootprintsScript.resolve_for_size("large", next_to_east_anchor, terrain).get("ok", false)), "large rejects an anchor with only two eastward cells available")
+
+
+func _test_reviewed_label_rotation_matrix() -> void:
+	_check(BuildingTerrainLabelsScript.blocked_tile_ids() == REVIEWED_BLOCKED_TILE_IDS, "building labels preserve the exact 54 reviewed blocked ids")
+	for tile_id: int in BuildingTerrainLabelsScript.CELL_COUNT:
+		var expected_buildable := not REVIEWED_BLOCKED_TILE_IDS.has(tile_id)
+		_check(BuildingTerrainLabelsScript.is_buildable(tile_id) == expected_buildable, "tile %d reviewed buildability is exact" % tile_id)
+	_check(BuildingTerrainLabelsScript.is_blocked(50), "review correction keeps tile 50 blocked")
+	_check(BuildingTerrainLabelsScript.is_blocked(71), "review correction keeps tile 71 blocked")
+	for corrected_candidate: int in [32, 48, 64, 78, 88, 96]:
+		_check(BuildingTerrainLabelsScript.is_buildable(corrected_candidate), "review correction makes tile %d buildable" % corrected_candidate)
+
+	var expected_large_offsets := [
+		[Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0)],
+		[Vector2i(0, 0), Vector2i(0, -1), Vector2i(0, -2)],
+		[Vector2i(0, 0), Vector2i(-1, 0), Vector2i(-2, 0)],
+		[Vector2i(0, 0), Vector2i(0, 1), Vector2i(0, 2)],
+	]
+	for rotation_quarter_turns_ccw: int in 4:
+		_check(
+			BuildingFootprintsScript.offsets_for_footprint(
+				BuildingFootprintsScript.LINE_3_EAST_V1,
+				rotation_quarter_turns_ccw
+			) == expected_large_offsets[rotation_quarter_turns_ccw],
+			"large rotation %d follows visual counter-clockwise grid geometry" % rotation_quarter_turns_ccw
+		)
+	_check(
+		BuildingFootprintsScript.offsets_for_footprint(BuildingFootprintsScript.LINE_3_EAST_V1, 4) == expected_large_offsets[0],
+		"four counter-clockwise rotations return to the original offsets"
+	)
+
+	var coordinator = VerticalSliceCoordinatorScript.new(20_260_999, 50_000_000)
+	var found_candidate_overriding_old_classifier := false
+	var found_blocker_overriding_old_classifier := false
+	for tile_id: int in BuildingTerrainLabelsScript.CELL_COUNT:
+		if BuildingTerrainLabelsScript.is_buildable(tile_id) and not coordinator.terrain_map.is_buildable(tile_id):
+			var candidate_quote: Dictionary = coordinator.placement_footprint_quote("公園", tile_id, 5)
+			_check(bool(candidate_quote.get("ok", false)), "reviewed candidate %d overrides the stale nonbuildable terrain class" % tile_id)
+			found_candidate_overriding_old_classifier = true
+			break
+	for tile_id: int in BuildingTerrainLabelsScript.CELL_COUNT:
+		if BuildingTerrainLabelsScript.is_blocked(tile_id) and coordinator.terrain_map.is_buildable(tile_id):
+			var blocked_quote: Dictionary = coordinator.placement_footprint_quote("公園", tile_id, 5)
+			_check(not bool(blocked_quote.get("ok", false)), "reviewed blocker %d overrides the stale flat terrain class" % tile_id)
+			_check(int(blocked_quote.get("blocked_tile_id", -1)) == tile_id, "reviewed blocker feedback identifies tile %d" % tile_id)
+			found_blocker_overriding_old_classifier = true
+			break
+	_check(found_candidate_overriding_old_classifier, "fixture includes a reviewed candidate rejected by the old classifier")
+	_check(found_blocker_overriding_old_classifier, "fixture includes a reviewed blocker accepted by the old classifier")
+
+	for scenario_variant: Variant in FOOTPRINT_SCENARIOS:
+		var scenario: Dictionary = scenario_variant
+		var size_tier := str(scenario["size"])
+		var display_name := str(scenario["display_name"])
+		var found_atomic_blocker := false
+		for rotation_quarter_turns_ccw: int in 4:
+			var outcome_counts := {"candidate": 0, "out_of_bounds": 0, "blocked": 0}
+			for anchor_tile_id: int in BuildingTerrainLabelsScript.CELL_COUNT:
+				var resolved: Dictionary = BuildingFootprintsScript.resolve_for_size(
+					size_tier,
+					anchor_tile_id,
+					coordinator.terrain_map,
+					rotation_quarter_turns_ccw
+				)
+				if not bool(resolved.get("ok", false)):
+					outcome_counts["out_of_bounds"] = int(outcome_counts["out_of_bounds"]) + 1
+					var expected_geometry_error := str(resolved.get("error", "invalid_footprint"))
+					var out_of_bounds_quote: Dictionary = coordinator.placement_footprint_quote(
+						display_name,
+						anchor_tile_id,
+						5,
+						rotation_quarter_turns_ccw
+					)
+					_check(
+						not bool(out_of_bounds_quote.get("ok", false))
+						and str(out_of_bounds_quote.get("error", "")) == expected_geometry_error,
+						"%s r%d anchor %d rejects an out-of-bounds footprint" % [size_tier, rotation_quarter_turns_ccw, anchor_tile_id]
+					)
+					continue
+				var occupied_tile_ids: Array = resolved.get("occupied_tile_ids", [])
+				var expected_blocked_tile_id := -1
+				for occupied_variant: Variant in occupied_tile_ids:
+					var occupied_tile_id := int(occupied_variant)
+					if REVIEWED_BLOCKED_TILE_IDS.has(occupied_tile_id):
+						expected_blocked_tile_id = occupied_tile_id
+						break
+				var quote: Dictionary = coordinator.placement_footprint_quote(
+					display_name,
+					anchor_tile_id,
+					5,
+					rotation_quarter_turns_ccw
+				)
+				if expected_blocked_tile_id >= 0:
+					outcome_counts["blocked"] = int(outcome_counts["blocked"]) + 1
+					_check(not bool(quote.get("ok", false)), "%s r%d anchor %d rejects the complete footprint" % [size_tier, rotation_quarter_turns_ccw, anchor_tile_id])
+					_check(int(quote.get("blocked_tile_id", -1)) == expected_blocked_tile_id, "%s r%d anchor %d reports its first reviewed blocker" % [size_tier, rotation_quarter_turns_ccw, anchor_tile_id])
+					if not found_atomic_blocker:
+						var balance_before := int(coordinator.treasury_balance())
+						var jobs_before: int = coordinator.construction.active_jobs().size()
+						var buildings_before: int = coordinator.session.state.buildings.size()
+						var sequence_before := int(coordinator.next_building_sequence)
+						var rejected: Dictionary = coordinator.start_approved_building(
+							display_name,
+							anchor_tile_id,
+							5,
+							rotation_quarter_turns_ccw
+						)
+						_check(not bool(rejected.get("ok", false)), "%s blocked footprint never starts" % size_tier)
+						_assert_no_placement_mutation(coordinator, balance_before, jobs_before, buildings_before, sequence_before, "%s reviewed blocker" % size_tier)
+						found_atomic_blocker = true
+				else:
+					outcome_counts["candidate"] = int(outcome_counts["candidate"]) + 1
+					_check(bool(quote.get("ok", false)), "%s r%d anchor %d accepts a fully reviewed-buildable footprint" % [size_tier, rotation_quarter_turns_ccw, anchor_tile_id])
+					_check(Array(quote.get("occupied_tile_ids", [])) == occupied_tile_ids, "%s r%d anchor %d quote preserves rotated occupied cells" % [size_tier, rotation_quarter_turns_ccw, anchor_tile_id])
+			_check(
+				outcome_counts == REVIEWED_MATRIX_COUNTS[size_tier][rotation_quarter_turns_ccw],
+				"%s r%d independent candidate/out-of-bounds/blocked counts are exact" % [size_tier, rotation_quarter_turns_ccw]
+			)
+		_check(found_atomic_blocker, "%s matrix includes an atomic reviewed-label rejection" % size_tier)
+
+
+func _test_legacy_reviewed_blocker_save_compatibility() -> void:
+	var source = VerticalSliceCoordinatorScript.new(20_260_998, 50_000_000)
+	var legacy_tile_id := -1
+	for tile_id: int in BuildingTerrainLabelsScript.CELL_COUNT:
+		if BuildingTerrainLabelsScript.is_blocked(tile_id) and source.terrain_map.is_buildable(tile_id):
+			legacy_tile_id = tile_id
+			break
+	_check(legacy_tile_id >= 0, "fixture includes an old-terrain buildable tile now marked as a reviewed blocker")
+	if legacy_tile_id < 0:
+		return
+	var rejected_new_placement: Dictionary = source.placement_footprint_quote("公園", legacy_tile_id, 5)
+	_check(not bool(rejected_new_placement.get("ok", false)), "new placement rejects the reviewed blocker used by the legacy fixture")
+	var legacy_record: Dictionary = source.register_existing_building(
+		legacy_tile_id,
+		"公園",
+		{},
+		BuildingFootprintsScript.SMALL
+	)
+	_check(not legacy_record.is_empty(), "legacy fixture registers a previously accepted building")
+	_check(source.save_game(LEGACY_REVIEWED_BLOCKER_SAVE_PATH) == OK, "legacy building on a reviewed blocker remains save-compatible")
+	var reloaded = VerticalSliceCoordinatorScript.new(20_260_997, 1)
+	_check(reloaded.load_game(LEGACY_REVIEWED_BLOCKER_SAVE_PATH), "legacy building on a reviewed blocker remains load-compatible")
+	_check(
+		str(reloaded.get_building_by_tile(legacy_tile_id).get("building_id", "")) == str(legacy_record.get("building_id", "")),
+		"legacy reviewed-blocker load retains the original building identity"
+	)
 
 
 func _test_natural_obstacle_feedback_for_every_footprint_cell() -> void:
@@ -676,6 +855,100 @@ func _test_coordinator_completion_preflight_atomicity() -> void:
 	_check(not coordinator.durability.get_building(completed_id).is_empty(), "validated completion registers durability")
 
 
+func _test_legacy_blocked_active_completion_atomicity() -> void:
+	var source = VerticalSliceCoordinatorScript.new(20_263_901, 50_000_000)
+	var legal_run := _find_available_flat_run(source, 1)
+	_check(not legal_run.is_empty(), "legacy blocked-active fixture finds an initially legal building tile")
+	if legal_run.is_empty():
+		return
+	var blocked_tile_id := -1
+	var transport_tiles: PackedInt32Array = source.transport_navigation_blocked_tile_ids()
+	for tile_id: int in BuildingTerrainLabelsScript.CELL_COUNT:
+		if (
+			BuildingTerrainLabelsScript.is_blocked(tile_id)
+			and source.terrain_map.is_buildable(tile_id)
+			and not transport_tiles.has(tile_id)
+		):
+			blocked_tile_id = tile_id
+			break
+	_check(blocked_tile_id >= 0, "legacy blocked-active fixture finds old-flat terrain with a reviewed blocker")
+	if blocked_tile_id < 0:
+		return
+	var started: Dictionary = source.start_approved_building("住宅", int(legal_run["anchor"]), 20)
+	_check(bool(started.get("ok", false)), "legacy blocked-active fixture starts from a valid current job")
+	if not bool(started.get("ok", false)):
+		return
+	var legacy_job: Dictionary = Dictionary(started.get("job", {})).duplicate(true)
+	var job_id := str(legacy_job.get("id", ""))
+	var legacy_metadata: Dictionary = Dictionary(legacy_job.get("metadata", {})).duplicate(true)
+	legacy_metadata["tile_index"] = blocked_tile_id
+	legacy_metadata["anchor_tile_id"] = blocked_tile_id
+	legacy_metadata["occupied_tile_ids"] = [blocked_tile_id]
+	legacy_job["target_id"] = "tile_%02d" % blocked_tile_id
+	legacy_job["metadata"] = legacy_metadata
+	source.construction.jobs[job_id] = legacy_job.duplicate(true)
+	source.session.submit_command("upsert_construction", {
+		"job_id": job_id,
+		"record": legacy_job,
+		"reason_tag": "test.legacy_blocked_active_job",
+	}, "test_legacy_blocked_active_job")
+	_check(source.save_game(LEGACY_BLOCKED_ACTIVE_SAVE_PATH) == OK, "legacy blocked active job remains save-compatible")
+	var loaded = VerticalSliceCoordinatorScript.new(20_263_902, 1)
+	var load_ok := loaded.load_game(LEGACY_BLOCKED_ACTIVE_SAVE_PATH)
+	_check(load_ok, "legacy blocked active job remains load-compatible")
+	if not load_ok or not loaded.construction.jobs.has(job_id):
+		_check(loaded.construction.jobs.has(job_id), "legacy blocked active load retains its job")
+		return
+	var completed_job: Dictionary = Dictionary(loaded.construction.jobs[job_id]).duplicate(true)
+	completed_job["status"] = "completed"
+	completed_job["remaining_work"] = 0.0
+	completed_job["projected_remaining_days"] = 0
+	completed_job["elapsed_days"] = maxi(1, int(completed_job.get("elapsed_days", 0)))
+	completed_job["completed_day"] = loaded.game_day()
+	loaded.construction.jobs[job_id] = completed_job.duplicate(true)
+	loaded.session.submit_command("upsert_construction", {
+		"job_id": job_id,
+		"record": completed_job,
+		"reason_tag": "test.legacy_blocked_completed_job",
+	}, "test_legacy_blocked_completed_job")
+	loaded.drain_ui_events()
+	var balance_before := int(loaded.treasury_balance())
+	var save_hash_before := loaded.deterministic_hash()
+	var population_before: Dictionary = loaded.population.to_dict()
+	var durability_before: Dictionary = loaded.durability.to_dict()
+	var construction_before: Dictionary = loaded.construction.to_dict()
+	var core_before: Dictionary = loaded.session.state.to_dict()
+	var transport_before: Dictionary = loaded.transport.to_dict()
+	var transport_session_before: Dictionary = loaded.transport_planning_session.to_dict()
+	var building_sequence_before := int(loaded.next_building_sequence)
+	var operation_sequence_before := int(loaded.next_operation_sequence)
+	var event_sequence_before := int(loaded.session.kernel.event_sequence)
+	var command_sequence_before := int(loaded.session.kernel.command_sequence)
+	var completed_metadata: Dictionary = completed_job.get("metadata", {})
+	var rejected := loaded._complete_building_construction(completed_job, completed_metadata)
+	var rejection_events: Array[Dictionary] = loaded.drain_ui_events()
+	var save_hash_after := loaded.deterministic_hash()
+	_check(not rejected, "reviewed blocker rejects legacy active job completion")
+	_check(_ui_event_count(rejection_events, "building_completion_failed") == 1, "legacy blocked completion emits one failure")
+	if _ui_event_count(rejection_events, "building_completion_failed") == 1:
+		var payload: Dictionary = rejection_events[0].get("payload", {})
+		_check(str(payload.get("error", "")) == "terrain_not_flat", "legacy blocked completion preserves terrain rejection error")
+		_check(int(payload.get("blocked_tile_id", -1)) == blocked_tile_id, "legacy blocked completion identifies the exact blocked tile")
+	_check(loaded.treasury_balance() == balance_before, "legacy blocked completion preserves funds")
+	_check(loaded.population.to_dict() == population_before, "legacy blocked completion preserves population")
+	_check(loaded.durability.to_dict() == durability_before, "legacy blocked completion preserves durability")
+	_check(loaded.construction.to_dict() == construction_before, "legacy blocked completion preserves its recoverable construction job")
+	_check(loaded.session.state.to_dict() == core_before, "legacy blocked completion preserves core authority")
+	_check(loaded.transport.to_dict() == transport_before, "legacy blocked completion preserves transport")
+	_check(loaded.transport_planning_session.to_dict() == transport_session_before, "legacy blocked completion preserves transport planning")
+	_check(loaded.next_building_sequence == building_sequence_before, "legacy blocked completion consumes no building identity")
+	_check(loaded.next_operation_sequence == operation_sequence_before, "legacy blocked completion consumes no operation identity")
+	_check(loaded.session.kernel.event_sequence == event_sequence_before, "legacy blocked completion emits no domain event")
+	_check(loaded.session.kernel.command_sequence == command_sequence_before, "legacy blocked completion submits no core command")
+	_check(save_hash_after == save_hash_before, "legacy blocked completion preserves the full save-visible envelope")
+	_check(loaded.session.state.buildings.is_empty(), "legacy blocked completion creates no partial building")
+
+
 func _test_pending_command_station_completion() -> void:
 	var coordinator = VerticalSliceCoordinatorScript.new(20_264_000, 50_000_000)
 	var run := _find_available_flat_run(coordinator, 1)
@@ -778,13 +1051,13 @@ func _test_save_load_and_secondary_cell_lifecycle() -> void:
 	_check(medium_loaded.session.state.buildings.size() == 1, "medium repair does not duplicate the economic identity")
 
 	var large_source = VerticalSliceCoordinatorScript.new(20_260_905, 50_000_000)
-	var large_run := _find_available_flat_run(large_source, 3)
-	_check(not large_run.is_empty(), "large lifecycle finds a legal footprint")
+	var large_run := _find_available_rotated_run(large_source, BuildingFootprintsScript.LARGE, 3, [], true)
+	_check(not large_run.is_empty(), "large lifecycle finds a reviewed candidate footprint that the old classifier rejects")
 	if large_run.is_empty():
 		return
 	var large_tiles: Array = large_run["tiles"]
-	var large_start: Dictionary = large_source.start_approved_building("體育館", int(large_run["anchor"]), 20)
-	_check(bool(large_start.get("ok", false)), "large lifecycle starts an active building job")
+	var large_start: Dictionary = large_source.start_approved_building("體育館", int(large_run["anchor"]), 20, 3)
+	_check(bool(large_start.get("ok", false)), "large lifecycle starts an active rotated building job")
 	if not bool(large_start.get("ok", false)):
 		return
 	var large_job_id := str(large_start.get("job", {}).get("id", ""))
@@ -825,6 +1098,44 @@ func _test_save_load_and_secondary_cell_lifecycle() -> void:
 		_check(large_reloaded.active_construction_for_tile(tile_id).is_empty(), "large demolition leaves no construction occupancy")
 
 
+func _find_available_rotated_run(
+	coordinator,
+	size_tier: String,
+	rotation_quarter_turns_ccw: int,
+	excluded_tile_ids: Array = [],
+	require_old_classifier_blocker: bool = false
+) -> Dictionary:
+	var blocked_transport: PackedInt32Array = coordinator.transport_navigation_blocked_tile_ids()
+	for anchor_tile_id: int in BuildingTerrainLabelsScript.CELL_COUNT:
+		var resolved: Dictionary = BuildingFootprintsScript.resolve_for_size(
+			size_tier,
+			anchor_tile_id,
+			coordinator.terrain_map,
+			rotation_quarter_turns_ccw
+		)
+		if not bool(resolved.get("ok", false)):
+			continue
+		var tiles: Array = resolved.get("occupied_tile_ids", [])
+		var available := true
+		var has_old_classifier_blocker := false
+		for tile_variant: Variant in tiles:
+			var tile_id := int(tile_variant)
+			if (
+				not coordinator.is_building_tile_buildable(tile_id)
+				or excluded_tile_ids.has(tile_id)
+				or not coordinator.get_building_by_tile(tile_id).is_empty()
+				or not coordinator.active_construction_for_tile(tile_id).is_empty()
+				or blocked_transport.has(tile_id)
+			):
+				available = false
+				break
+			if not coordinator.terrain_map.is_buildable(tile_id):
+				has_old_classifier_blocker = true
+		if available and (not require_old_classifier_blocker or has_old_classifier_blocker):
+			return {"anchor": anchor_tile_id, "tiles": tiles}
+	return {}
+
+
 func _find_available_flat_run(coordinator, length: int, excluded_tile_ids: Array = []) -> Dictionary:
 	var blocked_transport: PackedInt32Array = coordinator.transport_navigation_blocked_tile_ids()
 	for row: int in range(coordinator.terrain_map.grid_size().y):
@@ -834,7 +1145,8 @@ func _find_available_flat_run(coordinator, length: int, excluded_tile_ids: Array
 			for offset: int in range(length):
 				var tile_id: int = int(coordinator.terrain_map.tile_id_for_coordinate(Vector2i(column + offset, row)))
 				if (
-					not coordinator.terrain_map.is_buildable(tile_id)
+					not coordinator.is_building_tile_buildable(tile_id)
+					or not coordinator.terrain_map.is_buildable(tile_id)
 					or excluded_tile_ids.has(tile_id)
 					or not coordinator.get_building_by_tile(tile_id).is_empty()
 					or not coordinator.active_construction_for_tile(tile_id).is_empty()
@@ -854,8 +1166,8 @@ func _find_flat_then_nonbuildable_pair(coordinator) -> Dictionary:
 			var anchor: int = int(coordinator.terrain_map.tile_id_for_coordinate(Vector2i(column, row)))
 			var east: int = int(coordinator.terrain_map.tile_id_for_coordinate(Vector2i(column + 1, row)))
 			if (
-				coordinator.terrain_map.is_buildable(anchor)
-				and not coordinator.terrain_map.is_buildable(east)
+				coordinator.is_building_tile_buildable(anchor)
+				and not coordinator.is_building_tile_buildable(east)
 				and coordinator.get_building_by_tile(anchor).is_empty()
 				and coordinator.active_construction_for_tile(anchor).is_empty()
 			):

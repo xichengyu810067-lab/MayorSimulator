@@ -32,6 +32,7 @@ func _run() -> void:
 	_test_cross_catalog_canonical_order()
 	_test_footprint_render_geometry_bounds()
 	_test_preview_groups(main)
+	_test_rotation_control_and_preview(main)
 	_test_completed_visuals_selection_and_navigation(main)
 	_test_large_construction_completion_load_and_demolition(main)
 	var capture_seconds := _capture_seconds_from_cli()
@@ -90,6 +91,43 @@ func _test_capture_argument_contract() -> void:
 		false
 	)
 	_check(relative_path.is_empty(), "capture path parser rejects relative paths")
+
+
+func _test_rotation_control_and_preview(main) -> void:
+	main.placement_mode_active = true
+	main.placement_building_name = "體育館"
+	main.placement_rotation_quarter_turns_ccw = 0
+	main.call("_sync_placement_banner")
+	_check(main.placement_rotate_button != null, "building placement creates a rotation button")
+	_check(main.placement_rotate_button.name == "RotateBuildingButton", "rotation button keeps a stable UI identity")
+	_check(main.placement_rotate_button.visible, "rotation button is visible during ordinary building placement")
+	_check(main.placement_rotate_button.text.contains("逆時針"), "rotation button states its counter-clockwise direction")
+
+	var terrain = main.vertical_slice.terrain_map
+	var anchor_coordinate := Vector2i(4, 4)
+	var anchor_tile_id := int(terrain.tile_id_for_coordinate(anchor_coordinate))
+	var expected_offsets := [
+		[Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0)],
+		[Vector2i(0, 0), Vector2i(0, -1), Vector2i(0, -2)],
+		[Vector2i(0, 0), Vector2i(-1, 0), Vector2i(-2, 0)],
+		[Vector2i(0, 0), Vector2i(0, 1), Vector2i(0, 2)],
+	]
+	var first_occupied_tile_ids: Array = []
+	for rotation_quarter_turns_ccw: int in 4:
+		main.call("_refresh_placement_preview", anchor_tile_id)
+		var preview: Dictionary = main.get_placement_preview_snapshot()
+		var expected_tile_ids: Array = []
+		for offset: Vector2i in expected_offsets[rotation_quarter_turns_ccw]:
+			expected_tile_ids.append(int(terrain.tile_id_for_coordinate(anchor_coordinate + offset)))
+		_check(main.placement_rotation_quarter_turns_ccw == rotation_quarter_turns_ccw, "rotation press count %d is preserved" % rotation_quarter_turns_ccw)
+		_check(int(preview.get("rotation_quarter_turns_ccw", -1)) == rotation_quarter_turns_ccw, "preview uses rotation %d" % rotation_quarter_turns_ccw)
+		_check(Array(preview.get("occupied_tile_ids", [])) == expected_tile_ids, "preview rotation %d uses the expected three cells" % rotation_quarter_turns_ccw)
+		if rotation_quarter_turns_ccw == 0:
+			first_occupied_tile_ids = expected_tile_ids.duplicate()
+		main.call("_rotate_building_placement_ccw")
+	_check(main.placement_rotation_quarter_turns_ccw == 0, "four button presses return to the initial rotation")
+	_check(Array(main.get_placement_preview_snapshot().get("occupied_tile_ids", [])) == first_occupied_tile_ids, "four button presses return the preview to its initial cells")
+	main.call("_clear_building_placement_ui")
 
 
 func _prepare_capture_surface(main) -> void:
@@ -427,6 +465,7 @@ func _find_available_flat_run(coordinator, length: int) -> Dictionary:
 				var tile_id := int(coordinator.terrain_map.tile_id_for_coordinate(Vector2i(column + offset, row)))
 				if (
 					not coordinator.terrain_map.is_buildable(tile_id)
+					or not coordinator.is_building_tile_buildable(tile_id)
 					or not coordinator.get_building_by_tile(tile_id).is_empty()
 					or not coordinator.active_construction_for_tile(tile_id).is_empty()
 					or transport_tiles.has(tile_id)
@@ -450,6 +489,7 @@ func _find_available_flat_run_for_main(main, length: int, minimum_row: int = 0) 
 				var tile_id := int(coordinator.terrain_map.tile_id_for_coordinate(Vector2i(column + offset, row)))
 				if (
 					not coordinator.terrain_map.is_buildable(tile_id)
+					or not coordinator.is_building_tile_buildable(tile_id)
 					or not coordinator.get_building_by_tile(tile_id).is_empty()
 					or not coordinator.active_construction_for_tile(tile_id).is_empty()
 					or transport_tiles.has(tile_id)

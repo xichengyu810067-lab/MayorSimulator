@@ -319,6 +319,7 @@ var placement_label: Label
 var placement_cancel_button: Button
 var placement_level_button: Button
 var placement_confirm_button: Button
+var placement_rotate_button: Button
 var _hint_tween: Tween
 var quit_application_on_confirm := true
 var _quit_shutdown_in_progress := false
@@ -350,10 +351,12 @@ var _autosave_count := 0
 var _last_autosave_reason := ""
 var placement_mode_active := false
 var placement_building_name := ""
+var placement_rotation_quarter_turns_ccw := 0
 var _placement_preview_anchor := -1
 var _placement_preview: Dictionary = {}
 var _pending_construction_tile := -1
 var _pending_construction_workers := 5
+var _pending_construction_rotation_quarter_turns_ccw := 0
 var _pending_terrain_tile := -1
 var map_action_mode := "inspect"
 var transport_plan_kind := ""
@@ -1291,6 +1294,14 @@ func _build_placement_banner() -> PanelContainer:
 	placement_label.max_lines_visible = 2
 	placement_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(placement_label)
+	placement_rotate_button = _button("逆時針旋轉 90°", "secondary")
+	placement_rotate_button.name = "RotateBuildingButton"
+	placement_rotate_button.custom_minimum_size = Vector2(190, 44)
+	placement_rotate_button.add_theme_font_size_override("font_size", 18)
+	placement_rotate_button.tooltip_text = "每按一次將建築占格逆時針旋轉 90 度"
+	placement_rotate_button.visible = false
+	placement_rotate_button.pressed.connect(Callable(self, "_rotate_building_placement_ccw"))
+	row.add_child(placement_rotate_button)
 	placement_level_button = _button("整平地形", "primary")
 	placement_level_button.name = "FlattenTerrainButton"
 	placement_level_button.custom_minimum_size = Vector2(190, 44)
@@ -2058,7 +2069,12 @@ func _first_build_onboarding_grid_target() -> Control:
 			continue
 		if not _is_tile_inside_hud_safe_area(index):
 			continue
-		var quote: Dictionary = vertical_slice.placement_footprint_quote(placement_building_name, index, workers)
+		var quote: Dictionary = vertical_slice.placement_footprint_quote(
+			placement_building_name,
+			index,
+			workers,
+			placement_rotation_quarter_turns_ccw
+		)
 		if not bool(quote.get("ok", false)) or str(quote.get("status", "")) != "approved" or not bool(quote.get("can_afford", false)):
 			continue
 		var occupied_tile_ids: Array = quote.get("occupied_tile_ids", [])
@@ -6323,7 +6339,11 @@ func _on_grid_pressed(index: int) -> void:
 			_set_hint("已移除這座站點草案；確認總包前仍未扣款。", false)
 		return
 	var terrain = _terrain_map()
-	if terrain != null and not terrain.is_buildable(index):
+	if (
+		_is_transport_station_session_placement()
+		and terrain != null
+		and not terrain.is_buildable(index)
+	):
 		selected_cell_index = index
 		_pending_terrain_tile = index
 		_pending_construction_tile = -1
@@ -6344,7 +6364,8 @@ func _on_grid_pressed(index: int) -> void:
 	var quote: Dictionary = vertical_slice.placement_footprint_quote(
 		placement_building_name,
 		index,
-		workers
+		workers,
+		placement_rotation_quarter_turns_ccw
 	)
 	if not bool(quote.get("ok", false)):
 		var placement_error := str(quote.get("error", "unknown"))
@@ -6352,6 +6373,9 @@ func _on_grid_pressed(index: int) -> void:
 			_set_hint("目前沒有可放置的核准藍圖。", true)
 			_cancel_building_placement(false)
 			_update_ui()
+			return
+		if placement_error == "terrain_not_flat" and str(quote.get("building_terrain_label", "")) == "non_buildable":
+			_set_hint("建築占格包含不可興建地格；請更換位置或按「逆時針旋轉 90°」後再試。", true)
 			return
 		_set_hint("此處無法完整放置「%s」：%s" % [
 			placement_building_name,
@@ -6386,6 +6410,7 @@ func _on_grid_pressed(index: int) -> void:
 		return
 	_pending_construction_tile = index
 	_pending_construction_workers = workers
+	_pending_construction_rotation_quarter_turns_ccw = placement_rotation_quarter_turns_ccw
 	_hide_npc_dialogue()
 	if construction_confirmation != null:
 		_set_map_interaction_enabled(false)
@@ -6405,6 +6430,7 @@ func _enter_building_placement(building_name: String) -> void:
 		return
 	placement_mode_active = true
 	placement_building_name = building_name
+	placement_rotation_quarter_turns_ccw = 0
 	_placement_preview_anchor = -1
 	_placement_preview.clear()
 	_pending_construction_tile = -1
@@ -6444,9 +6470,11 @@ func _cancel_building_placement(show_feedback: bool) -> void:
 func _clear_building_placement_ui() -> void:
 	placement_mode_active = false
 	placement_building_name = ""
+	placement_rotation_quarter_turns_ccw = 0
 	_placement_preview_anchor = -1
 	_placement_preview.clear()
 	_pending_construction_tile = -1
+	_pending_construction_rotation_quarter_turns_ccw = 0
 	_pending_terrain_tile = -1
 	if construction_confirmation != null and construction_confirmation.is_open():
 		construction_confirmation.close()
@@ -6466,7 +6494,8 @@ func _refresh_placement_preview(index: int) -> void:
 	var preview: Dictionary = vertical_slice.placement_footprint_preview(
 		placement_building_name,
 		index,
-		workers
+		workers,
+		placement_rotation_quarter_turns_ccw
 	)
 	var all_inside_hud_safe_area := true
 	for tile_variant: Variant in preview.get("occupied_tile_ids", []):
@@ -6499,6 +6528,9 @@ func _sync_placement_banner() -> void:
 	placement_banner.visible = placement_mode_active or transport_active
 	if placement_level_button != null:
 		placement_level_button.visible = false
+	if placement_rotate_button != null:
+		placement_rotate_button.visible = placement_mode_active and not compact_transport_layout
+		placement_rotate_button.disabled = placement_building_name.is_empty()
 	if placement_confirm_button != null:
 		placement_confirm_button.visible = false
 		placement_confirm_button.disabled = true
@@ -6571,7 +6603,24 @@ func _sync_placement_banner() -> void:
 			placement_confirm_button.text = L10n.text("下一步：規劃路網")
 			placement_confirm_button.disabled = station_count < minimum_stops
 		return
-	placement_label.text = L10n.text("放置 %s｜點擊空地查看總價｜Esc／右鍵取消") % L10n.text(placement_building_name)
+	placement_label.text = L10n.text("放置 %s｜方向 %d°｜點擊空地查看總價｜Esc／右鍵取消") % [
+		L10n.text(placement_building_name),
+		placement_rotation_quarter_turns_ccw * 90,
+	]
+
+
+func _rotate_building_placement_ccw() -> void:
+	if not placement_mode_active or _is_transport_station_session_placement():
+		return
+	placement_rotation_quarter_turns_ccw = posmod(placement_rotation_quarter_turns_ccw + 1, 4)
+	_pending_construction_tile = -1
+	_pending_construction_rotation_quarter_turns_ccw = 0
+	if construction_confirmation != null and construction_confirmation.is_open():
+		construction_confirmation.close()
+		_sync_map_interaction_for_ui()
+	if _placement_preview_anchor >= 0:
+		_refresh_placement_preview(_placement_preview_anchor)
+	_sync_placement_banner()
 
 
 func _transport_visible_plan_cost(quote: Dictionary, tile_count: int, session: Dictionary = {}) -> int:
@@ -6617,7 +6666,12 @@ func _confirm_pending_construction(tile_index: int) -> void:
 	var result: Dictionary = (
 		vertical_slice.call("place_transport_session_station", tile_index, _pending_construction_workers)
 		if session_placement
-		else vertical_slice.start_approved_building(building_name, tile_index, _pending_construction_workers)
+		else vertical_slice.start_approved_building(
+			building_name,
+			tile_index,
+			_pending_construction_workers,
+			_pending_construction_rotation_quarter_turns_ccw
+		)
 	)
 	if not bool(result.get("ok", false)):
 		_set_hint("無法開工「%s」：%s" % [building_name, _vertical_error_text(str(result.get("error", "unknown")))], true)
@@ -6628,9 +6682,11 @@ func _confirm_pending_construction(tile_index: int) -> void:
 	_placement_preview_anchor = -1
 	_placement_preview.clear()
 	_pending_construction_tile = -1
+	_pending_construction_rotation_quarter_turns_ccw = 0
 	if not session_placement:
 		placement_mode_active = false
 		placement_building_name = ""
+		placement_rotation_quarter_turns_ccw = 0
 	_sync_placement_banner()
 	if session_placement:
 		var station_count := _transport_session_station_count(result.get("session", {}))
@@ -8680,6 +8736,9 @@ func _update_tile_visual(index: int, building_name: String) -> void:
 			footprint_role = "anchor"
 		var terrain_state: Dictionary = vertical_slice.terrain_state_for_tile(index) if vertical_slice != null else {}
 		var terrain_buildable := bool(terrain_state.get("buildable", true))
+		var building_placement_buildable := terrain_buildable
+		if placement_mode_active and not _is_transport_station_session_placement() and vertical_slice != null:
+			building_placement_buildable = vertical_slice.is_building_tile_buildable(index)
 		var preview := {}
 		if placement_mode_active and index == _placement_preview_anchor:
 			preview = _placement_preview.duplicate(true)
@@ -8697,7 +8756,7 @@ func _update_tile_visual(index: int, building_name: String) -> void:
 			"dark_mode": is_dark_mode,
 			"selected": selected_cell_index == owner_anchor_tile_id,
 			"is_building_mode": placement_mode_active,
-			"placement_allowed": _is_tile_inside_hud_safe_area(index) and terrain_buildable,
+			"placement_allowed": _is_tile_inside_hud_safe_area(index) and building_placement_buildable,
 			"construction": active_construction,
 			"footprint_role": footprint_role,
 			"footprint_index": footprint_index,
