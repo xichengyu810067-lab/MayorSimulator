@@ -38,8 +38,84 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          submodules: recursive
-          token: ${{ secrets.SDK_REPOSITORY_READ_TOKEN || github.token }}
+          submodules: false
+          token: ${{ github.token }}
+          persist-credentials: false
+
+      - name: Validate pinned SDK source and access
+        id: sdk-source
+        shell: pwsh
+        env:
+          SDK_TOKEN_PRESENT: ${{ secrets.SDK_REPOSITORY_READ_TOKEN != '' }}
+          TRUSTED_SOURCE: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($IsWindows) {
+            $gitRoot = Split-Path (Split-Path (Get-Command git).Source -Parent) -Parent
+            $gitTools = Join-Path $gitRoot 'usr\bin'
+            $gitExec = (& git --exec-path).Trim()
+            $env:Path = $gitTools + [IO.Path]::PathSeparator + $gitExec + [IO.Path]::PathSeparator + $env:Path
+          }
+          if ($env:TRUSTED_SOURCE -ne 'true' -or $env:SDK_TOKEN_PRESENT -ne 'true') {
+            throw 'SDK checkout unavailable.'
+          }
+          $entry = @(& git ls-tree HEAD -- sdk 2>$null)
+          if ($LASTEXITCODE -ne 0 -or $entry.Count -ne 1 -or $entry[0] -cnotmatch '^160000 commit ([0-9a-f]{40})\tsdk$') {
+            throw 'SDK source contract mismatch.'
+          }
+          $sdkPin = $Matches[1]
+          $mapping = @(& git config -f .gitmodules --list 2>$null)
+          if ($LASTEXITCODE -ne 0 -or $mapping.Count -ne 2 -or
+              $mapping -cnotcontains 'submodule.sdk.path=sdk' -or
+              $mapping -cnotcontains 'submodule.sdk.url=https://github.com/xichengyu810067-lab/MayorSimulator-SDK.git') {
+            throw 'SDK source contract mismatch.'
+          }
+          try { $contract = Get-Content -LiteralPath .mayor-sdk.json -Raw | ConvertFrom-Json }
+          catch { throw 'SDK source contract mismatch.' }
+          if ($contract.sdk_repository -cne 'xichengyu810067-lab/MayorSimulator-SDK' -or $contract.integration_path -cne 'sdk') {
+            throw 'SDK source contract mismatch.'
+          }
+          & git submodule init -- sdk *> $null
+          if ($LASTEXITCODE -ne 0) { throw 'SDK source contract mismatch.' }
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "sha=$sdkPin"
+
+      - name: Check out pinned SDK
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: xichengyu810067-lab/MayorSimulator-SDK
+          path: sdk
+          ref: ${{ steps.sdk-source.outputs.sha }}
+          token: ${{ secrets.SDK_REPOSITORY_READ_TOKEN }}
+          submodules: false
+          persist-credentials: false
+
+      - name: Verify pinned SDK checkout
+        shell: pwsh
+        env:
+          SDK_PIN: ${{ steps.sdk-source.outputs.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($IsWindows) {
+            $gitRoot = Split-Path (Split-Path (Get-Command git).Source -Parent) -Parent
+            $gitTools = Join-Path $gitRoot 'usr\bin'
+            $gitExec = (& git --exec-path).Trim()
+            $env:Path = $gitTools + [IO.Path]::PathSeparator + $gitExec + [IO.Path]::PathSeparator + $env:Path
+          }
+          $actual = (& git -C sdk rev-parse HEAD 2>$null)
+          $status = @(& git submodule status -- sdk 2>$null)
+          if ($actual -cne $env:SDK_PIN -or $LASTEXITCODE -ne 0 -or $status.Count -ne 1 -or
+              $status[0] -cnotmatch ('^ ' + [regex]::Escape($env:SDK_PIN) + ' sdk(?: .*)?$')) {
+            throw 'SDK checkout mismatch.'
+          }
+          try {
+            $manifest = Get-Content -LiteralPath sdk/manifest.json -Raw | ConvertFrom-Json
+            $contract = Get-Content -LiteralPath .mayor-sdk.json -Raw | ConvertFrom-Json
+            $version = [version]$manifest.sdk_version
+          } catch { throw 'SDK checkout mismatch.' }
+          if ($contract.sdk_version_range -cne '>=1.2.2 <2.0.0' -or
+              $version -lt [version]'1.2.2' -or $version -ge [version]'2.0.0') {
+            throw 'SDK checkout mismatch.'
+          }
 
       - name: Validate Mayor Simulator SDK contracts
         shell: pwsh
@@ -109,8 +185,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          submodules: recursive
-          token: ${{ secrets.SDK_REPOSITORY_READ_TOKEN || github.token }}
+          submodules: false
+          token: ${{ github.token }}
+          persist-credentials: false
 
       - name: Validate source ref and export metadata
         id: metadata
@@ -172,8 +249,84 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          submodules: recursive
-          token: ${{ secrets.SDK_REPOSITORY_READ_TOKEN || github.token }}
+          submodules: false
+          token: ${{ github.token }}
+          persist-credentials: false
+
+      - name: Validate pinned SDK source and access
+        id: sdk-source
+        shell: pwsh
+        env:
+          SDK_TOKEN_PRESENT: ${{ secrets.SDK_REPOSITORY_READ_TOKEN != '' }}
+          TRUSTED_SOURCE: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($IsWindows) {
+            $gitRoot = Split-Path (Split-Path (Get-Command git).Source -Parent) -Parent
+            $gitTools = Join-Path $gitRoot 'usr\bin'
+            $gitExec = (& git --exec-path).Trim()
+            $env:Path = $gitTools + [IO.Path]::PathSeparator + $gitExec + [IO.Path]::PathSeparator + $env:Path
+          }
+          if ($env:TRUSTED_SOURCE -ne 'true' -or $env:SDK_TOKEN_PRESENT -ne 'true') {
+            throw 'SDK checkout unavailable.'
+          }
+          $entry = @(& git ls-tree HEAD -- sdk 2>$null)
+          if ($LASTEXITCODE -ne 0 -or $entry.Count -ne 1 -or $entry[0] -cnotmatch '^160000 commit ([0-9a-f]{40})\tsdk$') {
+            throw 'SDK source contract mismatch.'
+          }
+          $sdkPin = $Matches[1]
+          $mapping = @(& git config -f .gitmodules --list 2>$null)
+          if ($LASTEXITCODE -ne 0 -or $mapping.Count -ne 2 -or
+              $mapping -cnotcontains 'submodule.sdk.path=sdk' -or
+              $mapping -cnotcontains 'submodule.sdk.url=https://github.com/xichengyu810067-lab/MayorSimulator-SDK.git') {
+            throw 'SDK source contract mismatch.'
+          }
+          try { $contract = Get-Content -LiteralPath .mayor-sdk.json -Raw | ConvertFrom-Json }
+          catch { throw 'SDK source contract mismatch.' }
+          if ($contract.sdk_repository -cne 'xichengyu810067-lab/MayorSimulator-SDK' -or $contract.integration_path -cne 'sdk') {
+            throw 'SDK source contract mismatch.'
+          }
+          & git submodule init -- sdk *> $null
+          if ($LASTEXITCODE -ne 0) { throw 'SDK source contract mismatch.' }
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "sha=$sdkPin"
+
+      - name: Check out pinned SDK
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: xichengyu810067-lab/MayorSimulator-SDK
+          path: sdk
+          ref: ${{ steps.sdk-source.outputs.sha }}
+          token: ${{ secrets.SDK_REPOSITORY_READ_TOKEN }}
+          submodules: false
+          persist-credentials: false
+
+      - name: Verify pinned SDK checkout
+        shell: pwsh
+        env:
+          SDK_PIN: ${{ steps.sdk-source.outputs.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($IsWindows) {
+            $gitRoot = Split-Path (Split-Path (Get-Command git).Source -Parent) -Parent
+            $gitTools = Join-Path $gitRoot 'usr\bin'
+            $gitExec = (& git --exec-path).Trim()
+            $env:Path = $gitTools + [IO.Path]::PathSeparator + $gitExec + [IO.Path]::PathSeparator + $env:Path
+          }
+          $actual = (& git -C sdk rev-parse HEAD 2>$null)
+          $status = @(& git submodule status -- sdk 2>$null)
+          if ($actual -cne $env:SDK_PIN -or $LASTEXITCODE -ne 0 -or $status.Count -ne 1 -or
+              $status[0] -cnotmatch ('^ ' + [regex]::Escape($env:SDK_PIN) + ' sdk(?: .*)?$')) {
+            throw 'SDK checkout mismatch.'
+          }
+          try {
+            $manifest = Get-Content -LiteralPath sdk/manifest.json -Raw | ConvertFrom-Json
+            $contract = Get-Content -LiteralPath .mayor-sdk.json -Raw | ConvertFrom-Json
+            $version = [version]$manifest.sdk_version
+          } catch { throw 'SDK checkout mismatch.' }
+          if ($contract.sdk_version_range -cne '>=1.2.2 <2.0.0' -or
+              $version -lt [version]'1.2.2' -or $version -ge [version]'2.0.0') {
+            throw 'SDK checkout mismatch.'
+          }
 
       - name: Download and verify Windows editor and templates
         id: windows-godot
@@ -279,8 +432,84 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          submodules: recursive
-          token: ${{ secrets.SDK_REPOSITORY_READ_TOKEN || github.token }}
+          submodules: false
+          token: ${{ github.token }}
+          persist-credentials: false
+
+      - name: Validate pinned SDK source and access
+        id: sdk-source
+        shell: pwsh
+        env:
+          SDK_TOKEN_PRESENT: ${{ secrets.SDK_REPOSITORY_READ_TOKEN != '' }}
+          TRUSTED_SOURCE: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($IsWindows) {
+            $gitRoot = Split-Path (Split-Path (Get-Command git).Source -Parent) -Parent
+            $gitTools = Join-Path $gitRoot 'usr\bin'
+            $gitExec = (& git --exec-path).Trim()
+            $env:Path = $gitTools + [IO.Path]::PathSeparator + $gitExec + [IO.Path]::PathSeparator + $env:Path
+          }
+          if ($env:TRUSTED_SOURCE -ne 'true' -or $env:SDK_TOKEN_PRESENT -ne 'true') {
+            throw 'SDK checkout unavailable.'
+          }
+          $entry = @(& git ls-tree HEAD -- sdk 2>$null)
+          if ($LASTEXITCODE -ne 0 -or $entry.Count -ne 1 -or $entry[0] -cnotmatch '^160000 commit ([0-9a-f]{40})\tsdk$') {
+            throw 'SDK source contract mismatch.'
+          }
+          $sdkPin = $Matches[1]
+          $mapping = @(& git config -f .gitmodules --list 2>$null)
+          if ($LASTEXITCODE -ne 0 -or $mapping.Count -ne 2 -or
+              $mapping -cnotcontains 'submodule.sdk.path=sdk' -or
+              $mapping -cnotcontains 'submodule.sdk.url=https://github.com/xichengyu810067-lab/MayorSimulator-SDK.git') {
+            throw 'SDK source contract mismatch.'
+          }
+          try { $contract = Get-Content -LiteralPath .mayor-sdk.json -Raw | ConvertFrom-Json }
+          catch { throw 'SDK source contract mismatch.' }
+          if ($contract.sdk_repository -cne 'xichengyu810067-lab/MayorSimulator-SDK' -or $contract.integration_path -cne 'sdk') {
+            throw 'SDK source contract mismatch.'
+          }
+          & git submodule init -- sdk *> $null
+          if ($LASTEXITCODE -ne 0) { throw 'SDK source contract mismatch.' }
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "sha=$sdkPin"
+
+      - name: Check out pinned SDK
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: xichengyu810067-lab/MayorSimulator-SDK
+          path: sdk
+          ref: ${{ steps.sdk-source.outputs.sha }}
+          token: ${{ secrets.SDK_REPOSITORY_READ_TOKEN }}
+          submodules: false
+          persist-credentials: false
+
+      - name: Verify pinned SDK checkout
+        shell: pwsh
+        env:
+          SDK_PIN: ${{ steps.sdk-source.outputs.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($IsWindows) {
+            $gitRoot = Split-Path (Split-Path (Get-Command git).Source -Parent) -Parent
+            $gitTools = Join-Path $gitRoot 'usr\bin'
+            $gitExec = (& git --exec-path).Trim()
+            $env:Path = $gitTools + [IO.Path]::PathSeparator + $gitExec + [IO.Path]::PathSeparator + $env:Path
+          }
+          $actual = (& git -C sdk rev-parse HEAD 2>$null)
+          $status = @(& git submodule status -- sdk 2>$null)
+          if ($actual -cne $env:SDK_PIN -or $LASTEXITCODE -ne 0 -or $status.Count -ne 1 -or
+              $status[0] -cnotmatch ('^ ' + [regex]::Escape($env:SDK_PIN) + ' sdk(?: .*)?$')) {
+            throw 'SDK checkout mismatch.'
+          }
+          try {
+            $manifest = Get-Content -LiteralPath sdk/manifest.json -Raw | ConvertFrom-Json
+            $contract = Get-Content -LiteralPath .mayor-sdk.json -Raw | ConvertFrom-Json
+            $version = [version]$manifest.sdk_version
+          } catch { throw 'SDK checkout mismatch.' }
+          if ($contract.sdk_version_range -cne '>=1.2.2 <2.0.0' -or
+              $version -lt [version]'1.2.2' -or $version -ge [version]'2.0.0') {
+            throw 'SDK checkout mismatch.'
+          }
 
       - name: Download and verify Godot editor and export templates
         shell: bash
