@@ -3,7 +3,7 @@ extends SceneTree
 const UiIconCatalog = preload("res://ui/theme/ui_icon_catalog.gd")
 
 const REQUIRED_KEYS: PackedStringArray = [
-	"time", "month", "next_day", "next_month", "funds", "treasury", "population", "satisfaction",
+	"time", "month", "next_day", "next_month", "funds", "treasury", "population", "capacity", "satisfaction",
 	"wellbeing", "security", "environment", "traffic", "education", "healthcare", "grievance", "complaint", "trust", "score", "rating", "city_level", "city_hall",
 	"municipal", "settings", "theme", "exit", "buildings", "governance", "judicial", "oversight",
 	"justice", "blueprint", "finance", "public_affairs", "city_data", "report", "building_housing",
@@ -39,6 +39,7 @@ func _run() -> void:
 	_check(UiIconCatalog.path_for("environment").ends_with("/environment.png"), "environment must not borrow the community icon")
 	_check(UiIconCatalog.path_for("education").ends_with("/education.png"), "education must not borrow the community icon")
 	_check(UiIconCatalog.path_for("healthcare").ends_with("/healthcare.png"), "healthcare must not borrow the generic wellbeing icon")
+	_check(UiIconCatalog.path_for("capacity").ends_with("/building_housing.png"), "housing capacity reuses the canonical housing symbol")
 
 	for filename in UiIconCatalog.CANONICAL_FILENAMES:
 		_validate_icon(str(filename))

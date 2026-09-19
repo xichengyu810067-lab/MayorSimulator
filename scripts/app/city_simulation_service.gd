@@ -73,12 +73,10 @@ static func tax_revenues(
 	}
 
 
-static func base_income(city_grid: Array, buildings: Dictionary, income_key: String) -> int:
+static func base_income(building_source: Variant, buildings: Dictionary, income_key: String) -> int:
 	var income := 0
-	for building_variant: Variant in city_grid:
-		var building_name := str(building_variant)
-		if building_name.is_empty():
-			continue
+	for record: Dictionary in active_building_records(building_source):
+		var building_name := str(record.get("building_name", ""))
 		var definition_variant: Variant = buildings.get(building_name, {})
 		if definition_variant is Dictionary:
 			income += int((definition_variant as Dictionary).get(income_key, 0))
@@ -123,7 +121,7 @@ static func tax_activity_factor(rate: int, reasonable: int) -> float:
 
 static func utility_revenues(
 	population: int,
-	city_grid: Array,
+	building_source: Variant,
 	buildings: Dictionary,
 	utility_fees: Dictionary,
 	utility_definitions: Dictionary
@@ -131,11 +129,11 @@ static func utility_revenues(
 	var revenues: Dictionary = {}
 	for fee_key_variant: Variant in utility_definitions.keys():
 		var fee_key := str(fee_key_variant)
-		var base_units := utility_base_units(fee_key, population, city_grid)
+		var base_units := utility_base_units(fee_key, population, building_source)
 		revenues[fee_key] = utility_fee_income(
 			fee_key,
 			base_units,
-			city_grid,
+			building_source,
 			buildings,
 			utility_fees,
 			utility_definitions
@@ -143,40 +141,38 @@ static func utility_revenues(
 	return revenues
 
 
-static func utility_base_units(fee_key: String, population: int, city_grid: Array) -> float:
+static func utility_base_units(fee_key: String, population: int, building_source: Variant) -> float:
 	if fee_key == "garbage":
-		return population * 0.55 + building_count(city_grid, "商店") * 20 + building_count(city_grid, "大型商場") * 45
+		return population * 0.55 + building_count(building_source, "商店") * 20 + building_count(building_source, "大型商場") * 45
 	if fee_key == "water":
 		return population * 0.70
 	if fee_key == "electricity":
-		return population * 0.58 + building_count(city_grid, "商店") * 28 + building_count(city_grid, "大型商場") * 70 + building_count(city_grid, "工廠") * 80
+		return population * 0.58 + building_count(building_source, "商店") * 28 + building_count(building_source, "大型商場") * 70 + building_count(building_source, "工廠") * 80
 	if fee_key == "gas":
-		return population * 0.45 + building_count(city_grid, "大型商場") * 30
+		return population * 0.45 + building_count(building_source, "大型商場") * 30
 	return 0.0
 
 
 static func utility_fee_income(
 	fee_key: String,
 	base_units: float,
-	city_grid: Array,
+	building_source: Variant,
 	buildings: Dictionary,
 	utility_fees: Dictionary,
 	utility_definitions: Dictionary
 ) -> float:
 	var definition: Dictionary = utility_definitions.get(fee_key, {})
 	var efficiency := 0.62
-	if building_count(city_grid, str(definition.get("building", ""))) > 0:
+	if building_count(building_source, str(definition.get("building", ""))) > 0:
 		efficiency = 1.0
-	efficiency += utility_efficiency_bonus(fee_key, city_grid, buildings)
+	efficiency += utility_efficiency_bonus(fee_key, building_source, buildings)
 	return base_units * float(utility_fees.get(fee_key, 0)) * efficiency / 10.0
 
 
-static func utility_efficiency_bonus(fee_key: String, city_grid: Array, buildings: Dictionary) -> float:
+static func utility_efficiency_bonus(fee_key: String, building_source: Variant, buildings: Dictionary) -> float:
 	var bonus := 0.0
-	for building_variant: Variant in city_grid:
-		var building_name := str(building_variant)
-		if building_name.is_empty():
-			continue
+	for record: Dictionary in active_building_records(building_source):
+		var building_name := str(record.get("building_name", ""))
 		var definition_variant: Variant = buildings.get(building_name, {})
 		if not definition_variant is Dictionary:
 			continue
@@ -188,7 +184,7 @@ static func utility_efficiency_bonus(fee_key: String, city_grid: Array, building
 
 static func service_revenues(
 	population: int,
-	city_grid: Array,
+	building_source: Variant,
 	service_fees: Dictionary,
 	service_definitions: Dictionary
 ) -> Dictionary:
@@ -198,7 +194,7 @@ static func service_revenues(
 		revenues[service_key] = service_fee_income(
 			service_key,
 			population,
-			city_grid,
+			building_source,
 			service_fees,
 			service_definitions
 		)
@@ -208,12 +204,12 @@ static func service_revenues(
 static func service_fee_income(
 	service_key: String,
 	population: int,
-	city_grid: Array,
+	building_source: Variant,
 	service_fees: Dictionary,
 	service_definitions: Dictionary
 ) -> int:
 	var definition: Dictionary = service_definitions.get(service_key, {})
-	var count := building_count(city_grid, str(definition.get("building", "")))
+	var count := building_count(building_source, str(definition.get("building", "")))
 	if count <= 0:
 		return 0
 	var uses := float(definition.get("base_uses", 0.0)) * count
@@ -453,8 +449,8 @@ static func _service_fee_demand_factor(fee: int, definition: Dictionary) -> floa
 	return 1.0
 
 
-static func maintenance_cost(city_grid: Array, buildings: Dictionary) -> int:
-	return base_income(city_grid, buildings, "maintenance")
+static func maintenance_cost(building_source: Variant, buildings: Dictionary) -> int:
+	return base_income(building_source, buildings, "maintenance")
 
 
 static func policy_expense(policies: Dictionary, active_policies: Dictionary) -> int:
@@ -483,6 +479,21 @@ static func monthly_policy_metric_patch(
 	active_policies: Dictionary
 ) -> Dictionary:
 	var patch := current_metrics.duplicate(true)
+	var deltas := monthly_policy_metric_deltas(policies, active_policies)
+	for metric_name: String in METRIC_EFFECT_KEYS:
+		patch[metric_name] = clamp_score(
+			int(patch.get(metric_name, 0)) + int(deltas.get(metric_name, 0))
+		)
+	return _metric_subset(patch)
+
+
+static func monthly_policy_metric_deltas(
+	policies: Dictionary,
+	active_policies: Dictionary
+) -> Dictionary:
+	var deltas: Dictionary = {}
+	for metric_name: String in METRIC_EFFECT_KEYS:
+		deltas[metric_name] = 0
 	for policy_name_variant: Variant in active_policies.keys():
 		var policy_name := str(policy_name_variant)
 		if not bool(active_policies.get(policy_name, false)):
@@ -492,24 +503,38 @@ static func monthly_policy_metric_patch(
 			continue
 		var policy: Dictionary = policy_variant
 		for metric_name: String in ["security", "environment", "traffic", "education", "satisfaction"]:
-			patch[metric_name] = clamp_score(int(patch.get(metric_name, 0)) + int(policy.get(metric_name, 0)))
-	return _metric_subset(patch)
+			deltas[metric_name] = int(deltas.get(metric_name, 0)) + int(policy.get(metric_name, 0))
+	return deltas
 
 
 static func city_pressure_metric_patch(
 	current_metrics: Dictionary,
 	population: int,
-	city_grid: Array
+	building_source: Variant
 ) -> Dictionary:
-	var shops := building_count(city_grid, "商店")
-	var malls := building_count(city_grid, "大型商場")
-	var homes := building_count(city_grid, "住宅")
-	var factories := building_count(city_grid, "工廠")
+	var deltas := city_pressure_metric_deltas(population, building_source)
+	var patch: Dictionary = {}
+	for metric_name: String in METRIC_EFFECT_KEYS:
+		if deltas.has(metric_name):
+			patch[metric_name] = clamp_score(
+				int(current_metrics.get(metric_name, 0)) + int(deltas[metric_name])
+			)
+	return patch
+
+
+static func city_pressure_metric_deltas(
+	population: int,
+	building_source: Variant
+) -> Dictionary:
+	var shops := building_count(building_source, "商店")
+	var malls := building_count(building_source, "大型商場")
+	var homes := building_count(building_source, "住宅")
+	var factories := building_count(building_source, "工廠")
 	return {
-		"traffic": clamp_score(int(current_metrics.get("traffic", 0)) - shops - malls * 2),
-		"environment": clamp_score(int(current_metrics.get("environment", 0)) - int(shops / 2) - factories * 2),
-		"security": clamp_score(int(current_metrics.get("security", 0)) - int(max(0, population - 120) / 160)),
-		"satisfaction": clamp_score(int(current_metrics.get("satisfaction", 0)) + (1 if homes > 0 else 0)),
+		"traffic": -shops - malls * 2,
+		"environment": -int(shops / 2) - factories * 2,
+		"security": -int(max(0, population - 120) / 160),
+		"satisfaction": 1 if homes > 0 else 0,
 	}
 
 
@@ -521,19 +546,19 @@ static func satisfaction_result(
 	utility_definitions: Dictionary,
 	service_fees: Dictionary,
 	service_definitions: Dictionary,
-	city_grid: Array,
+	building_source: Variant,
 	policies: Dictionary,
 	active_policies: Dictionary,
 	law_utility_relief: float
 ) -> Dictionary:
 	var resident_tax_score := clamp_score(100 - int(tax_rates.get("income", 0)) * 3 - int(tax_rates.get("consumption", 0)) * 2)
 	var merchant_tax_score := clamp_score(100 - int(tax_rates.get("business", 0)) * 3 - int(tax_rates.get("consumption", 0)) * 2)
-	var utility_penalty := utility_satisfaction_penalty(utility_fees, utility_definitions, city_grid)
+	var utility_penalty := utility_satisfaction_penalty(utility_fees, utility_definitions, building_source)
 	utility_penalty += service_satisfaction_penalty(service_fees, service_definitions)
 	var business_score := clamp_score(
 		48
-		+ building_count(city_grid, "商店") * 12
-		+ building_count(city_grid, "大型商場") * 18
+		+ building_count(building_source, "商店") * 12
+		+ building_count(building_source, "大型商場") * 18
 		+ (14 if bool(active_policies.get("商業振興", false)) else 0)
 	)
 	var satisfaction := int(current_metrics.get("satisfaction", 0))
@@ -616,7 +641,7 @@ static func tax_pressure_score(tax_rates: Dictionary, tax_definitions: Dictionar
 static func utility_satisfaction_penalty(
 	utility_fees: Dictionary,
 	utility_definitions: Dictionary,
-	city_grid: Array
+	building_source: Variant
 ) -> int:
 	var penalty := 0
 	for fee_key_variant: Variant in utility_fees.keys():
@@ -629,7 +654,7 @@ static func utility_satisfaction_penalty(
 			penalty += 3
 		elif ratio < 0.45:
 			penalty -= 1
-		if building_count(city_grid, str(definition.get("building", ""))) == 0 and ratio > 1.0:
+		if building_count(building_source, str(definition.get("building", ""))) == 0 and ratio > 1.0:
 			penalty += 2
 	return max(0, penalty)
 
@@ -725,7 +750,7 @@ static func average_utility_fee_ratio(utility_fees: Dictionary, utility_definiti
 static func infrastructure_warnings(
 	utility_fees: Dictionary,
 	utility_definitions: Dictionary,
-	city_grid: Array
+	building_source: Variant
 ) -> Array[String]:
 	var warnings: Array[String] = []
 	for fee_key_variant: Variant in utility_fees.keys():
@@ -733,7 +758,7 @@ static func infrastructure_warnings(
 		var definition: Dictionary = utility_definitions.get(fee_key, {})
 		if (
 			int(utility_fees[fee_key]) > int(definition.get("reasonable", 0))
-			and building_count(city_grid, str(definition.get("building", ""))) == 0
+			and building_count(building_source, str(definition.get("building", ""))) == 0
 		):
 			warnings.append("%s收費偏高，但缺少%s，基礎設施評價下降。" % [definition.get("name", fee_key), definition.get("building", "")])
 	return warnings
@@ -755,16 +780,47 @@ static func prioritized_metric_specs(specs: Array[Dictionary], current_metrics: 
 	return result
 
 
-static func building_count(city_grid: Array, building_name: String) -> int:
+static func building_count(building_source: Variant, building_name: String) -> int:
 	var count := 0
-	for item: Variant in city_grid:
-		if str(item) == building_name:
+	for record: Dictionary in active_building_records(building_source):
+		if str(record.get("building_name", "")) == building_name:
 			count += 1
 	return count
 
 
-static func building_score_bonus(city_grid: Array, buildings: Dictionary) -> int:
-	return base_income(city_grid, buildings, "score_bonus")
+static func building_score_bonus(building_source: Variant, buildings: Dictionary) -> int:
+	return base_income(building_source, buildings, "score_bonus")
+
+
+static func active_building_records(building_source: Variant) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	if building_source is Dictionary:
+		var source: Dictionary = building_source
+		var record_ids: Array = source.keys()
+		record_ids.sort_custom(func(a: Variant, b: Variant) -> bool: return str(a) < str(b))
+		for record_id_variant: Variant in record_ids:
+			var record_value: Variant = source[record_id_variant]
+			if not record_value is Dictionary:
+				continue
+			var record: Dictionary = (record_value as Dictionary).duplicate(true)
+			if str(record.get("status", "active")) == "scrapped":
+				continue
+			if not record.has("building_id"):
+				record["building_id"] = str(record_id_variant)
+			if not str(record.get("building_name", "")).is_empty():
+				result.append(record)
+		return result
+	if building_source is Array:
+		var source_array: Array = building_source
+		for tile_index: int in range(source_array.size()):
+			var building_name := str(source_array[tile_index])
+			if not building_name.is_empty():
+				result.append({
+					"building_id": "legacy_tile_%06d" % tile_index,
+					"building_name": building_name,
+					"status": "active",
+				})
+	return result
 
 
 static func sum_int_values(values: Dictionary) -> int:

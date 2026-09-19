@@ -94,14 +94,20 @@ $windowsSpecs = @(
     [pscustomobject]@{ Name = 'MayorSimulator.pck'; MinimumBytes = 1KB; Magic = [byte[]]@(0x47, 0x44, 0x50, 0x43); Mode = 0 },
     [pscustomobject]@{ Name = 'RELEASE_README.txt'; MinimumBytes = 500; Magic = $null; Mode = 0 },
     [pscustomobject]@{ Name = 'THIRD_PARTY_NOTICES.md'; MinimumBytes = 100; Magic = $null; Mode = 0 },
-    [pscustomobject]@{ Name = 'GODOT_COPYRIGHT.txt'; MinimumBytes = 1000; Magic = $null; Mode = 0 }
+    [pscustomobject]@{ Name = 'GODOT_COPYRIGHT.txt'; MinimumBytes = 1000; Magic = $null; Mode = 0 },
+    [pscustomobject]@{ Name = 'LICENSE.txt'; MinimumBytes = 100; Magic = $null; Mode = 0 },
+    [pscustomobject]@{ Name = 'TERMS_OF_USE.md'; MinimumBytes = 100; Magic = $null; Mode = 0 },
+    [pscustomobject]@{ Name = 'PRIVACY_NOTICE.md'; MinimumBytes = 100; Magic = $null; Mode = 0 }
 )
 $linuxSpecs = @(
     [pscustomobject]@{ Name = 'MayorSimulator.x86_64'; MinimumBytes = 1MB; Magic = [byte[]]@(0x7F, 0x45, 0x4C, 0x46); Mode = 493 },
     [pscustomobject]@{ Name = 'MayorSimulator.pck'; MinimumBytes = 1KB; Magic = [byte[]]@(0x47, 0x44, 0x50, 0x43); Mode = 420 },
     [pscustomobject]@{ Name = 'RELEASE_README.txt'; MinimumBytes = 500; Magic = $null; Mode = 420 },
     [pscustomobject]@{ Name = 'THIRD_PARTY_NOTICES.md'; MinimumBytes = 100; Magic = $null; Mode = 420 },
-    [pscustomobject]@{ Name = 'GODOT_COPYRIGHT.txt'; MinimumBytes = 1000; Magic = $null; Mode = 420 }
+    [pscustomobject]@{ Name = 'GODOT_COPYRIGHT.txt'; MinimumBytes = 1000; Magic = $null; Mode = 420 },
+    [pscustomobject]@{ Name = 'LICENSE.txt'; MinimumBytes = 100; Magic = $null; Mode = 420 },
+    [pscustomobject]@{ Name = 'TERMS_OF_USE.md'; MinimumBytes = 100; Magic = $null; Mode = 420 },
+    [pscustomobject]@{ Name = 'PRIVACY_NOTICE.md'; MinimumBytes = 100; Magic = $null; Mode = 420 }
 )
 
 function Assert-FileMagic {
@@ -167,7 +173,7 @@ function Assert-CanonicalReleaseFiles {
         [Parameter(Mandatory)][System.Collections.IDictionary]$LinuxSnapshot
     )
 
-    foreach ($name in @('RELEASE_README.txt', 'THIRD_PARTY_NOTICES.md', 'GODOT_COPYRIGHT.txt')) {
+    foreach ($name in @('RELEASE_README.txt', 'THIRD_PARTY_NOTICES.md', 'GODOT_COPYRIGHT.txt', 'LICENSE.txt', 'TERMS_OF_USE.md', 'PRIVACY_NOTICE.md')) {
         $canonicalPath = Join-Path $projectRoot $name
         if (-not (Test-Path -LiteralPath $canonicalPath -PathType Leaf)) {
             throw "Canonical legal file is missing: $canonicalPath"

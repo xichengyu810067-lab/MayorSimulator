@@ -19,10 +19,12 @@ const TransportPlanningSessionScript = preload("res://scripts/systems/city/trans
 const TransportModesScript = preload("res://data/catalogs/transport_modes.gd")
 const SaveSchemaAuthorityScript = preload("res://scripts/core/save_schema_authority.gd")
 const BuildingFootprintsScript = preload("res://data/catalogs/building_footprints.gd")
+const BuildingTerrainLabelsScript = preload("res://data/catalogs/building_terrain_labels.gd")
 
 const DEFAULT_SEED := 20_260_715
 const DEFAULT_INITIAL_FUNDS := 250_000
 const GAME_DAY_LENGTH_SECONDS := 120.0
+const CONTEXT_SUPPRESS_NEW_RESIDENT_FEEDBACK := "suppress_new_resident_feedback"
 const SAVE_PATH := "user://mayor_simulator/vertical_slice_autosave.json"
 const TERRAIN_FLATTEN_COSTS := {
 	"trees": 300,
@@ -133,12 +135,25 @@ func set_time_paused(paused: bool) -> void:
 func is_time_paused() -> bool:
 	return bool(session.clock.paused)
 
+
+func game_minutes_into_day() -> int:
+	return session.clock.game_minutes_into_day()
+
+
+func seconds_until_next_game_day() -> float:
+	return maxf(0.0, session.clock.day_length_seconds - session.clock.accumulator_seconds)
+
+
 func advance_days(days: int, city_context: Dictionary = {}, autosave: bool = true) -> Array[Dictionary]:
 	if _seal_terminal_failure():
 		return drain_ui_events()
-	if not city_context.is_empty():
-		last_city_context = city_context.duplicate(true)
 	var resolved_context: Dictionary = last_city_context.duplicate(true)
+	if not city_context.is_empty():
+		resolved_context = city_context.duplicate(true)
+		last_city_context = city_context.duplicate(true)
+		# This is live UI state, not city data. Never retain it in a save or
+		# replay missed feedback after the operation window closes.
+		last_city_context.erase(CONTEXT_SUPPRESS_NEW_RESIDENT_FEEDBACK)
 	for _index in range(maxi(0, days)):
 		_advance_one_day(resolved_context, autosave)
 		if _seal_terminal_failure():
@@ -239,6 +254,9 @@ func has_approved_blueprint(display_name: String) -> bool:
 
 
 func placement_quote(display_name: String, worker_count: int = -1) -> Dictionary:
+	var definition = _definition_for_name(display_name)
+	if definition == null:
+		return {"ok": false, "error": "building_definition_not_found"}
 	var review: Dictionary = active_blueprint_status(display_name)
 	if not bool(review.get("exists", false)):
 		return {"ok": false, "error": "blueprint_not_found"}
@@ -253,6 +271,8 @@ func placement_quote(display_name: String, worker_count: int = -1) -> Dictionary
 	var base_cost := int(blueprint.get("base_cost", 0))
 	var labor_cost := int(estimate.get("total_labor_cost", 0))
 	var total_cost := base_cost + labor_cost
+	var footprint_id := BuildingFootprintsScript.footprint_id_for_size(str(blueprint.get("size_tier", "")))
+	var footprint_count := BuildingFootprintsScript.offsets_for_footprint(footprint_id).size()
 	return {
 		"ok": true,
 		"status": str(review.get("status", "none")),
@@ -269,6 +289,11 @@ func placement_quote(display_name: String, worker_count: int = -1) -> Dictionary
 		"total_labor_cost": labor_cost,
 		"total_cost": total_cost,
 		"can_afford": treasury_balance() >= total_cost,
+		"footprint_count": footprint_count,
+		"monthly_maintenance": int(definition.monthly_maintenance),
+		"housing_capacity": int(definition.housing_capacity),
+		"job_capacity": int(definition.job_capacity),
+		"effects": definition.effects.duplicate(true),
 		"blueprint": blueprint.duplicate(true)
 	}
 
@@ -288,7 +313,8 @@ func draft_placement_quote(display_name: String, payload: Dictionary) -> Diction
 	var base_cost := int(blueprint.get("base_cost", 0))
 	var labor_cost := int(estimate.get("total_labor_cost", 0))
 	var size_tier := str(blueprint.get("size_tier", "medium"))
-	var footprint_count: int = int({"small": 1, "medium": 2, "large": 3}.get(size_tier, 0))
+	var footprint_id := BuildingFootprintsScript.footprint_id_for_size(size_tier)
+	var footprint_count := BuildingFootprintsScript.offsets_for_footprint(footprint_id).size()
 	return {
 		"ok": true,
 		"draft": true,
@@ -303,6 +329,10 @@ func draft_placement_quote(display_name: String, payload: Dictionary) -> Diction
 		"total_cost": base_cost + labor_cost,
 		"can_afford": treasury_balance() >= base_cost + labor_cost,
 		"footprint_count": footprint_count,
+		"monthly_maintenance": int(definition.monthly_maintenance),
+		"housing_capacity": int(definition.housing_capacity),
+		"job_capacity": int(definition.job_capacity),
+		"effects": definition.effects.duplicate(true),
 		"blueprint": blueprint.duplicate(true),
 	}
 
@@ -310,7 +340,8 @@ func draft_placement_quote(display_name: String, payload: Dictionary) -> Diction
 func placement_footprint_quote(
 	display_name: String,
 	anchor_tile_id: int,
-	worker_count: int = -1
+	worker_count: int = -1,
+	rotation_quarter_turns_ccw: int = 0
 ) -> Dictionary:
 	var quote := placement_quote(display_name, worker_count)
 	if not bool(quote.get("ok", false)):
@@ -319,7 +350,8 @@ func placement_footprint_quote(
 	var footprint := BuildingFootprintsScript.resolve_for_size(
 		str(blueprint.get("size_tier", "")),
 		anchor_tile_id,
-		terrain_map
+		terrain_map,
+		rotation_quarter_turns_ccw
 	)
 	if not bool(footprint.get("ok", false)):
 		return {
@@ -334,12 +366,13 @@ func placement_footprint_quote(
 	for tile_id: int in transport_navigation_blocked_tile_ids():
 		transport_tiles[tile_id] = true
 	for tile_id: int in occupied_tile_ids:
-		if not terrain_map.is_buildable(tile_id):
+		if not BuildingTerrainLabelsScript.is_buildable(tile_id):
 			return {
 				"ok": false,
 				"error": "terrain_not_flat",
 				"anchor_tile_id": anchor_tile_id,
 				"blocked_tile_id": tile_id,
+				"building_terrain_label": "non_buildable",
 				"terrain": terrain_map.tile_state(tile_id),
 			}
 		if not get_building_by_tile(tile_id).is_empty():
@@ -365,6 +398,7 @@ func placement_footprint_quote(
 			}
 	quote["anchor_tile_id"] = anchor_tile_id
 	quote["footprint_id"] = str(footprint.get("footprint_id", ""))
+	quote["rotation_quarter_turns_ccw"] = int(footprint.get("rotation_quarter_turns_ccw", 0))
 	quote["occupied_tile_ids"] = occupied_tile_ids
 	quote["can_place"] = true
 	return quote
@@ -373,7 +407,8 @@ func placement_footprint_quote(
 func placement_footprint_preview(
 	display_name: String,
 	anchor_tile_id: int,
-	worker_count: int = -1
+	worker_count: int = -1,
+	rotation_quarter_turns_ccw: int = 0
 ) -> Dictionary:
 	# Preview geometry is derived from the same size catalog as placement, while
 	# keeping invalid east-edge anchors visible as an all-red group in the map UI.
@@ -384,7 +419,10 @@ func placement_footprint_preview(
 	var footprint_id := BuildingFootprintsScript.footprint_id_for_size(
 		str(blueprint.get("size_tier", ""))
 	)
-	var offsets := BuildingFootprintsScript.offsets_for_footprint(footprint_id)
+	var offsets := BuildingFootprintsScript.offsets_for_footprint(
+		footprint_id,
+		rotation_quarter_turns_ccw
+	)
 	if footprint_id.is_empty() or offsets.is_empty():
 		return {"ok": false, "error": "unsupported_building_size"}
 	var preview := {
@@ -392,6 +430,7 @@ func placement_footprint_preview(
 		"can_place": false,
 		"anchor_tile_id": anchor_tile_id,
 		"footprint_id": footprint_id,
+		"rotation_quarter_turns_ccw": posmod(rotation_quarter_turns_ccw, 4),
 		"footprint_count": offsets.size(),
 		"occupied_tile_ids": [],
 		"error": "invalid_anchor_tile_id",
@@ -399,12 +438,18 @@ func placement_footprint_preview(
 	var resolved := BuildingFootprintsScript.resolve_for_footprint(
 		footprint_id,
 		anchor_tile_id,
-		terrain_map
+		terrain_map,
+		rotation_quarter_turns_ccw
 	)
 	if not bool(resolved.get("ok", false)):
 		preview["error"] = str(resolved.get("error", "invalid_footprint"))
 		return preview
-	var placement := placement_footprint_quote(display_name, anchor_tile_id, worker_count)
+	var placement := placement_footprint_quote(
+		display_name,
+		anchor_tile_id,
+		worker_count,
+		rotation_quarter_turns_ccw
+	)
 	preview["occupied_tile_ids"] = Array(resolved.get("occupied_tile_ids", [])).duplicate()
 	preview["can_place"] = bool(placement.get("ok", false))
 	preview["error"] = "" if bool(preview["can_place"]) else str(placement.get("error", "invalid_footprint"))
@@ -444,6 +489,10 @@ func footprint_cell_view(tile_index: int) -> Dictionary:
 
 func terrain_state_for_tile(tile_index: int) -> Dictionary:
 	return terrain_map.tile_state(tile_index) if terrain_map != null else {}
+
+
+func is_building_tile_buildable(tile_index: int) -> bool:
+	return BuildingTerrainLabelsScript.is_buildable(tile_index)
 
 
 func terrain_snapshot() -> Dictionary:
@@ -2100,12 +2149,22 @@ func flatten_terrain(tile_index: int, worker_count: int = DEFAULT_TERRAIN_FLATTE
 		"total_cost": total_cost,
 	}
 
-func start_approved_building(display_name: String, tile_index: int, worker_count: int) -> Dictionary:
+func start_approved_building(
+	display_name: String,
+	tile_index: int,
+	worker_count: int,
+	rotation_quarter_turns_ccw: int = 0
+) -> Dictionary:
 	if governance.has_failed():
 		return _terminal_command_error()
 	if terrain_map == null or not terrain_map.is_valid_tile_id(tile_index):
 		return {"ok": false, "error": "invalid_tile_id"}
-	var placement := placement_footprint_quote(display_name, tile_index, worker_count)
+	var placement := placement_footprint_quote(
+		display_name,
+		tile_index,
+		worker_count,
+		rotation_quarter_turns_ccw
+	)
 	if not bool(placement.get("ok", false)):
 		if str(placement.get("error", "")) == "blueprint_not_found":
 			return {"ok": false, "error": "approved_blueprint_required"}
@@ -2201,13 +2260,11 @@ func register_existing_building(
 			"customization": customization.duplicate(true)
 		}
 	}
-	var population_change := _adjust_population(
-		maxi(0, int(definition.effects.get("population", 0))),
-		"population.building_seeded",
-		instance_id
-	)
-	record["resident_ids"] = Array(population_change["added_ids"])
-	record["population_delta"] = int(population_change["actual_delta"])
+	# Existing-building registration changes capacity and city outputs only. The
+	# canonical population remains intact and can grow later through its normal
+	# migration/time path when the resulting housing balance is positive.
+	record["resident_ids"] = []
+	record["population_delta"] = 0
 	durability.register_building(instance_id, {
 		"durability": 100,
 		"material_value": int(definition.base_cost),
@@ -2333,7 +2390,7 @@ func settle_month(income_entries: Dictionary, expense_entries: Dictionary, maint
 			_post_ledger(-amount, "expense.%s" % reason, "city_monthly", {})
 			expense_total += amount
 		else:
-			governance.adjust_civic_metrics(1, -1)
+			governance.adjust_civic_metrics(0 if _new_resident_feedback_suppressed(city_context) else 1, -1)
 	var paid_maintenance := maintenance_payment_enabled and treasury_balance() >= maintenance_cost
 	if paid_maintenance and maintenance_cost > 0:
 		_post_ledger(-maintenance_cost, "expense.maintenance", "city_maintenance", {})
@@ -2346,7 +2403,7 @@ func settle_month(income_entries: Dictionary, expense_entries: Dictionary, maint
 		"reason_tag": str(maintenance_event.get("reason_tag", "maintenance.monthly"))
 	}, _operation_id("maintenance"))
 	if not paid_maintenance:
-		governance.adjust_civic_metrics(3, -1)
+		governance.adjust_civic_metrics(0 if _new_resident_feedback_suppressed(city_context) else 3, -1)
 	_sync_governance_to_core("governance.monthly_settlement")
 	complete_requests(city_context)
 	_seal_terminal_failure()
@@ -2449,6 +2506,8 @@ func refresh_requests(city_context: Dictionary) -> Array[Dictionary]:
 	if governance.has_failed():
 		_seal_terminal_failure()
 		return []
+	if _new_resident_feedback_suppressed(city_context):
+		return []
 	var created: Array[Dictionary] = population.generate_requests(game_day(), city_context, 4)
 	for request in created:
 		_record_fact({
@@ -2460,6 +2519,10 @@ func refresh_requests(city_context: Dictionary) -> Array[Dictionary]:
 		})
 	_emit_changed()
 	return created
+
+
+func _new_resident_feedback_suppressed(city_context: Dictionary) -> bool:
+	return bool(city_context.get(CONTEXT_SUPPRESS_NEW_RESIDENT_FEEDBACK, false))
 
 
 func initialize_requests_without_history(city_context: Dictionary) -> Array[Dictionary]:
@@ -2598,6 +2661,36 @@ func get_building_by_tile(tile_index: int) -> Dictionary:
 		if occupied_value == null and int(building.get("tile_index", -1)) == tile_index:
 			return building.duplicate(true)
 	return {}
+
+
+func building_capacity_snapshot() -> Dictionary:
+	var housing_capacity := 0
+	var job_capacity := 0
+	for building_id: String in _sorted_keys(session.state.buildings):
+		var record_value: Variant = session.state.buildings[building_id]
+		if not record_value is Dictionary:
+			continue
+		var record: Dictionary = record_value
+		if str(record.get("status", "active")) == "scrapped":
+			continue
+		var definition = building_definitions.get(str(record.get("definition_id", "")))
+		if definition == null:
+			definition = _definition_for_name(str(record.get("building_name", "")))
+		if definition == null:
+			continue
+		housing_capacity += maxi(0, int(definition.housing_capacity))
+		job_capacity += maxi(0, int(definition.job_capacity))
+	var actual_population: int = int(population.population_count()) if population != null else 0
+	var employment: Dictionary = population.stable_summary() if population != null else {}
+	return {
+		"housing_capacity": housing_capacity,
+		"housing_available": maxi(0, housing_capacity - actual_population),
+		"housing_over_capacity": maxi(0, actual_population - housing_capacity),
+		"job_capacity": job_capacity,
+		"population": actual_population,
+		"employed": int(employment.get("employed", 0)),
+		"unemployed": int(employment.get("unemployed", 0)),
+	}
 
 func _has_active_job_on_tile(tile_index: int) -> bool:
 	for job in construction.active_jobs():
@@ -2879,11 +2972,6 @@ func _handle_construction_fact(event: Dictionary) -> bool:
 		return _complete_building_construction(job, metadata)
 	elif operation == "demolish":
 		var target_id := str(job.get("target_id", ""))
-		var building_record: Dictionary = session.state.buildings.get(target_id, {})
-		var population_change := _remove_population_ids(
-			_resident_ids_from_building(building_record),
-			"population.building_demolished"
-		)
 		durability.unregister_building(target_id)
 		if transport != null:
 			transport.unregister_station(target_id)
@@ -2895,7 +2983,7 @@ func _handle_construction_fact(event: Dictionary) -> bool:
 			"building_id": target_id,
 			"tile_index": int(metadata.get("tile_index", -1)),
 			"building_name": str(metadata.get("building_name", "")),
-			"population_delta": int(population_change["actual_delta"])
+			"population_delta": 0
 		})
 	session.submit_command("remove_construction", {
 		"job_id": job_id,
@@ -2919,6 +3007,15 @@ func _complete_building_construction(job: Dictionary, metadata: Dictionary) -> b
 			"error": str(footprint_validation.get("error", "invalid_footprint")),
 		})
 		return false
+	for occupied_tile_id: int in footprint_validation.get("occupied_tile_ids", []):
+		if not BuildingTerrainLabelsScript.is_buildable(occupied_tile_id):
+			_push_ui_event("building_completion_failed", {
+				"job_id": job_id,
+				"error": "terrain_not_flat",
+				"blocked_tile_id": occupied_tile_id,
+				"building_terrain_label": "non_buildable",
+			})
+			return false
 	# Validate the immutable completion candidate before touching population,
 	# durability, building IDs, transport, or any save-visible operation sequence.
 	var instance_id := "building_%06d" % next_building_sequence
@@ -2947,13 +3044,10 @@ func _complete_building_construction(job: Dictionary, metadata: Dictionary) -> b
 		return false
 	instance_id = _next_building_id()
 	record["building_id"] = instance_id
-	var population_change := _adjust_population(
-		maxi(0, int(definition.effects.get("population", 0))) if definition != null else 0,
-		"population.building_completed",
-		instance_id
-	)
-	record["resident_ids"] = Array(population_change["added_ids"])
-	record["population_delta"] = int(population_change["actual_delta"])
+	# Completion makes the building's capacity and production available. It does
+	# not fabricate residents; population growth remains a separate authority.
+	record["resident_ids"] = []
+	record["population_delta"] = 0
 	durability.register_building(instance_id, {
 		"durability": 100,
 		"material_value": int(definition.base_cost) if definition != null else 1000,
@@ -3017,11 +3111,8 @@ func _handle_durability_fact(event: Dictionary) -> void:
 		"removed_ids": PackedStringArray(),
 	}
 	if not demolition_in_progress and record["status"] == "scrapped" and previous_status != "scrapped":
-		population_change = _remove_population_ids(
-			_resident_ids_from_building(record),
-			"population.building_scrapped"
-		)
-		record["resident_ids"] = []
+		# Losing housing capacity never deletes canonical residents. An over-capacity
+		# city retains all people and simply cannot accept more arrivals.
 		record["population_delta"] = 0
 		if transport != null:
 			transport.unregister_station(building_id)
@@ -3073,17 +3164,23 @@ func _sync_population_to_core(reason_tag: String) -> void:
 func _adjust_population(delta: int, reason_tag: String, address_id: String = "") -> Dictionary:
 	var added_ids := PackedStringArray()
 	var removed_ids := PackedStringArray()
+	var accepted_delta := delta
+	var capacity := building_capacity_snapshot()
 	if delta > 0:
-		added_ids = population.add_residents(delta, game_day(), reason_tag, address_id)
+		accepted_delta = mini(delta, maxi(0, int(capacity.get("housing_available", 0))))
+		added_ids = population.add_residents(accepted_delta, game_day(), reason_tag, address_id)
 	elif delta < 0:
 		removed_ids = population.remove_residents(-delta, game_day(), reason_tag)
 	_normalize_selected_population_references(removed_ids)
 	_sync_population_to_core(reason_tag)
 	return {
 		"requested_delta": delta,
+		"accepted_delta": accepted_delta,
 		"actual_delta": added_ids.size() - removed_ids.size(),
 		"added_ids": added_ids,
 		"removed_ids": removed_ids,
+		"housing_capacity": int(capacity.get("housing_capacity", 0)),
+		"capacity_limited": delta > 0 and accepted_delta < delta,
 	}
 
 

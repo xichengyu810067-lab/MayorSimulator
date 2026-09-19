@@ -13,8 +13,6 @@ const DECLINE_TRANSLATIONS := {
 
 var failed := false
 var checks := 0
-var completed_count := 0
-var completion_states: Array[bool] = []
 
 
 func _initialize() -> void:
@@ -24,102 +22,106 @@ func _initialize() -> void:
 func _run() -> void:
 	root.content_scale_size = Vector2i(1280, 720)
 	root.size = Vector2i(1280, 720)
-	_check(StorySequence.is_valid(), "story sequence is fixed and valid")
-	_check(StorySequence.SHOTS.size() == 8, "story has exactly eight distinct shots")
-	var ids := {}
-	for shot in StorySequence.SHOTS:
-		var id := str(shot["id"])
-		_check(not ids.has(id), "shot id is unique: %s" % id)
-		ids[id] = true
-		_check(ResourceLoader.exists(str(shot["asset"])), "fixed shot asset exists: %s" % id)
-		_check(ResourceLoader.exists(str(shot["foreground"])), "fixed foreground asset exists: %s" % id)
+	_check(StorySequence.is_valid(), "story sequence remains valid for onboarding copy")
+	_check(StorySequence.SHOTS.size() == 8, "story metadata retains eight chapters")
+	_check(ResourceLoader.exists(IntroCinematicScript.FILM_PATH), "canonical opening film exists")
+	var film_resource: Resource = load(IntroCinematicScript.FILM_PATH)
+	_check(film_resource is VideoStream, "canonical opening film loads as VideoStream")
+
+	var completed_states: Array[bool] = []
+	var playback_started_count := [0]
+	var playback_stopped_reasons: Array[String] = []
 	var cinematic = IntroCinematicScript.new()
 	root.add_child(cinematic)
-	cinematic.completed.connect(func(skipped: bool) -> void:
-		completed_count += 1
-		completion_states.append(skipped)
-	)
+	cinematic.completed.connect(func(skipped: bool) -> void: completed_states.append(skipped))
+	cinematic.playback_started.connect(func() -> void: playback_started_count[0] += 1)
+	cinematic.playback_stopped.connect(func(reason: String) -> void: playback_stopped_reasons.append(reason))
 	await process_frame
-	_check(cinematic.open(), "cinematic opens from the fixed sequence")
+	_check(cinematic.video_player is VideoStreamPlayer, "opening uses a VideoStreamPlayer")
+	_check(cinematic.video_player.expand and not cinematic.video_player.loop and not cinematic.video_player.autoplay, "opening film covers the surface without looping or autoplaying outside open")
+	_check(cinematic.video_player.bus == &"Music", "opening soundtrack uses the Music bus exactly once")
+	_check(is_equal_approx(cinematic.video_player.volume_db, 0.0), "opening player does not add a second gain layer")
+	_check(cinematic.open(), "cinematic opens from the canonical film")
 	await process_frame
-	_check(cinematic.current_layer.texture is Texture2D, "current shot layer uses a Texture2D")
-	_check(cinematic.next_layer.texture is Texture2D, "next shot layer uses a Texture2D")
-	_check(cinematic.foreground_layer.texture is Texture2D, "foreground layer uses a Texture2D")
-	_check(cinematic.portrait_layer.texture is AtlasTexture, "Xiao Li portrait layer uses an AtlasTexture")
-	var initial_portrait := cinematic.portrait_layer.texture as AtlasTexture
-	_check(initial_portrait.atlas is Texture2D, "Xiao Li portrait atlas is a Texture2D")
-	var portrait_frame_size := Vector2(
-		float(initial_portrait.atlas.get_width()) / float(cinematic.PORTRAIT_COUNT),
-		float(initial_portrait.atlas.get_height())
-	)
-	_check(initial_portrait.region == Rect2(Vector2.ZERO, portrait_frame_size), "first shot selects Xiao Li portrait index zero without locking a full-screen portrait size")
-	_check(cinematic.portrait_layer.size == cinematic.PORTRAIT_DISPLAY_SIZE, "cinematic renders Xiao Li as a compact 96px fairy")
-	var old_background: Texture2D = cinematic.current_layer.texture as Texture2D
-	var old_foreground: Texture2D = cinematic.foreground_layer.texture as Texture2D
-	var old_portrait: AtlasTexture = cinematic.portrait_layer.texture as AtlasTexture
-	cinematic.advance()
-	if cinematic._transition != null:
-		cinematic._transition.kill()
-		cinematic._commit_advanced_shot()
 	await process_frame
-	_check(cinematic.current_layer.texture != old_background and cinematic.next_layer.texture != old_background, "transition clears the old background layer reference")
-	_check(cinematic.foreground_layer.texture != old_foreground, "transition clears the old foreground layer reference")
-	_check(cinematic.portrait_layer.texture != old_portrait, "transition clears the old portrait layer reference")
-	var decline_portrait := cinematic.portrait_layer.texture as AtlasTexture
-	_check(decline_portrait.atlas is Texture2D and decline_portrait.region == Rect2(Vector2(portrait_frame_size.x * 2.0, 0.0), portrait_frame_size), "second shot selects Xiao Li portrait index two without requiring a large portrait layer")
-	_check(cinematic.portrait_layer.size == cinematic.PORTRAIT_DISPLAY_SIZE, "second shot keeps the fairy at 96px")
-	for _step in range(StorySequence.SHOTS.size() - 2):
-		cinematic.advance()
-		if cinematic._transition != null:
-			cinematic._transition.kill()
-			cinematic._commit_advanced_shot()
-		await process_frame
-	_check(cinematic.title_label.text == _l10n("把黎明留在城諾"), "final title resolves through localization")
-	cinematic.advance()
+	_check(cinematic.is_open() and cinematic.video_player.visible, "opening film is a visible blocking surface")
+	_check(cinematic.video_player.stream is VideoStream and cinematic.video_player.is_playing(), "open assigns and starts the real film stream")
+	_check(cinematic.video_player.stream_position < 2.0, "normal open starts at the beginning")
+	_check(playback_started_count == [1] and playback_stopped_reasons.is_empty(), "open claims cinematic music once")
+	_check(cinematic.skip_button.visible and cinematic.skip_button.custom_minimum_size.y >= 48.0, "explicit skip remains available with a readable target")
+
+	cinematic.video_player.finished.emit()
 	await process_frame
-	_check(completed_count == 1 and completion_states == [false], "natural completion emits exactly once and is not marked skipped")
-	cinematic.advance()
+	_check(completed_states == [false], "finished playback completes exactly once without the skipped flag")
+	_check(not cinematic.is_open() and cinematic.video_player.stream == null and cinematic.resident_texture_count() == 0, "natural completion closes and releases the decoder stream")
+	_check(playback_stopped_reasons == ["finished"], "natural completion releases cinematic music exactly once")
+	cinematic.video_player.finished.emit()
 	await process_frame
-	_check(completed_count == 1, "completion never emits twice")
-	_check(cinematic.current_layer.texture == null and cinematic.next_layer.texture == null, "close clears both shot layers")
-	_check(cinematic.foreground_layer.texture == null and cinematic.portrait_layer.texture == null, "close clears foreground and Xiao Li portrait layers")
+	_check(completed_states == [false], "a late duplicate finished signal cannot complete twice")
+
 	var skipped_states: Array[bool] = []
+	var skipped_stop_reasons: Array[String] = []
 	var skipped = IntroCinematicScript.new()
 	root.add_child(skipped)
-	skipped.completed.connect(func(was_skipped: bool) -> void: skipped_states.append(was_skipped))
+	skipped.completed.connect(func(value: bool) -> void: skipped_states.append(value))
+	skipped.playback_stopped.connect(func(reason: String) -> void: skipped_stop_reasons.append(reason))
 	await process_frame
-	_check(skipped.open() and skipped.skip_button.visible, "existing tutorial skip affordance is available on the CG")
+	_check(skipped.open(), "skip fixture opens the real film")
 	skipped.skip_button.emit_signal("pressed")
 	await process_frame
-	_check(skipped_states == [true] and not skipped.is_open(), "CG skip closes once and reports skipped honestly")
-	_check(skipped.open() and skipped.current_index == 0, "reopening the CG starts from the first shot")
+	_check(skipped_states == [true] and not skipped.is_open(), "explicit skip completes once with skipped=true")
+	_check(skipped.video_player.stream == null and skipped_stop_reasons == ["skipped"], "skip stops and detaches the film")
+	_check(skipped.open() and skipped.video_player.stream_position < 2.0, "replay starts from the beginning")
 	skipped.close()
+	await process_frame
+	_check(skipped_states == [true] and skipped_stop_reasons == ["skipped", "closed"], "manual close releases replay without pretending to complete")
+
+	var missing_failures: Array[String] = []
+	var missing_states: Array[bool] = []
 	var missing = IntroCinematicScript.new()
+	missing.film_path = "res://assets/video/opening/definitely-missing-opening-film.ogv"
+	missing.load_failed.connect(func(message: String) -> void: missing_failures.append(message))
+	missing.completed.connect(func(value: bool) -> void: missing_states.append(value))
 	root.add_child(missing)
 	await process_frame
-	missing._fail_closed("開場 CG 素材遺失：固定契約測試素材")
-	_check(missing.error_label.visible and missing.error_label.text.contains("素材遺失"), "missing asset provides human-readable error")
-	_check(missing.current_layer.texture == null and missing.next_layer.texture == null and missing.foreground_layer.texture == null and missing.portrait_layer.texture == null, "fail-closed clears every cinematic layer")
+	_check(not missing.open(), "missing film cannot silently fall back to story cards")
+	_check(missing.is_open() and missing.error_label.visible and missing.error_label.text.contains("遺失"), "missing film presents a human-readable blocking error")
+	_check(missing.video_player.stream == null and missing.resident_texture_count() == 0, "load failure owns no decoder stream")
+	_check(missing.retry_button.visible and missing.leave_button.visible, "load failure offers retry and safe leave")
+	_check(missing_failures.size() == 1 and missing_states.is_empty(), "load failure reports once without completing onboarding")
+	missing.film_path = IntroCinematicScript.FILM_PATH
+	missing.retry_button.emit_signal("pressed")
+	await process_frame
+	_check(missing.video_player.stream is VideoStream and missing.video_player.is_playing(), "retry loads the restored canonical film")
+	missing.close()
+	await process_frame
+	_check(missing_states.is_empty(), "closing after retry still does not synthesize completion")
+
+	var wrong_type = IntroCinematicScript.new()
+	wrong_type.film_path = "res://assets/audio/storybook_v1/ui-click.wav"
+	root.add_child(wrong_type)
+	await process_frame
+	_check(not wrong_type.open() and wrong_type.error_label.text.contains("格式"), "non-video resource fails clearly")
+	wrong_type.leave_button.emit_signal("pressed")
+	await process_frame
+	_check(not wrong_type.is_open(), "error leave action removes the blocking surface without completing")
+
 	for locale in ["zh_TW", "zh_CN", "en", "ja", "ko"]:
 		var l10n = root.get_node_or_null("L10n")
 		_check(l10n != null and bool(l10n.set_locale(locale, false)), "locale available: %s" % locale)
 		if l10n != null:
-			_check(not str(l10n.text("城諾市：重光之日")).is_empty(), "cinematic locale key resolves: %s" % locale)
-			_check(str(l10n.text(DECLINE_SUBTITLE)) == str(DECLINE_TRANSLATIONS[locale]), "decline story localization is exact: %s" % locale)
+			_check(str(l10n.text(DECLINE_SUBTITLE)) == str(DECLINE_TRANSLATIONS[locale]), "story localization remains exact: %s" % locale)
+
 	if failed:
 		quit(1)
 	else:
-		print("Intro cinematic contract test passed. Shots=%d Checks=%d" % [StorySequence.SHOTS.size(), checks])
+		print("Intro cinematic contract test passed. CanonicalFilmLoaded=true Checks=%d" % checks)
 		quit(0)
-
-
-func _l10n(source: String) -> String:
-	var l10n = root.get_node_or_null("L10n")
-	return str(l10n.text(source)) if l10n != null else source
 
 
 func _check(condition: bool, message: String) -> void:
 	checks += 1
-	if not condition:
-		failed = true
-		push_error("Intro cinematic contract failed: %s" % message)
+	if condition:
+		return
+	failed = true
+	push_error("Intro cinematic contract failed: %s" % message)

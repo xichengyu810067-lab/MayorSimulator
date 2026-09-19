@@ -48,7 +48,12 @@ func _run() -> void:
 			"base_cost": 1000,
 			"total_labor_cost": 50000,
 			"total_cost": 51000,
-			"duration_days": 5
+			"duration_days": 5,
+			"footprint_count": 2,
+			"monthly_maintenance": 70,
+			"housing_capacity": 28,
+			"job_capacity": 5,
+			"effects": {"environment": 8, "satisfaction": 2},
 		},
 		"blueprint_library": [{"id": "official_entry", "source": "default", "title": "官方入門版", "usage_count": 0}],
 		"active_blueprint_id": "official_entry",
@@ -70,6 +75,9 @@ func _run() -> void:
 	_check(workers != null and int(workers.value) == 7, "approved review did not restore workers")
 	_check(decoration != null and str(decoration.get_item_metadata(decoration.selected)) == "flowers", "approved review did not restore decoration")
 	_check(quote != null and quote.visible and quote.text.contains("1,000") and quote.text.contains("50,000") and quote.text.contains("51,000") and quote.text.contains("5"), "placement quote is incomplete")
+	_check(quote != null and quote.text.contains("占地 2 格") and quote.text.contains("每月維護 $70"), "placement quote omits footprint or maintenance")
+	_check(quote != null and quote.text.contains("住房 +28 人") and quote.text.contains("職缺 +5"), "placement quote omits housing or job capacity")
+	_check(quote != null and quote.text.contains("環境 +8") and quote.text.contains("滿意 +2"), "placement quote omits declared city effects")
 	_check(action != null and not action.disabled, "approved review placement action is disabled")
 	_check(design_workspace != null and design_workspace.get_child_count() == 2, "five building design controls are not combined into two task-oriented groups")
 	_check(design_workspace != null and int(design_workspace.get_meta("design_control_count", 0)) == 5, "grouped blueprint workspace lost a design control")

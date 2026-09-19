@@ -92,6 +92,10 @@ func _validate_refresh_contract(dashboard) -> void:
 	var second_before := second_month.duplicate(true)
 	dashboard.refresh(second_month)
 	_check(second_month == second_before, "previous-month refresh leaves nested input dictionaries unchanged")
+	var population_detail: Label = dashboard.labels.get("monthly_data_kpi_population_detail")
+	_check(population_detail != null and population_detail.text.contains("人口 315"), "population KPI names actual population")
+	_check(population_detail != null and population_detail.text.contains("住房 280") and population_detail.text.contains("超額 35"), "population KPI distinguishes housing capacity and retained over-capacity residents")
+	_check(population_detail != null and population_detail.text.contains("就業 210／建築職缺 240"), "population KPI distinguishes employment from building job capacity")
 	_check(is_equal_approx(dashboard.monthly_data_kpi_charts["net"].baseline_value(), 125.0), "second month uses prior finance coverage")
 	_check(is_equal_approx(dashboard.monthly_data_service_charts["security"].baseline_value(), 72.0), "second month uses prior security")
 	_check(is_equal_approx(dashboard.monthly_data_service_charts["security"].safety_value(), 60.0), "second month keeps an independent service safety line")
@@ -236,6 +240,13 @@ func _snapshot(has_previous_month: bool) -> Dictionary:
 		"monthly_report_history": [previous_month.duplicate(true)] if has_previous_month else [],
 		"population": 315,
 		"month_start_population": 300,
+		"building_capacity": {
+			"housing_capacity": 280,
+			"housing_available": 0,
+			"housing_over_capacity": 35,
+			"job_capacity": 240,
+			"employed": 210,
+		},
 		"satisfaction": 70,
 		"score": 68,
 		"rating": "B 級城市",

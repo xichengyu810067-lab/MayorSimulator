@@ -380,6 +380,12 @@ func _update_monthly_data_charts(
 	)
 
 	var population := int(data.get("population", 1))
+	var building_capacity: Dictionary = _dictionary_value(data, "building_capacity")
+	var housing_capacity := maxi(0, int(building_capacity.get("housing_capacity", 0)))
+	var housing_available := maxi(0, int(building_capacity.get("housing_available", 0)))
+	var housing_over_capacity := maxi(0, int(building_capacity.get("housing_over_capacity", 0)))
+	var job_capacity := maxi(0, int(building_capacity.get("job_capacity", 0)))
+	var employed := maxi(0, int(building_capacity.get("employed", 0)))
 	var month_start_population := maxi(1, int(data.get("month_start_population", population)))
 	var population_delta := population - month_start_population
 	var population_rate := float(population_delta) / float(month_start_population) * 100.0
@@ -388,7 +394,23 @@ func _update_monthly_data_charts(
 	_set_monthly_data_kpi(
 		"population",
 		"%+.1f%%" % population_rate,
-		L10n.text("目前人口 %s 人") % _format_grouped_int(population),
+		(
+			L10n.text("人口 %s｜住房 %s｜空餘 %s｜就業 %s／建築職缺 %s") % [
+				_format_grouped_int(population),
+				_format_grouped_int(housing_capacity),
+				_format_grouped_int(housing_available),
+				_format_grouped_int(employed),
+				_format_grouped_int(job_capacity),
+			]
+			if housing_over_capacity <= 0
+			else L10n.text("人口 %s｜住房 %s｜超額 %s（保留居民）｜就業 %s／建築職缺 %s") % [
+				_format_grouped_int(population),
+				_format_grouped_int(housing_capacity),
+				_format_grouped_int(housing_over_capacity),
+				_format_grouped_int(employed),
+				_format_grouped_int(job_capacity),
+			]
+		),
 		COLOR_INFO if population_rate >= 0.0 else COLOR_WARNING
 	)
 	var population_warning := _monthly_warning_state(population_rate, 0.0, "population_rate", monthly_history, current_period_index)

@@ -550,6 +550,12 @@ jobs:
           cp THIRD_PARTY_NOTICES.md builds/linux/
           cp GODOT_COPYRIGHT.txt builds/windows/
           cp GODOT_COPYRIGHT.txt builds/linux/
+          cp LICENSE.txt builds/windows/
+          cp LICENSE.txt builds/linux/
+          cp TERMS_OF_USE.md builds/windows/
+          cp TERMS_OF_USE.md builds/linux/
+          cp PRIVACY_NOTICE.md builds/windows/
+          cp PRIVACY_NOTICE.md builds/linux/
 
       - name: Smoke-test Linux export
         shell: bash
@@ -583,11 +589,17 @@ jobs:
               'builds/windows/RELEASE_README.txt',
               'builds/windows/THIRD_PARTY_NOTICES.md',
               'builds/windows/GODOT_COPYRIGHT.txt',
+              'builds/windows/LICENSE.txt',
+              'builds/windows/TERMS_OF_USE.md',
+              'builds/windows/PRIVACY_NOTICE.md',
               'builds/linux/MayorSimulator.x86_64',
               'builds/linux/MayorSimulator.pck',
               'builds/linux/RELEASE_README.txt',
               'builds/linux/THIRD_PARTY_NOTICES.md',
               'builds/linux/GODOT_COPYRIGHT.txt',
+              'builds/linux/LICENSE.txt',
+              'builds/linux/TERMS_OF_USE.md',
+              'builds/linux/PRIVACY_NOTICE.md',
               "$releaseRoot/MayorSimulator-Windows-x86_64-$env:RELEASE_VERSION.zip",
               "$releaseRoot/MayorSimulator-Linux-x86_64-$env:RELEASE_VERSION.tar.gz",
               "$releaseRoot/SHA256SUMS",

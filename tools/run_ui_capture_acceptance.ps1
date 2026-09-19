@@ -74,6 +74,177 @@ function Get-PngHeader {
     return [pscustomobject]@{ width = $width; height = $height }
 }
 
+function Get-LiveVulkanLoaderModule {
+    param([Parameter(Mandatory)][Diagnostics.Process]$RootProcess)
+
+    if ($RootProcess.HasExited) {
+        return $null
+    }
+    $candidateIds = [Collections.Generic.List[int]]::new()
+    $candidateIds.Add([int]$RootProcess.Id)
+    try {
+        foreach ($child in @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $($RootProcess.Id)" -ErrorAction Stop)) {
+            $candidateIds.Add([int]$child.ProcessId)
+        }
+    }
+    catch {
+        # The console process itself remains a valid candidate. Failure to
+        # observe the renderer child leaves the module identity unavailable,
+        # which keeps the Vulkan warning fail-closed.
+    }
+
+    foreach ($candidateId in $candidateIds) {
+        $candidate = $null
+        try {
+            $candidate = Get-Process -Id $candidateId -ErrorAction Stop
+            foreach ($module in @($candidate.Modules)) {
+                if ([string]$module.ModuleName -ine 'vulkan-1.dll') {
+                    continue
+                }
+                $modulePath = [IO.Path]::GetFullPath([string]$module.FileName)
+                $moduleItem = Get-Item -LiteralPath $modulePath -Force -ErrorAction Stop
+                return [pscustomobject][ordered]@{
+                    observed_while_process_running = $true
+                    observed_at_utc = [DateTimeOffset]::UtcNow.ToString('o')
+                    process_id = [int]$candidateId
+                    module_name = [string]$module.ModuleName
+                    path = $modulePath
+                    file_version = [string]$module.FileVersionInfo.FileVersion
+                    bytes = [long]$moduleItem.Length
+                    sha256 = (Get-FileHash -LiteralPath $modulePath -Algorithm SHA256).Hash.ToLowerInvariant()
+                }
+            }
+        }
+        catch {
+            continue
+        }
+        finally {
+            if ($null -ne $candidate) {
+                $candidate.Dispose()
+            }
+        }
+    }
+    return $null
+}
+
+function Get-UiCaptureDiagnosticPolicy {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$PlainLog,
+        [Parameter(Mandatory)][bool]$NativeEvidenceValidated,
+        [AllowNull()][object]$VulkanLoaderModule
+    )
+
+    $certificatePattern = '(?m)^ERROR: Failed to read the root certificate store\.\r?\n\s*at: get_system_ca_certificates \(platform/windows/os_windows\.cpp:\d+\)\r?\n?'
+    $optionalLayerPattern = '(?m)^WARNING: GENERAL - Message Id Number: 0 \| Message Id Name: Loader Message\r?\n\twindows_read_data_files_in_registry: Registry lookup failed to get layer manifest files\.\r?\n\tObjects - 1\r?\n\t\tObject\[0\] - VK_OBJECT_TYPE_INSTANCE, Handle [0-9]+\r?\n   at: _debug_messenger_callback \(drivers/vulkan/rendering_context_driver_vulkan\.cpp:646\)\r?\n?'
+    $supportedDevicePattern = '(?m)^Vulkan [0-9]+\.[0-9]+\.[0-9]+ - Forward Mobile - Using Device #[0-9]+: [^\r\n]+\r?$'
+    $unsafeVulkanPattern = '(?im)(Registry lookup failed to get ICD manifest files|Possibly missing Vulkan driver|VK_ERROR_[A-Z0-9_]+|VK_SUBOPTIMAL_KHR|OUT_OF_DATE|vkCreateInstance Failure|initiali[sz]ation (?:failed|failure|error)|required Vulkan (?:instance )?extension[^\r\n]*(?:missing|not found|fail)|(?:zero|no) (?:accessible |available )?(?:physical )?devices?|(?:surface|swapchain|present)[^\r\n]*(?:fail|error|lost)|device[- ]lost|^(?:WARNING|ERROR):\s*(?:VALIDATION|PERFORMANCE)\b|validation (?:layer|error|warning)|performance (?:error|warning))'
+
+    $environmentWarnings = [Collections.Generic.List[object]]::new()
+    $certificateCount = [regex]::Matches($PlainLog, $certificatePattern).Count
+    $productLog = [regex]::Replace($PlainLog, $certificatePattern, '')
+    if ($certificateCount -gt 0) {
+        $environmentWarnings.Add([pscustomobject][ordered]@{
+            kind = 'windows_root_certificate_store_unavailable'
+            count = $certificateCount
+        })
+    }
+
+    $optionalLayerCount = [regex]::Matches($productLog, $optionalLayerPattern).Count
+    $moduleIdentityValid = (
+        $null -ne $VulkanLoaderModule -and
+        [bool]$VulkanLoaderModule.observed_while_process_running -and
+        [string]$VulkanLoaderModule.module_name -ieq 'vulkan-1.dll' -and
+        [IO.Path]::GetFileName([string]$VulkanLoaderModule.path) -ieq 'vulkan-1.dll' -and
+        [string]$VulkanLoaderModule.file_version -ne '' -and
+        [long]$VulkanLoaderModule.bytes -gt 0 -and
+        [string]$VulkanLoaderModule.sha256 -cmatch '^[0-9a-f]{64}$'
+    )
+    $deviceInitialized = [regex]::IsMatch($productLog, $supportedDevicePattern)
+    $unsafeVulkanDiagnostic = [regex]::IsMatch($productLog, $unsafeVulkanPattern)
+    $classifyOptionalLayerWarning = (
+        $optionalLayerCount -gt 0 -and
+        $NativeEvidenceValidated -and
+        $moduleIdentityValid -and
+        $deviceInitialized -and
+        -not $unsafeVulkanDiagnostic
+    )
+    if ($classifyOptionalLayerWarning) {
+        $productLog = [regex]::Replace($productLog, $optionalLayerPattern, '')
+        $environmentWarnings.Add([pscustomobject][ordered]@{
+            kind = 'vulkan_optional_layer_manifest_absent'
+            count = $optionalLayerCount
+            module_path = [string]$VulkanLoaderModule.path
+            module_file_version = [string]$VulkanLoaderModule.file_version
+            module_sha256 = [string]$VulkanLoaderModule.sha256
+        })
+    }
+
+    $diagnostics = [Collections.Generic.List[string]]::new()
+    foreach ($diagnostic in @([regex]::Matches($productLog, '(?im)^(?:SCRIPT ERROR|ERROR|WARNING):[^\r\n]*') | ForEach-Object { $_.Value.Trim() })) {
+        $diagnostics.Add([string]$diagnostic)
+    }
+    foreach ($leakPattern in @('Leaked instance:', 'ObjectDB instances? (?:was|were) leaked at exit', 'resources? still in use at exit', 'Resource still in use:', 'Orphan StringName:', 'unclaimed string names at exit')) {
+        if ([regex]::IsMatch($productLog, $leakPattern, [Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
+            $diagnostics.Add("leak signature: $leakPattern")
+        }
+    }
+
+    return [pscustomobject][ordered]@{
+        environment_warning_count = $certificateCount + $(if ($classifyOptionalLayerWarning) { $optionalLayerCount } else { 0 })
+        environment_warnings = @($environmentWarnings)
+        optional_layer_warning_count = $optionalLayerCount
+        optional_layer_warning_classified = $classifyOptionalLayerWarning
+        native_evidence_validated = $NativeEvidenceValidated
+        supported_vulkan_device_observed = $deviceInitialized
+        vulkan_loader_module_identity_valid = $moduleIdentityValid
+        unsafe_vulkan_diagnostic_observed = $unsafeVulkanDiagnostic
+        product_log = $productLog
+        product_diagnostics = @($diagnostics)
+    }
+}
+
+function New-UiCaptureRunContextEvidence {
+    param(
+        [Parameter(Mandatory)][int]$FailureCount,
+        [AllowNull()][object]$VulkanLoaderModule,
+        [Parameter(Mandatory)][object]$DiagnosticPolicy,
+        [Parameter(Mandatory)][bool]$NativeEvidenceValidated,
+        [Parameter(Mandatory)][bool]$RawLogsComplete,
+        [AllowNull()][object]$PreFingerprint,
+        [AllowNull()][object]$PostFingerprint
+    )
+
+    $moduleObserved = $null -ne $VulkanLoaderModule -and [bool]$VulkanLoaderModule.observed_while_process_running
+    $sourceComplete = $null -ne $PreFingerprint -and $null -ne $PostFingerprint
+    return [ordered]@{
+        schema_version = 1
+        role = 'same_run_context_only_not_acceptance'
+        outcome = if ($FailureCount -eq 0) { 'NO_FAILURE_RECORDED' } else { 'FAILURE_CONTEXT_ONLY' }
+        vulkan_loader_module = if ($moduleObserved) { $VulkanLoaderModule } else { $null }
+        vulkan_loader_module_reason = if ($moduleObserved) { 'observed_from_live_launched_process_or_child' } else { 'unknown_not_observed_from_live_launched_process_or_child' }
+        environment_warning_count = if ($RawLogsComplete) { [int]$DiagnosticPolicy.environment_warning_count } else { $null }
+        environment_warning_count_reason = if ($RawLogsComplete) { 'classified_from_complete_raw_logs_prerequisites_recorded_below' } else { 'unknown_raw_logs_or_process_output_incomplete' }
+        environment_warning_prerequisites = [ordered]@{
+            raw_logs_complete = $RawLogsComplete
+            native_evidence_validated = $NativeEvidenceValidated
+            supported_vulkan_device_observed = [bool]$DiagnosticPolicy.supported_vulkan_device_observed
+            vulkan_loader_module_identity_valid = [bool]$DiagnosticPolicy.vulkan_loader_module_identity_valid
+            unsafe_vulkan_diagnostic_observed = [bool]$DiagnosticPolicy.unsafe_vulkan_diagnostic_observed
+            optional_layer_warning_classified = [bool]$DiagnosticPolicy.optional_layer_warning_classified
+        }
+        source = [ordered]@{
+            pre = if ($null -ne $PreFingerprint) { [ordered]@{ file_count=[int]$PreFingerprint.file_count; total_bytes=[long]$PreFingerprint.total_bytes; fingerprint_sha256=[string]$PreFingerprint.fingerprint_sha256 } } else { $null }
+            post = if ($null -ne $PostFingerprint) { [ordered]@{ file_count=[int]$PostFingerprint.file_count; total_bytes=[long]$PostFingerprint.total_bytes; fingerprint_sha256=[string]$PostFingerprint.fingerprint_sha256 } } else { $null }
+            unchanged = if ($sourceComplete) {
+                ([string]$PreFingerprint.fingerprint_sha256 -ceq [string]$PostFingerprint.fingerprint_sha256 -and
+                    [int]$PreFingerprint.file_count -eq [int]$PostFingerprint.file_count -and
+                    [long]$PreFingerprint.total_bytes -eq [long]$PostFingerprint.total_bytes)
+            } else { $null }
+            reason = if ($sourceComplete) { 'both_same_run_fingerprints_available' } else { 'unknown_pre_or_post_fingerprint_unavailable' }
+        }
+    }
+}
+
 $GodotExe = (Resolve-Path -LiteralPath $GodotExe -ErrorAction Stop).Path
 $godotItem = Assert-MayorNotReparsePoint -Path $GodotExe -Label 'Godot executable'
 if ($godotItem.PSIsContainer) {
@@ -161,6 +332,7 @@ $stdoutText = ''
 $stderrText = ''
 $launchError = $null
 $outputCaptureComplete = $false
+$vulkanLoaderModule = $null
 
 try {
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
@@ -188,7 +360,21 @@ try {
         }
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
-        $completed = $process.WaitForExit($TimeoutSeconds * 1000)
+        $waitStopwatch = [Diagnostics.Stopwatch]::StartNew()
+        while (-not $process.HasExited -and $waitStopwatch.ElapsedMilliseconds -lt ($TimeoutSeconds * 1000)) {
+            if ($null -eq $vulkanLoaderModule) {
+                $vulkanLoaderModule = Get-LiveVulkanLoaderModule -RootProcess $process
+            }
+            $remainingMilliseconds = ($TimeoutSeconds * 1000) - [int]$waitStopwatch.ElapsedMilliseconds
+            if ($remainingMilliseconds -le 0) {
+                break
+            }
+            $completed = $process.WaitForExit([Math]::Min(500, $remainingMilliseconds))
+        }
+        $waitStopwatch.Stop()
+        if ($process.HasExited) {
+            $completed = $true
+        }
         if (-not $completed) {
             try { $process.Kill($true) } catch { }
             $null = $process.WaitForExit(30000)
@@ -237,23 +423,11 @@ foreach ($requiredLog in @($stdoutPath, $stderrPath, $godotLogPath)) {
 }
 
 $ansiPattern = "`e\[[0-?]*[ -/]*[@-~]"
-$certificatePattern = '(?m)^ERROR: Failed to read the root certificate store\.\r?\n\s*at: get_system_ca_certificates \(platform/windows/os_windows\.cpp:\d+\)\r?\n?'
 $logParts = @($stdoutText, $stderrText)
 if (Test-Path -LiteralPath $godotLogPath -PathType Leaf) {
     $logParts += [IO.File]::ReadAllText($godotLogPath, [Text.Encoding]::UTF8)
 }
 $plainLog = [regex]::Replace(($logParts -join "`n"), $ansiPattern, '')
-$environmentWarningCount = [regex]::Matches($plainLog, $certificatePattern).Count
-$productLog = [regex]::Replace($plainLog, $certificatePattern, '')
-$diagnostics = @([regex]::Matches($productLog, '(?im)^(?:SCRIPT ERROR|ERROR|WARNING):[^\r\n]*') | ForEach-Object { $_.Value.Trim() })
-foreach ($leakPattern in @('Leaked instance:', 'ObjectDB instances? (?:was|were) leaked at exit', 'resources? still in use at exit', 'Resource still in use:', 'Orphan StringName:', 'unclaimed string names at exit')) {
-    if ([regex]::IsMatch($productLog, $leakPattern, [Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
-        $diagnostics += "leak signature: $leakPattern"
-    }
-}
-if ($diagnostics.Count -ne 0) {
-    $failures.Add("Product diagnostics were found: $($diagnostics -join ' | ')")
-}
 $marker = 'UI_CAPTURE_CANONICAL_ACCEPTANCE_PASSED native_gui=PASS native_captures=5 offscreen_evidence=PASS offscreen_captures=33 physical=2880x1800 logical=1280x800'
 $markerCount = [regex]::Matches($stdoutText, "(?m)^$([regex]::Escape($marker))\r?$").Count
 if ($markerCount -ne 1) {
@@ -262,6 +436,7 @@ if ($markerCount -ne 1) {
 
 $nativeResultPath = Join-Path $nativeCaptureRoot 'native-result.json'
 $validatedNativeCaptures = [System.Collections.Generic.List[object]]::new()
+$nativeEvidenceValidated = $false
 if (-not (Test-Path -LiteralPath $nativeResultPath -PathType Leaf)) {
     $failures.Add("Native GUI result is missing: $nativeResultPath")
 }
@@ -374,6 +549,7 @@ else {
         foreach ($item in $nativeItems) {
             if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $item.Name -cnotin $expectedNativeNames) { throw "Unexpected native-window output item: $($item.FullName)" }
         }
+        $nativeEvidenceValidated = $true
     }
     catch {
         $failures.Add("Native GUI evidence validation failed: $($_.Exception.Message)")
@@ -463,6 +639,13 @@ else {
     }
 }
 
+$diagnosticPolicy = Get-UiCaptureDiagnosticPolicy -PlainLog $plainLog -NativeEvidenceValidated $nativeEvidenceValidated -VulkanLoaderModule $vulkanLoaderModule
+$environmentWarningCount = [int]$diagnosticPolicy.environment_warning_count
+$diagnostics = @($diagnosticPolicy.product_diagnostics)
+if ($diagnostics.Count -ne 0) {
+    $failures.Add("Product diagnostics were found: $($diagnostics -join ' | ')")
+}
+
 try {
     foreach ($item in @(Get-ChildItem -LiteralPath $OutputRoot -Recurse -Force)) {
         if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Evidence tree contains a reparse point: $($item.FullName)" }
@@ -483,6 +666,31 @@ try {
 catch {
     $failures.Add("Post-run source fingerprint failed: $($_.Exception.Message)")
     $postFingerprint = $null
+}
+
+$runContextPath = Join-Path $OutputRoot 'run-context.json'
+try {
+    $null = Assert-MayorNotReparsePoint -Path $OutputRoot -Label 'UI capture run-context output root'
+    Assert-PathChainWithoutReparsePoint -Candidate $runContextPath -Boundary $projectRoot
+    $runContext = New-UiCaptureRunContextEvidence -FailureCount $failures.Count -VulkanLoaderModule $vulkanLoaderModule `
+        -DiagnosticPolicy $diagnosticPolicy -NativeEvidenceValidated $nativeEvidenceValidated `
+        -RawLogsComplete ($outputCaptureComplete -and (Test-Path -LiteralPath $stdoutPath -PathType Leaf) -and
+            (Test-Path -LiteralPath $stderrPath -PathType Leaf) -and (Test-Path -LiteralPath $godotLogPath -PathType Leaf)) `
+        -PreFingerprint $preFingerprint -PostFingerprint $postFingerprint
+    $runContext.started_at_utc = $startedAt.ToString('o')
+    $runContext.finished_at_utc = $finishedAt.ToString('o')
+    $runContext.failure_count = $failures.Count
+    $runContext.godot_exit_code = $exitCode
+    $runContext.success_marker_count = $markerCount
+    $stream = [IO.File]::Open($runContextPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try {
+        $bytes = [Text.UTF8Encoding]::new($false).GetBytes(($runContext | ConvertTo-Json -Depth 10))
+        $stream.Write($bytes, 0, $bytes.Length)
+    }
+    finally { $stream.Dispose() }
+}
+catch {
+    $failures.Add("Same-run context evidence could not be persisted: $($_.Exception.Message)")
 }
 
 if ($failures.Count -ne 0) {
@@ -549,7 +757,9 @@ $summary = [ordered]@{
     success_marker = $marker
     success_marker_count = $markerCount
     environment_warning_count = $environmentWarningCount
-    product_diagnostic_count = 0
+    environment_warnings = @($diagnosticPolicy.environment_warnings)
+    vulkan_loader_module = $vulkanLoaderModule
+    product_diagnostic_count = $diagnostics.Count
     source = [ordered]@{ file_count=[int]$preFingerprint.file_count; total_bytes=[long]$preFingerprint.total_bytes; pre_fingerprint_sha256=[string]$preFingerprint.fingerprint_sha256; post_fingerprint_sha256=[string]$postFingerprint.fingerprint_sha256; unchanged=$true }
     files = $fileEvidence
 }

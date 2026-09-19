@@ -48,7 +48,7 @@ func _run() -> void:
 			break
 	_check(not main.start_screen.visible and main._game_started, "new-game loading enters the playable map")
 	_check(main.tutorial_overlay != null and main.tutorial_overlay.is_open(), "new game opens the animated story tutorial")
-	_check(main.vertical_slice.is_time_paused(), "story tutorial pauses the simulation")
+	_check(not main.vertical_slice.is_time_paused(), "story tutorial keeps active-city time running")
 	main.tutorial_overlay.close_as_completed(false)
 	for _frame in range(30):
 		await process_frame
@@ -173,7 +173,7 @@ func _run() -> void:
 			_check(caption.get_theme_font_size("font_size") >= 18, "compact action '%s' caption remains readable" % action_name)
 			_check(caption.autowrap_mode == TextServer.AUTOWRAP_WORD_SMART, "compact action '%s' caption wraps instead of clipping" % action_name)
 	var date_hud := main.labels["month"] as Label
-	_check(not main.vertical_slice.is_time_paused() and date_hud.text.ends_with("· 自動"), "live map describes automatic time without a play-button affordance")
+	_check(not main.vertical_slice.is_time_paused() and date_hud.text.begins_with("1/1．") and date_hud.text.contains(":"), "live map shows the continuous 12-hour game clock")
 	_check(date_hud.tooltip_text == "遊戲時間每 120 秒自動推進一天，日期區不需點擊。", "running date HUD explains the automatic clock and that it is not a button")
 	var day_before_date_hud_input := int(main.vertical_slice.game_day())
 	var date_hud_click := InputEventMouseButton.new()
@@ -193,8 +193,8 @@ func _run() -> void:
 	await process_frame
 	await process_frame
 	_check(main.settings_overlay.is_open(), "settings button opens the unified settings overlay")
-	_check(main.vertical_slice.is_time_paused() and main.labels["month"].text.ends_with("· 暫停"), "settings pauses simulation and exposes the paused state without a pause-button affordance")
-	_check(main.labels["month"].tooltip_text == "管理或教學畫面開啟時會自動暫停，日期區不需點擊。", "paused date HUD explains automatic modal pausing and that it is not a button")
+	_check(not main.vertical_slice.is_time_paused() and main.labels["month"].text.contains("．"), "settings keeps continuous simulation and the in-day clock visible")
+	_check(main.labels["month"].tooltip_text == "遊戲時間每 120 秒自動推進一天，日期區不需點擊。", "settings keeps the continuous-time explanation visible")
 	_check(main.settings_overlay.language_selector.choice_count() == 5, "settings preserves all five language choices")
 	_check(main.settings_overlay.language_selector.visible_popup_item_count() == 5, "settings exposes all five language choices on one popup page")
 	_check(main.settings_overlay.language_selector.shows_all_choices(), "settings language selector disables More paging")
@@ -202,7 +202,7 @@ func _run() -> void:
 	_check(main.find_child("GameLanguageSelector", true, false) == null, "language selector is no longer exposed as a separate HUD control")
 	main.settings_overlay.close()
 	await process_frame
-	_check(not main.vertical_slice.is_time_paused() and main.labels["month"].text.ends_with("· 自動"), "closing settings resumes the automatic clock")
+	_check(not main.vertical_slice.is_time_paused() and main.labels["month"].text.contains("．"), "closing settings preserves the automatic clock")
 
 	# Bounds checks use the live viewport instead of assuming a fixed capture size.
 	for key in ["month", "funds", "population", "satisfaction", "grievance", "trust", "score", "rating"]:
@@ -251,7 +251,7 @@ func _run() -> void:
 	await process_frame
 	await process_frame
 	_check(main.municipal_overlay.is_open() and main.municipal_overlay.current_page() == "hub", "lazy municipal hub remains live across three frames after first open")
-	_check(main.vertical_slice.is_time_paused() and main.labels["month"].text.ends_with("· 暫停"), "municipal management pauses simulation while the player reads")
+	_check(not main.vertical_slice.is_time_paused() and main.labels["month"].text.contains("．"), "municipal management keeps simulation and the in-day clock running")
 	_check(main.get_visible_npc_actors().all(func(button: Button) -> bool: return button.tooltip_text.is_empty() and button.mouse_filter == Control.MOUSE_FILTER_IGNORE), "modal opening disables resident hover tooltips and pointer input")
 	_check(main.grid_buttons.all(func(button: Button) -> bool: return button.tooltip_text.is_empty() and button.mouse_filter == Control.MOUSE_FILTER_IGNORE), "modal opening disables tile hover tooltips and pointer input")
 	var municipal_root := main.municipal_overlay.find_child("MunicipalHubRoot", true, false) as Control
@@ -540,7 +540,7 @@ func _run() -> void:
 		overlay_close_button.emit_signal("pressed")
 	await process_frame
 	_check(not main.municipal_overlay.is_open(), "clicking the municipal close button restores the map")
-	_check(not main.vertical_slice.is_time_paused() and main.labels["month"].text.ends_with("· 自動"), "closing municipal management resumes the automatic clock")
+	_check(not main.vertical_slice.is_time_paused() and main.labels["month"].text.contains("．"), "closing municipal management preserves the automatic clock")
 	_check(main.get_visible_npc_actors().all(func(button: Button) -> bool: return not button.tooltip_text.is_empty() and button.mouse_filter == Control.MOUSE_FILTER_STOP), "closing the modal restores resident interaction")
 	_check(main.grid_buttons.all(func(button: Button) -> bool: return not button.tooltip_text.is_empty() and button.mouse_filter == Control.MOUSE_FILTER_STOP), "closing the modal restores tile interaction")
 
@@ -625,7 +625,7 @@ func _run() -> void:
 	_check(main.exit_confirmation.visible, "failed exit autosave keeps the confirmation overlay open")
 	_check(main.exit_confirmation.discard_button.visible, "failed exit autosave exposes an explicit exit-without-saving action")
 	_check(_quit_signal_count == 1, "failed exit autosave does not emit an application quit request")
-	_check(main.vertical_slice.is_time_paused(), "failed exit autosave keeps simulation paused")
+	_check(not main.vertical_slice.is_time_paused(), "failed exit autosave returns the still-open city to continuous simulation")
 	main.start_save_path = valid_exit_save_path
 	main.exit_confirmation.confirm_button.emit_signal("pressed")
 	await process_frame
@@ -643,16 +643,81 @@ func _run() -> void:
 	main.start_save_path = valid_exit_save_path
 
 	var tile_index := 18
+	var environment_before_park: int = int(main.environment)
+	var park_record: Dictionary = main.vertical_slice.register_existing_building(tile_index, "公園")
+	_check(not park_record.is_empty(), "metric reconciliation fixture registers an authoritative park")
+	main.call("_reconcile_building_metric_effects")
+	_check(main.environment == environment_before_park + 8, "active park applies its declared environment effect once")
+	var park_satisfaction_target := _calculated_satisfaction_target(main)
+	main.call("_recalculate_satisfaction")
+	_check(main.total_satisfaction == park_satisfaction_target, "satisfaction recalculation writes its visible target without adding the active park twice")
+	var repeated_park_satisfaction_target := _calculated_satisfaction_target(main)
+	main.call("_recalculate_satisfaction")
+	_check(main.total_satisfaction == repeated_park_satisfaction_target, "repeated satisfaction recalculation does not accumulate the active park contribution")
+	main.call("_reconcile_building_metric_effects")
+	_check(main.environment == environment_before_park + 8, "repeated reconciliation does not accumulate the park effect")
+	var park_demolition: Dictionary = main.vertical_slice.start_demolition(tile_index, 20)
+	_check(bool(park_demolition.get("ok", false)), "metric reconciliation fixture park can be demolished")
+	if bool(park_demolition.get("ok", false)):
+		main.vertical_slice.advance_days(int(park_demolition.get("job", {}).get("projected_remaining_days", 0)), {}, false)
+	main.call("_reconcile_building_metric_effects")
+	_check(main.environment == environment_before_park, "demolition removes the park effect once")
+	var post_demolition_satisfaction_target := _calculated_satisfaction_target(main)
+	main.call("_recalculate_satisfaction")
+	_check(main.total_satisfaction == post_demolition_satisfaction_target, "satisfaction recalculation remains exact after the positive-effect park is demolished")
+	var saturation_population_before: int = int(main.population)
+	var saturation_employed_before := int(main.vertical_slice.building_capacity_snapshot().get("employed", -1))
+	main.environment = 65
+	main.total_satisfaction = 65
+	var saturation_building_ids: Array[String] = []
+	for candidate_tile in range(30, main.city_grid.size()):
+		if saturation_building_ids.size() >= 11:
+			break
+		if not main.vertical_slice.get_building_by_tile(candidate_tile).is_empty():
+			continue
+		var saturation_record: Dictionary = main.vertical_slice.register_existing_building(candidate_tile, "公園")
+		if not saturation_record.is_empty():
+			saturation_building_ids.append(str(saturation_record.get("building_id", "")))
+	_check(saturation_building_ids.size() == 11, "saturation fixture registers eleven authoritative park records")
+	main.call("_reconcile_building_metric_effects")
+	_check(int(Dictionary(main.get("_applied_building_metric_effects")).get("environment", 0)) == 88, "eleven park records contribute 88 environment points exactly once each")
+	_check(main.environment == 100, "65-point environment plus 88 building points saturates at 100")
+	_check(int(Dictionary(main.get("_applied_building_metric_effects")).get("satisfaction", 0)) == 44 and main.total_satisfaction == 100, "65-point satisfaction plus 44 building points saturates at 100")
+	var saturated_satisfaction_target := _calculated_satisfaction_target(main)
+	main.call("_recalculate_satisfaction")
+	_check(main.total_satisfaction == saturated_satisfaction_target, "saturated satisfaction recalculation writes the service target without double-counting 44 building points")
+	var repeated_saturated_satisfaction_target := _calculated_satisfaction_target(main)
+	main.call("_recalculate_satisfaction")
+	_check(main.total_satisfaction == repeated_saturated_satisfaction_target, "repeated saturated satisfaction recalculation remains tied to the service target")
+	var saturated_shell: Dictionary = main._capture_player_shell_state()
+	_check(int(saturated_shell.get("schema_version", 0)) == 10, "saturated shell uses schema 10")
+	_check(int(Dictionary(saturated_shell.get("building_metric_baselines", {})).get("environment", -1)) == 65, "schema 10 preserves the pre-saturation 65-point non-building baseline")
+	main.call("_apply_city_metric_delta", {"environment": -3})
+	_check(main.environment == 100 and int(Dictionary(main.get("_building_metric_baselines")).get("environment", -1)) == 62, "non-building monthly delta remains recorded while the visible metric is saturated")
+	for building_id: String in saturation_building_ids:
+		var saturation_record: Dictionary = main.vertical_slice.session.state.buildings.get(building_id, {})
+		saturation_record["status"] = "scrapped"
+		main.vertical_slice.session.state.buildings[building_id] = saturation_record
+	main.call("_reconcile_building_metric_effects")
+	_check(main.environment == 62, "removing all 88 building points restores the exact adjusted baseline instead of 12")
+	var post_scrap_satisfaction_target := _calculated_satisfaction_target(main)
+	main.call("_recalculate_satisfaction")
+	_check(main.total_satisfaction == post_scrap_satisfaction_target, "satisfaction recalculation remains exact after all 44 active building points are scrapped")
+	main.call("_reconcile_building_metric_effects")
+	_check(main.environment == 62, "repeated post-scrap reconciliation is idempotent")
+	_check(main.population == saturation_population_before and int(main.vertical_slice.building_capacity_snapshot().get("employed", -1)) == saturation_employed_before, "building metric saturation and removal preserve population and employment")
+	main.environment = environment_before_park
 	main.city_grid[tile_index] = "住宅"
 	main.building_customizations[tile_index] = {"variant": 0, "roof": 0, "wall": 0}
 	var residence_record: Dictionary = main.vertical_slice.register_existing_building(tile_index, "住宅", main.building_customizations[tile_index])
 	main.call("_sync_vertical_state")
-	_check(PackedStringArray(residence_record.get("resident_ids", [])).size() == 28, "residence stores the 28 resident IDs it creates")
-	_check(main.population == 328, "main derives residence population from the canonical population system")
-	_check(main.vertical_slice.session.state.npcs.size() == 328, "residence population is mirrored into core NPC records")
-	_check(int(main.vertical_slice.session.state.metrics.get("population", -1)) == 328, "residence population is mirrored into the core metric")
+	_check(PackedStringArray(residence_record.get("resident_ids", [])).is_empty(), "residence creates no resident ownership IDs")
+	_check(main.population == 300, "residence leaves canonical population unchanged")
+	_check(main.vertical_slice.session.state.npcs.size() == 300, "residence leaves core NPC records unchanged")
+	_check(int(main.vertical_slice.session.state.metrics.get("population", -1)) == 300, "residence leaves the core population metric unchanged")
+	_check(int(main.vertical_slice.building_capacity_snapshot().get("housing_capacity", -1)) == 28, "residence contributes 28 housing capacity")
 	main.call("_apply_building_effect", main.buildings["住宅"])
-	_check(main.population == 328, "presentation-side building effects do not double-add population")
+	_check(main.population == 300, "presentation-side building effects never add population")
 	_check(main.city_grid[tile_index] == "住宅", "test fixture building exists before demolition")
 	main._select_built_cell(tile_index)
 	_check(main.building_context_panel.visible, "clicking a building opens the contextual action panel")
@@ -685,10 +750,11 @@ func _run() -> void:
 	_check(main.city_grid[tile_index] == "", "demolition completion clears the map tile")
 	_check(main.vertical_slice.get_building_by_tile(tile_index).is_empty(), "demolished building is removed from core state")
 	_check(main.vertical_slice.construction.available_workers() == 20, "demolition returns workers to the shared team")
-	_check(main.population == 300, "demolition removes exactly the residence-owned residents from main state")
-	_check(main.vertical_slice.population.population_count() == 300, "demolition restores canonical population to baseline")
-	_check(main.vertical_slice.session.state.npcs.size() == 300, "demolition removes residence-owned core NPC records")
-	_check(int(main.vertical_slice.session.state.metrics.get("population", -1)) == 300, "demolition restores the core population metric")
+	_check(main.population == 300, "demolition retains every existing resident")
+	_check(main.vertical_slice.population.population_count() == 300, "demolition leaves canonical population unchanged")
+	_check(main.vertical_slice.session.state.npcs.size() == 300, "demolition leaves core NPC records unchanged")
+	_check(int(main.vertical_slice.session.state.metrics.get("population", -1)) == 300, "demolition leaves the core population metric unchanged")
+	_check(int(main.vertical_slice.building_capacity_snapshot().get("housing_capacity", -1)) == 0, "demolition removes housing capacity")
 	var tax_probe_npc_id: String = main.vertical_slice.population.sorted_npc_ids()[0]
 	var tax_probe_record = main.vertical_slice.population.get_record(tax_probe_npc_id)
 	var original_npc_income: int = tax_probe_record.income
@@ -708,6 +774,10 @@ func _run() -> void:
 		var matched_record = main.vertical_slice.population.get_record(str(match_result.get("npc_id", "")))
 		_check(matched_record != null and matched_record.salary == null, "building employment does not fabricate salary data")
 
+	main.city_grid[tile_index] = "住宅"
+	main.vertical_slice.register_existing_building(tile_index, "住宅")
+	var over_capacity_before_law: Dictionary = main.vertical_slice.building_capacity_snapshot()
+	_check(int(over_capacity_before_law.get("housing_available", -1)) == 0 and int(over_capacity_before_law.get("housing_over_capacity", -1)) == 272, "legacy population above capacity is reported without deleting residents")
 	var population_ids_before_law: Array[String] = main.vertical_slice.population.sorted_npc_ids()
 	main.vertical_slice.governance.active_laws["population_test"] = {
 		"bill_id": "population_test",
@@ -719,17 +789,17 @@ func _run() -> void:
 	main.call("_settle_month")
 	_check(main._autosave_count == monthly_autosaves_before + 1, "monthly settlement performs exactly one final-state autosave")
 	_check(main._last_autosave_reason == "event:month_started", "monthly settlement records the expected autosave reason")
-	_check(main.population == 320, "monthly active-law population reaches main state")
-	_check(main.vertical_slice.population.population_count() == 320, "monthly active-law population reaches the canonical system")
-	_check(main.vertical_slice.session.state.npcs.size() == 320, "monthly active-law population reaches core NPC records")
-	_check(int(main.vertical_slice.session.state.metrics.get("population", -1)) == 320, "monthly active-law population reaches the core metric")
+	_check(main.population == 300, "monthly active-law growth is blocked when housing is over capacity")
+	_check(main.vertical_slice.population.population_count() == 300, "capacity-blocked law leaves canonical population unchanged")
+	_check(main.vertical_slice.session.state.npcs.size() == 300, "capacity-blocked law leaves core NPC records unchanged")
+	_check(int(main.vertical_slice.session.state.metrics.get("population", -1)) == 300, "capacity-blocked law leaves the core population metric unchanged")
 	var law_addresses_valid := true
 	for npc_id: String in main.vertical_slice.population.sorted_npc_ids():
 		if not population_ids_before_law.has(npc_id) and not str(main.vertical_slice.population.get_record(npc_id).address_id).begins_with("home_"):
 			law_addresses_valid = false
 	_check(law_addresses_valid, "active-law residents receive normal home addresses instead of a policy source label")
 	main.call("_sync_vertical_state")
-	_check(main.population == 320, "vertical-state synchronization does not overwrite active-law population")
+	_check(main.population == 300, "vertical-state synchronization preserves capacity-blocked population")
 	var authoritative_metrics: Dictionary = main.vertical_slice.session.state.metrics
 	_check(int(authoritative_metrics.get("satisfaction", -1)) == main.total_satisfaction, "CityState owns the synchronized satisfaction metric")
 	_check(int(authoritative_metrics.get("security", -1)) == main.security, "CityState owns the synchronized security metric")
@@ -737,10 +807,11 @@ func _run() -> void:
 	_check(int(authoritative_metrics.get("traffic", -1)) == main.traffic, "CityState owns the synchronized traffic metric")
 	_check(int(authoritative_metrics.get("education", -1)) == main.education and int(authoritative_metrics.get("healthcare", -1)) == main.healthcare, "CityState owns the synchronized service metrics")
 	var captured_shell: Dictionary = main._capture_player_shell_state()
-	_check(int(captured_shell.get("schema_version", 0)) == 9 and captured_shell.get("onboarding") is Dictionary, "player shell schema includes authoritative onboarding state alongside metric authority, healthcare-service latch, audio, and map zoom persistence")
-	_check(main.last_report.contains("人口 320（+20）"), "concise monthly report uses authoritative active-law population change")
+	_check(int(captured_shell.get("schema_version", 0)) == 10 and captured_shell.get("onboarding") is Dictionary, "player shell schema includes authoritative onboarding state alongside metric authority, healthcare-service latch, audio, and map zoom persistence")
+	_check(captured_shell.get("building_metric_baselines") is Dictionary and Dictionary(captured_shell.get("building_metric_baselines", {})).size() == 6, "player shell schema 10 persists exactly six non-building metric baselines")
+	_check(main.last_report.contains("人口 300（+0）"), "concise monthly report records capacity-blocked population change")
 	_check(bool(main.last_month_summary.get("available", false)), "monthly settlement records a structured summary")
-	_check(int(main.last_month_summary.get("population_change", 0)) == 20, "structured monthly summary preserves the authoritative population delta")
+	_check(int(main.last_month_summary.get("population_change", -1)) == 0, "structured monthly summary preserves the zero capacity-blocked population delta")
 	for delta_key in ["security_change", "environment_change", "traffic_change", "education_change", "healthcare_change"]:
 		_check(main.last_month_summary.has(delta_key), "structured monthly summary records %s" % delta_key)
 	for metric_card_variant in main.city_metric_cards.values():
@@ -751,18 +822,52 @@ func _run() -> void:
 	_check(restored.load_game(TEST_SAVE_PATH), "active-law monthly snapshot can be loaded")
 	_check(restored.session.save_service.last_load_source == "primary", "active-law monthly snapshot loads from the primary rather than silently falling back")
 	_check(restored.governance.active_laws.has("population_test"), "active-law monthly snapshot preserves the enacted law")
-	_check(restored.population.population_count() == 320, "active-law population survives save and load")
-	_check(restored.session.state.npcs.size() == 320 and int(restored.session.state.metrics.get("population", -1)) == 320, "loaded active-law population keeps all three authorities consistent")
-	_check(str(restored.get_player_shell_state().get("last_report", "")).contains("人口 320（+20）"), "loaded concise shell report matches the committed active-law population change")
+	_check(restored.population.population_count() == 300, "capacity-blocked active-law population survives save and load")
+	_check(restored.session.state.npcs.size() == 300 and int(restored.session.state.metrics.get("population", -1)) == 300, "loaded capacity-blocked population keeps all three authorities consistent")
+	var restored_shell: Dictionary = restored.get_player_shell_state()
+	_check(int(restored_shell.get("schema_version", 0)) == 10 and _metric_baselines_equal(restored_shell.get("building_metric_baselines", {}), captured_shell.get("building_metric_baselines", {})), "schema 10 building metric baselines survive current-version save and load exactly")
+	_check(int(restored.building_capacity_snapshot().get("employed", -1)) == int(main.vertical_slice.building_capacity_snapshot().get("employed", -2)), "current-version save and load preserves employment assignments")
+	var restored_main = (load("res://scripts/app/main.gd") as Script).new()
+	restored_main.vertical_slice = restored
+	restored_main._rebuild_city_from_core()
+	_check(restored_main._restore_player_shell_state(restored_shell), "schema 10 player shell restores into the application metric authority")
+	_check(restored_main._capture_player_shell_state().get("building_metric_baselines", {}) == captured_shell.get("building_metric_baselines", {}), "schema 10 application round-trip preserves metric baselines exactly")
+	var restored_satisfaction_baseline := int(Dictionary(restored_shell.get("building_metric_baselines", {})).get("satisfaction", -1))
+	var restored_satisfaction_contribution := int(Dictionary(restored_main.get("_applied_building_metric_effects")).get("satisfaction", 0))
+	_check(restored_main.total_satisfaction == clampi(restored_satisfaction_baseline + restored_satisfaction_contribution, 0, 100), "schema 10 save and load preserves satisfaction as baseline plus each active building contribution exactly once")
+	var inconsistent_schema10 := restored_shell.duplicate(true)
+	var inconsistent_baselines: Dictionary = inconsistent_schema10["building_metric_baselines"]
+	var saved_security_baseline := int(inconsistent_baselines.get("security", 70))
+	inconsistent_baselines["security"] = saved_security_baseline - 1 if saved_security_baseline > 0 else 1
+	var inconsistent_main = (load("res://scripts/app/main.gd") as Script).new()
+	inconsistent_main.vertical_slice = restored
+	inconsistent_main._rebuild_city_from_core()
+	_check(not inconsistent_main._restore_player_shell_state(inconsistent_schema10), "schema 10 rejects a well-typed baseline that disagrees with authoritative metrics")
+	var schema9_shell := restored_shell.duplicate(true)
+	schema9_shell["schema_version"] = 9
+	schema9_shell.erase("building_metric_baselines")
+	var schema9_main = (load("res://scripts/app/main.gd") as Script).new()
+	schema9_main.vertical_slice = restored
+	schema9_main._rebuild_city_from_core()
+	var population_before_schema9: int = int(restored.population.population_count())
+	var employed_before_schema9 := int(restored.building_capacity_snapshot().get("employed", -1))
+	_check(schema9_main._restore_player_shell_state(schema9_shell), "schema 9 player shell migrates without inventing unavailable saturation history")
+	_check(restored.population.population_count() == population_before_schema9 and int(restored.building_capacity_snapshot().get("employed", -1)) == employed_before_schema9, "schema 9 migration preserves existing population and employment values")
+	var migrated_schema10_shell: Dictionary = schema9_main._capture_player_shell_state()
+	_check(int(migrated_schema10_shell.get("schema_version", 0)) == 10 and Dictionary(migrated_schema10_shell.get("building_metric_baselines", {})).size() == 6, "schema 9 migration writes a complete schema 10 baseline on the next save")
+	restored_main.free()
+	inconsistent_main.free()
+	schema9_main.free()
+	_check(str(restored.get_player_shell_state().get("last_report", "")).contains("人口 300（+0）"), "loaded concise shell report matches capacity-blocked population change")
 	var restored_month_summary: Dictionary = restored.get_player_shell_state().get("last_month_summary", {})
-	_check(bool(restored_month_summary.get("available", false)) and int(restored_month_summary.get("population_change", 0)) == 20, "structured monthly summary survives save and load")
+	_check(bool(restored_month_summary.get("available", false)) and int(restored_month_summary.get("population_change", -1)) == 0, "capacity-blocked monthly summary survives save and load")
 	var restored_report_history: Array = restored.get_player_shell_state().get("monthly_report_history", [])
 	_check(restored_report_history.size() == 1, "authoritative prior-month comparison snapshot survives save and load")
 	if not restored_report_history.is_empty():
 		var restored_report_snapshot: Dictionary = restored_report_history[0]
-		_check(int(restored_report_snapshot.get("population", 0)) == 320, "saved monthly comparison snapshot preserves authoritative population")
+		_check(int(restored_report_snapshot.get("population", 0)) == 300, "saved monthly comparison snapshot preserves authoritative population")
 		_check(restored_report_snapshot.has("coverage_rate") and restored_report_snapshot.has("security"), "saved monthly comparison snapshot preserves finance and safety metrics")
-	_check(int(restored.get_player_shell_state().get("month_start_population", 0)) == 320, "current-month population baseline survives save and load")
+	_check(int(restored.get_player_shell_state().get("month_start_population", 0)) == 300, "current-month population baseline survives save and load")
 	for delta_key in ["security_change", "environment_change", "traffic_change", "education_change", "healthcare_change"]:
 		_check(restored_month_summary.has(delta_key), "service metric delta survives save and load: %s" % delta_key)
 	_test_main_level_crossing_navigation_policy(main)
@@ -919,6 +1024,38 @@ func _check(condition: bool, message: String) -> void:
 		return
 	_failed = true
 	push_error("Main integration check failed: %s" % message)
+
+
+func _metric_baselines_equal(left_value: Variant, right_value: Variant) -> bool:
+	if not left_value is Dictionary or not right_value is Dictionary:
+		return false
+	var left: Dictionary = left_value
+	var right: Dictionary = right_value
+	if left.size() != right.size():
+		return false
+	for metric_name: String in ["security", "environment", "traffic", "education", "healthcare", "satisfaction"]:
+		if not left.has(metric_name) or not right.has(metric_name):
+			return false
+		if int(left[metric_name]) != int(right[metric_name]):
+			return false
+	return true
+
+
+func _calculated_satisfaction_target(main) -> int:
+	var result: Dictionary = main.CitySimulationServiceScript.satisfaction_result(
+		main.call("_city_metrics_snapshot"),
+		main.tax_rates,
+		main.TAX_DEFS,
+		main.utility_fees,
+		main.UTILITY_DEFS,
+		main.service_fees,
+		main.SERVICE_DEFS,
+		main.call("_authoritative_building_records"),
+		main.policies,
+		main.active_policies,
+		main.call("_active_law_value", "utility_relief")
+	)
+	return int(result.get("satisfaction", main.total_satisfaction))
 
 
 func _emit_performance_profile_phase(phase: String) -> void:

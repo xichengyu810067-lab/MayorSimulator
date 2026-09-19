@@ -27,7 +27,7 @@ func _run() -> void:
 		await process_frame
 		if not main.start_screen.is_loading():
 			break
-	_check(main.tutorial_overlay != null and main.tutorial_overlay.is_open(), "new game pauses on the story tutorial")
+	_check(main.tutorial_overlay != null and main.tutorial_overlay.is_open(), "new game opens the story tutorial")
 	main.tutorial_overlay.close_as_completed(false)
 	await process_frame
 
@@ -104,15 +104,15 @@ func _run() -> void:
 	var paused_day: int = int(main.vertical_slice.game_day())
 	for _second in range(120):
 		main.vertical_slice.process_frame(1.0)
-	_check(main.vertical_slice.game_day() == paused_day, "paused simulation does not advance while the game is unfocused or closed")
+	_check(main.vertical_slice.game_day() == paused_day, "an explicit terminal/start pause ignores wall-clock input")
 	main.vertical_slice.set_time_paused(false)
 	for _second in range(120):
 		main.vertical_slice.process_frame(1.0)
 	_check(main.vertical_slice.game_day() == paused_day + 1, "active simulation advances exactly one day after 120 seconds")
 	main.notification(Node.NOTIFICATION_APPLICATION_FOCUS_OUT)
-	_check(main.vertical_slice.is_time_paused(), "losing application focus automatically pauses time")
+	_check(not main.vertical_slice.is_time_paused(), "losing application focus keeps active-city time running")
 	main.notification(Node.NOTIFICATION_APPLICATION_FOCUS_IN)
-	_check(not main.vertical_slice.is_time_paused(), "returning to the application resumes time")
+	_check(not main.vertical_slice.is_time_paused(), "returning to the application preserves continuous time")
 
 	var exit_code := 1 if _failed else 0
 	if not _failed:
@@ -125,6 +125,10 @@ func _test_two_minute_clock() -> void:
 	for _second in range(119):
 		_check(clock.consume_frame(1.0) == 0, "clock does not advance early")
 	_check(clock.consume_frame(1.0) == 1, "clock advances on the 120th second")
+	_check(clock.consume_frame(240.0) == 0 and is_equal_approx(clock.accumulator_seconds, 1.0), "an anomalous frame is capped without replaying missed days")
+	var bounded_accumulator: float = float(clock.accumulator_seconds)
+	_check(clock.consume_frame(NAN) == 0 and clock.consume_frame(INF) == 0, "non-finite frame deltas are rejected")
+	_check(is_equal_approx(clock.accumulator_seconds, bounded_accumulator), "non-finite deltas leave the accumulator unchanged")
 	clock.paused = true
 	for _second in range(120):
 		_check(clock.consume_frame(1.0) == 0, "paused wall-clock input is ignored")

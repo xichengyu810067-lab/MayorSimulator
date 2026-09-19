@@ -71,6 +71,10 @@ var _blocked_tiles: Dictionary = {}
 var _crossing_tile_ids := PackedInt32Array()
 var _crossing_states: Dictionary = {}
 var _grid_cell_size := SquareGridLayoutScript.CELL_SIZE
+var _source_map_snapshot: Dictionary = {}
+var _tutorial_reserved_tile_ids := PackedInt32Array()
+var _navigation_revision := 0
+var _navigation_authority_snapshot: Dictionary = {}
 
 
 func mount(
@@ -89,6 +93,9 @@ func unmount() -> void:
 	_clear_actors()
 	_layer = null
 	_navigation = null
+	_source_map_snapshot.clear()
+	_navigation_authority_snapshot.clear()
+	_tutorial_reserved_tile_ids.clear()
 	_tile_centers.clear()
 	_tile_ids_by_display_order.clear()
 	_blocked_tiles.clear()
@@ -125,7 +132,7 @@ func rebuild_actor_pool(authoritative_proxies: Array[Dictionary], dark_mode: boo
 		var path: PackedVector2Array = (
 			_navigation.find_path(foot_position, destination)
 			if _navigation != null
-			else PackedVector2Array([foot_position, destination])
+			else PackedVector2Array()
 		)
 		var path_index := 1 if path.size() > 1 and path[0].distance_to(foot_position) <= NPC_WAYPOINT_REACHED_DISTANCE else 0
 		var position := foot_position - NPC_ACTOR_FEET_OFFSET
@@ -152,6 +159,7 @@ func rebuild_actor_pool(authoritative_proxies: Array[Dictionary], dark_mode: boo
 			"home_position": foot_position,
 			"path": path,
 			"path_index": path_index,
+			"path_navigation_revision": _navigation_revision,
 			"speed": 28.0 + float(posmod(i * 5, 7)) * 2.0,
 			"velocity": Vector2.ZERO,
 			"travelled_distance": 0.0,
@@ -219,10 +227,21 @@ func set_interaction_enabled(
 
 func configure_navigation(map_snapshot: Dictionary) -> void:
 	_navigation = CityNavigationGridScript.new(NPC_FOOT_RADIUS)
+	_navigation_authority_snapshot.clear()
 	sync_map_snapshot(map_snapshot)
 
 
-func sync_map_snapshot(map_snapshot: Dictionary) -> void:
+func sync_map_snapshot(map_snapshot: Dictionary, remember_source: bool = true) -> void:
+	if remember_source:
+		_source_map_snapshot = map_snapshot.duplicate(true)
+	var authority_snapshot := _navigation_authority_for_snapshot(map_snapshot)
+	var authority_changed := authority_snapshot != _navigation_authority_snapshot
+	var navigation_drifted := (
+		_navigation != null
+		and not _navigation_grid_matches_authority(authority_snapshot)
+	)
+	if not authority_changed and not navigation_drifted and _navigation != null:
+		return
 	_tile_centers = PackedVector2Array(map_snapshot.get("tile_centers", PackedVector2Array())).duplicate()
 	_tile_ids_by_display_order = PackedInt32Array(
 		map_snapshot.get("tile_ids_by_display_order", PackedInt32Array())
@@ -252,6 +271,11 @@ func sync_map_snapshot(map_snapshot: Dictionary) -> void:
 		return
 	var building_centers := Dictionary(map_snapshot.get("building_centers", {})).duplicate(true)
 	var construction_centers := Dictionary(map_snapshot.get("construction_centers", {})).duplicate(true)
+	for tile_id: int in _tutorial_reserved_tile_ids:
+		if tile_id < 0 or tile_id >= _tile_centers.size():
+			continue
+		construction_centers[tile_id] = _tile_centers[tile_id]
+		_blocked_tiles[tile_id] = true
 	var derived_half_extents := Vector2(
 		maxf(0.5, _grid_cell_size.x * 0.5),
 		maxf(0.5, _grid_cell_size.y * 0.5)
@@ -301,6 +325,318 @@ func sync_map_snapshot(map_snapshot: Dictionary) -> void:
 				structure_half_extents
 			)
 	_sync_navigation_crossing_apertures()
+	if authority_changed or navigation_drifted:
+		_navigation_authority_snapshot = authority_snapshot
+		_navigation_revision += 1
+
+
+func _navigation_authority_for_snapshot(map_snapshot: Dictionary) -> Dictionary:
+	var crossing_tile_ids := PackedInt32Array()
+	for tile_variant: Variant in map_snapshot.get("crossing_tile_ids", []):
+		var tile_id := int(tile_variant)
+		if tile_id >= 0 and not crossing_tile_ids.has(tile_id):
+			crossing_tile_ids.append(tile_id)
+	crossing_tile_ids.sort()
+	return {
+		"tile_centers": PackedVector2Array(
+			map_snapshot.get("tile_centers", PackedVector2Array())
+		).duplicate(),
+		"tile_ids_by_display_order": PackedInt32Array(
+			map_snapshot.get("tile_ids_by_display_order", PackedInt32Array())
+		).duplicate(),
+		"grid_cell_size": Vector2(map_snapshot.get(
+			"grid_cell_size", map_snapshot.get("iso_tile_size", _grid_cell_size)
+		)),
+		"crossing_tile_ids": crossing_tile_ids,
+		"blocked_tiles": Dictionary(map_snapshot.get("blocked_tiles", {})).duplicate(true),
+		"terrain_blockers": Dictionary(map_snapshot.get("terrain_blockers", {})).duplicate(true),
+		"flattened_terrain_centers": Dictionary(
+			map_snapshot.get("flattened_terrain_centers", {})
+		).duplicate(true),
+		"building_centers": Dictionary(map_snapshot.get("building_centers", {})).duplicate(true),
+		"construction_centers": Dictionary(
+			map_snapshot.get("construction_centers", {})
+		).duplicate(true),
+		"terrain_blocker_half_extents": _snapshot_vector2(
+			map_snapshot,
+			["terrain_blocker_half_extents"],
+			Vector2(map_snapshot.get(
+				"grid_cell_size", map_snapshot.get("iso_tile_size", _grid_cell_size)
+			)) * 0.5
+		),
+		"structure_blocker_half_extents": _snapshot_vector2(
+			map_snapshot,
+			["dynamic_blocker_half_extents", "structure_blocker_half_extents"],
+			Vector2(map_snapshot.get(
+				"grid_cell_size", map_snapshot.get("iso_tile_size", _grid_cell_size)
+			)) * 0.5
+		),
+		"tutorial_reserved_tile_ids": _tutorial_reserved_tile_ids.duplicate(),
+	}
+
+
+func _navigation_grid_matches_authority(authority_snapshot: Dictionary) -> bool:
+	if _navigation == null or not _navigation.has_method("get_debug_dynamic_polygons"):
+		return false
+	var expected_records := _navigation_map_owned_records_for_authority(authority_snapshot)
+	var actual_records: Dictionary = {}
+	for blocker_variant: Variant in _navigation.get_debug_dynamic_polygons():
+		var blocker: Dictionary = blocker_variant
+		var source := str(blocker.get("source", ""))
+		if source in ["terrain", "building", "construction"]:
+			actual_records[str(blocker.get("id", ""))] = blocker
+	if actual_records.size() != expected_records.size():
+		return false
+	for blocker_id_variant: Variant in expected_records.keys():
+		var blocker_id := str(blocker_id_variant)
+		if (
+			not actual_records.has(blocker_id)
+			or not _navigation_blocker_records_match(
+				expected_records[blocker_id], actual_records[blocker_id]
+			)
+		):
+			return false
+	if _navigation.has_method("get_debug_flattened_terrain_apertures"):
+		var actual_flattened: Dictionary = {}
+		for aperture_variant: Variant in _navigation.get_debug_flattened_terrain_apertures():
+			var aperture: Dictionary = aperture_variant
+			actual_flattened[int(aperture.get("tile_index", -1))] = aperture
+		var expected_flattened := _navigation_flattened_records_for_authority(
+			authority_snapshot
+		)
+		if actual_flattened.size() != expected_flattened.size():
+			return false
+		for tile_variant: Variant in expected_flattened.keys():
+			var tile_id := int(tile_variant)
+			if (
+				not actual_flattened.has(tile_id)
+				or not _navigation_flattened_records_match(
+					expected_flattened[tile_id], actual_flattened[tile_id]
+				)
+			):
+				return false
+	if _navigation.has_method("get_debug_transport_crossing_aperture_tile_ids"):
+		var actual_open := PackedInt32Array(
+			_navigation.get_debug_transport_crossing_aperture_tile_ids()
+		)
+		actual_open.sort()
+		var expected_open: PackedInt32Array = _open_crossing_tile_ids()
+		expected_open.sort()
+		if actual_open != expected_open:
+			return false
+	return true
+
+
+func _navigation_map_owned_records_for_authority(authority_snapshot: Dictionary) -> Dictionary:
+	var records: Dictionary = {}
+	var terrain_extents := _navigation_safe_half_extents(Vector2(
+		authority_snapshot.get("terrain_blocker_half_extents", Vector2.ONE * 0.5)
+	))
+	var structure_extents := _navigation_safe_half_extents(Vector2(
+		authority_snapshot.get("structure_blocker_half_extents", Vector2.ONE * 0.5)
+	))
+	for tile_variant: Variant in Dictionary(authority_snapshot.get("terrain_blockers", {})).keys():
+		var terrain_variant: Variant = Dictionary(
+			authority_snapshot.get("terrain_blockers", {})
+		)[tile_variant]
+		var center_variant: Variant = null
+		var terrain_kind := "terrain"
+		if terrain_variant is Dictionary:
+			var terrain_record: Dictionary = terrain_variant
+			center_variant = terrain_record.get("center", terrain_record.get("position", null))
+			terrain_kind = str(terrain_record.get("kind", "terrain"))
+		elif terrain_variant is Vector2:
+			center_variant = terrain_variant
+		if not center_variant is Vector2:
+			continue
+		var tile_id := int(tile_variant)
+		var blocker_id := "terrain:%d" % tile_id
+		records[blocker_id] = _navigation_expected_rect_record(
+			blocker_id,
+			center_variant,
+			terrain_extents,
+			terrain_kind if not terrain_kind.is_empty() else "terrain",
+			tile_id,
+			"terrain"
+		)
+	for tile_variant: Variant in Dictionary(authority_snapshot.get("building_centers", {})).keys():
+		var center_variant: Variant = Dictionary(
+			authority_snapshot.get("building_centers", {})
+		)[tile_variant]
+		if not center_variant is Vector2:
+			continue
+		var tile_id := int(tile_variant)
+		var blocker_id := "building:%d" % tile_id
+		records[blocker_id] = _navigation_expected_rect_record(
+			blocker_id, center_variant, structure_extents, "building", tile_id, "building"
+		)
+	var construction_centers := Dictionary(
+		authority_snapshot.get("construction_centers", {})
+	).duplicate(true)
+	var tile_centers := PackedVector2Array(
+		authority_snapshot.get("tile_centers", PackedVector2Array())
+	)
+	for tile_variant: Variant in authority_snapshot.get("tutorial_reserved_tile_ids", []):
+		var tile_id := int(tile_variant)
+		if tile_id >= 0 and tile_id < tile_centers.size():
+			construction_centers[tile_id] = tile_centers[tile_id]
+	for tile_variant: Variant in construction_centers.keys():
+		var center_variant: Variant = construction_centers[tile_variant]
+		if not center_variant is Vector2:
+			continue
+		var tile_id := int(tile_variant)
+		var blocker_id := "construction:%d" % tile_id
+		records[blocker_id] = _navigation_expected_rect_record(
+			blocker_id,
+			center_variant,
+			structure_extents,
+			"construction",
+			tile_id,
+			"construction"
+		)
+	return records
+
+
+func _navigation_flattened_records_for_authority(authority_snapshot: Dictionary) -> Dictionary:
+	var records: Dictionary = {}
+	var half_extents := _navigation_safe_half_extents(Vector2(
+		authority_snapshot.get("terrain_blocker_half_extents", Vector2.ONE * 0.5)
+	))
+	var walkable_extents := Vector2(
+		maxf(0.5, half_extents.x - NPC_FOOT_RADIUS),
+		maxf(0.5, half_extents.y - NPC_FOOT_RADIUS)
+	)
+	var centers := Dictionary(authority_snapshot.get("flattened_terrain_centers", {}))
+	for tile_variant: Variant in centers.keys():
+		var center_variant: Variant = centers[tile_variant]
+		if not center_variant is Vector2:
+			continue
+		var tile_id := int(tile_variant)
+		records[tile_id] = {
+			"id": "flattened_terrain:%d" % tile_id,
+			"tile_index": tile_id,
+			"center": center_variant,
+			"half_extents": half_extents,
+			"walkable_half_extents": walkable_extents,
+			"points": _navigation_rect_points(center_variant, walkable_extents),
+		}
+	return records
+
+
+func _navigation_expected_rect_record(
+	blocker_id: String,
+	center: Vector2,
+	half_extents: Vector2,
+	kind: String,
+	tile_id: int,
+	source: String
+) -> Dictionary:
+	return {
+		"id": blocker_id,
+		"kind": kind,
+		"source": source,
+		"tile_index": tile_id,
+		"center": center,
+		"half_extents": half_extents,
+		"points": _navigation_rect_points(center, half_extents),
+	}
+
+
+func _navigation_blocker_records_match(expected: Dictionary, actual: Dictionary) -> bool:
+	return (
+		str(actual.get("id", "")) == str(expected.get("id", ""))
+		and str(actual.get("source", "")) == str(expected.get("source", ""))
+		and str(actual.get("kind", "")) == str(expected.get("kind", ""))
+		and int(actual.get("tile_index", -1)) == int(expected.get("tile_index", -1))
+		and Vector2(actual.get("center", Vector2.ZERO)).is_equal_approx(
+			Vector2(expected.get("center", Vector2.ZERO))
+		)
+		and Vector2(actual.get("half_extents", Vector2.ZERO)).is_equal_approx(
+			Vector2(expected.get("half_extents", Vector2.ZERO))
+		)
+		and _navigation_points_match(
+			expected.get("points", PackedVector2Array()),
+			actual.get("points", PackedVector2Array())
+		)
+	)
+
+
+func _navigation_flattened_records_match(expected: Dictionary, actual: Dictionary) -> bool:
+	return (
+		str(actual.get("id", "")) == str(expected.get("id", ""))
+		and int(actual.get("tile_index", -1)) == int(expected.get("tile_index", -1))
+		and Vector2(actual.get("center", Vector2.ZERO)).is_equal_approx(
+			Vector2(expected.get("center", Vector2.ZERO))
+		)
+		and Vector2(actual.get("half_extents", Vector2.ZERO)).is_equal_approx(
+			Vector2(expected.get("half_extents", Vector2.ZERO))
+		)
+		and Vector2(actual.get("walkable_half_extents", Vector2.ZERO)).is_equal_approx(
+			Vector2(expected.get("walkable_half_extents", Vector2.ZERO))
+		)
+		and _navigation_points_match(
+			expected.get("points", PackedVector2Array()),
+			actual.get("points", PackedVector2Array())
+		)
+	)
+
+
+func _navigation_points_match(expected_variant: Variant, actual_variant: Variant) -> bool:
+	var expected := PackedVector2Array(expected_variant)
+	var actual := PackedVector2Array(actual_variant)
+	if expected.size() != actual.size():
+		return false
+	for point_index in expected.size():
+		if not expected[point_index].is_equal_approx(actual[point_index]):
+			return false
+	return true
+
+
+func _navigation_safe_half_extents(half_extents: Vector2) -> Vector2:
+	return Vector2(maxf(0.5, half_extents.x), maxf(0.5, half_extents.y))
+
+
+func _navigation_rect_points(center: Vector2, half_extents: Vector2) -> PackedVector2Array:
+	return PackedVector2Array([
+		center + Vector2(-half_extents.x, -half_extents.y),
+		center + Vector2(half_extents.x, -half_extents.y),
+		center + Vector2(half_extents.x, half_extents.y),
+		center + Vector2(-half_extents.x, half_extents.y),
+	])
+
+
+func set_tutorial_reserved_tiles(tile_ids: Array) -> void:
+	var normalized := PackedInt32Array()
+	for tile_variant: Variant in tile_ids:
+		var tile_id := int(tile_variant)
+		if tile_id < 0 or tile_id >= _tile_centers.size() or normalized.has(tile_id):
+			continue
+		normalized.append(tile_id)
+	normalized.sort()
+	if normalized == _tutorial_reserved_tile_ids:
+		return
+	_tutorial_reserved_tile_ids = normalized
+	if not _source_map_snapshot.is_empty():
+		sync_map_snapshot(_source_map_snapshot, false)
+	if not _proxy_states.is_empty():
+		repath_all()
+
+
+func clear_tutorial_reserved_tiles() -> void:
+	set_tutorial_reserved_tiles([])
+
+
+func tutorial_reservation_snapshot() -> Dictionary:
+	var inside_indices: Array[int] = []
+	for index in _proxy_states.size():
+		var feet := Vector2(_proxy_states[index].get("foot_position", Vector2.ZERO))
+		if _tutorial_reserved_tile_ids.has(_npc_tile_at_feet(feet)):
+			inside_indices.append(index)
+	return {
+		"active": not _tutorial_reserved_tile_ids.is_empty(),
+		"tile_ids": Array(_tutorial_reserved_tile_ids),
+		"npc_indices_inside": inside_indices,
+	}
 
 
 ## Crossing animation and NPC navigation share the same authoritative closed
@@ -313,6 +649,7 @@ func set_crossing_states(states: Dictionary) -> void:
 	if currently_open == previously_open:
 		return
 	_sync_navigation_crossing_apertures()
+	_navigation_revision += 1
 	if not _proxy_states.is_empty():
 		repath_all()
 
@@ -390,6 +727,10 @@ func _sync_terrain_blockers_fallback(
 
 func get_navigation_grid():
 	return _navigation
+
+
+func navigation_revision() -> int:
+	return _navigation_revision
 
 
 func visible_count() -> int:
@@ -685,26 +1026,19 @@ func _find_available_npc_route_slot(
 func _npc_route_slot_is_walkable(slot_index: int) -> bool:
 	var start := _npc_route_position(slot_index, 0)
 	var finish := _npc_route_position(slot_index, 1)
-	if _navigation != null:
-		return _navigation.is_segment_walkable(
-			start + NPC_ACTOR_FEET_OFFSET,
-			finish + NPC_ACTOR_FEET_OFFSET
-		)
-	var sample_count := maxi(2, ceili(start.distance_to(finish) / NPC_ROUTE_SAMPLE_STEP))
-	for sample_index in range(sample_count + 1):
-		var position := start.lerp(finish, float(sample_index) / float(sample_count))
-		if not _npc_position_is_scenery_safe(position):
-			return false
-		var tile_index := _npc_tile_at_feet(position + NPC_ACTOR_FEET_OFFSET)
-		if _npc_tile_has_obstacle(tile_index):
-			return false
-	return true
+	if _navigation == null:
+		return false
+	return _navigation.is_segment_walkable(
+		start + NPC_ACTOR_FEET_OFFSET,
+		finish + NPC_ACTOR_FEET_OFFSET
+	)
 
 
 func _npc_position_is_scenery_safe(position: Vector2) -> bool:
-	if _navigation != null:
-		return _navigation.is_position_walkable(position + NPC_ACTOR_FEET_OFFSET)
-	return NPC_SCENERY_SAFE_RECT.encloses(Rect2(position, NPC_ACTOR_SIZE))
+	return (
+		_navigation != null
+		and _navigation.is_position_walkable(position + NPC_ACTOR_FEET_OFFSET)
+	)
 
 
 func _npc_tile_at_feet(feet_position: Vector2) -> int:
@@ -847,6 +1181,9 @@ func step(delta: float) -> void:
 
 
 func _update_step(delta: float) -> void:
+	if _navigation == null:
+		_stop_all_for_missing_navigation()
+		return
 	for i in _proxy_states.size():
 		if i >= _actors.size():
 			continue
@@ -864,6 +1201,18 @@ func _update_step(delta: float) -> void:
 		var moved_distance := 0.0
 		var blocked_waiting := false
 		var state := "waiting"
+		if int(npc.get("path_navigation_revision", -1)) != _navigation_revision:
+			_set_destination(
+				i,
+				Vector2(npc.get("destination", foot_position)),
+				true,
+				bool(npc.get("debug_destination_locked", false)),
+				true
+			)
+			npc = _proxy_states[i]
+			foot_position = Vector2(npc.get("foot_position", foot_position))
+			previous_foot = foot_position
+			velocity = Vector2.ZERO
 
 		if actor.is_hovered():
 			npc["wait"] = maxf(float(npc.get("wait", 0.0)), 0.18)
@@ -871,8 +1220,10 @@ func _update_step(delta: float) -> void:
 		elif float(npc.get("wait", 0.0)) > 0.0:
 			npc["wait"] = maxf(0.0, float(npc.get("wait", 0.0)) - delta)
 			velocity = velocity.move_toward(Vector2.ZERO, NPC_DECELERATION * delta)
-		elif _navigation != null and not _navigation.is_position_walkable(foot_position):
-			var safe_variant: Variant = _navigation.nearest_safe_position(foot_position, 190.0)
+		elif not _navigation.is_position_walkable(foot_position):
+			var safe_variant: Variant = _navigation.nearest_safe_evacuation_position(
+				foot_position, 190.0
+			)
 			if safe_variant == null:
 				velocity = Vector2.ZERO
 				blocked_waiting = true
@@ -887,6 +1238,9 @@ func _update_step(delta: float) -> void:
 				var proposed_evacuation := foot_position + evacuation_step
 				if (
 					proposed_evacuation.distance_to(safe_position) < foot_position.distance_to(safe_position)
+					and _navigation.is_evacuation_segment_walkable(
+						foot_position, proposed_evacuation
+					)
 					and not _npc_foot_overlaps_other(i, proposed_evacuation)
 				):
 					foot_position = proposed_evacuation
@@ -931,9 +1285,8 @@ func _update_step(delta: float) -> void:
 				if movement.length() > waypoint_distance:
 					movement = direction * waypoint_distance
 				var proposed := foot_position + movement
-				var segment_safe: bool = (
-					_navigation == null
-					or _navigation.is_segment_walkable(foot_position, proposed)
+				var segment_safe: bool = _navigation.is_segment_walkable(
+					foot_position, proposed
 				)
 				var blocking_index := _npc_blocking_index(i, proposed) if segment_safe else -1
 				if segment_safe and blocking_index < 0:
@@ -979,6 +1332,21 @@ func _update_step(delta: float) -> void:
 		actor.position = Vector2(npc["pos"])
 		actor.call("set_locomotion", actual_velocity, moved_distance, delta)
 		actor.z_index = int(foot_position.y)
+
+
+func _stop_all_for_missing_navigation() -> void:
+	for index in _proxy_states.size():
+		var npc: Dictionary = _proxy_states[index]
+		npc["velocity"] = Vector2.ZERO
+		npc["path"] = PackedVector2Array()
+		npc["path_index"] = 0
+		npc["path_navigation_revision"] = -1
+		npc["is_walking"] = false
+		npc["state"] = "waiting"
+		npc["blocked_waiting"] = true
+		_proxy_states[index] = npc
+		if index < _actors.size() and is_instance_valid(_actors[index]):
+			_actors[index].call("set_locomotion", Vector2.ZERO, 0.0, 0.0)
 
 
 func _assign_next_wander_destination(npc_index: int) -> bool:
@@ -1046,6 +1414,7 @@ func _set_destination(
 		npc["is_walking"] = false
 		npc["blocked_waiting"] = true
 		npc["repath_cooldown"] = NPC_REPATH_INTERVAL
+		npc["path_navigation_revision"] = _navigation_revision
 		_proxy_states[npc_index] = npc
 		if npc_index < _actors.size():
 			_actors[npc_index].call("set_locomotion", Vector2.ZERO, 0.0, 0.0)
@@ -1063,6 +1432,7 @@ func _set_destination(
 	npc["is_walking"] = false
 	npc["blocked_waiting"] = false
 	npc["repath_cooldown"] = NPC_REPATH_INTERVAL
+	npc["path_navigation_revision"] = _navigation_revision
 	_proxy_states[npc_index] = npc
 	return true
 
@@ -1117,6 +1487,8 @@ func get_acceptance_snapshot(npc_index: int) -> Dictionary:
 		"destination": Vector2(npc.get("destination", Vector2.ZERO)),
 		"replan_count": int(npc.get("replan_count", 0)),
 		"blocked_waiting": bool(npc.get("blocked_waiting", false)),
+		"navigation_revision": _navigation_revision,
+		"path_navigation_revision": int(npc.get("path_navigation_revision", -1)),
 	}
 
 

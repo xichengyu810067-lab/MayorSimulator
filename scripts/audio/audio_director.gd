@@ -24,6 +24,7 @@ var music_player: AudioStreamPlayer
 var sfx_players: Array[AudioStreamPlayer] = []
 var _next_sfx_player := 0
 var _shutdown_settled := false
+var _cinematic_music_active := false
 
 
 func _ready() -> void:
@@ -50,7 +51,7 @@ func _ready() -> void:
 		player.volume_db = SFX_BASE_DB
 		add_child(player)
 		sfx_players.append(player)
-	_apply_bus_volume(MUSIC_BUS, music_volume)
+	_apply_music_bus_state()
 	_apply_bus_volume(SFX_BUS, sfx_volume)
 
 
@@ -97,7 +98,7 @@ func detach_streams() -> void:
 
 
 func start_music() -> void:
-	if music_enabled and music_player != null and not music_player.playing:
+	if music_enabled and not _cinematic_music_active and music_player != null and not music_player.playing:
 		music_player.play()
 
 
@@ -108,6 +109,7 @@ func stop_music() -> void:
 
 func set_music_enabled(enabled: bool) -> void:
 	music_enabled = enabled
+	_apply_music_bus_state()
 	if music_enabled:
 		start_music()
 	else:
@@ -120,7 +122,7 @@ func set_sfx_enabled(enabled: bool) -> void:
 
 func set_music_volume(value: float) -> void:
 	music_volume = clampf(value, 0.0, 1.0)
-	_apply_bus_volume(MUSIC_BUS, music_volume)
+	_apply_music_bus_state()
 
 
 func set_sfx_volume(value: float) -> void:
@@ -134,7 +136,24 @@ func audio_state() -> Dictionary:
 		"sfx_enabled": sfx_enabled,
 		"music_volume": music_volume,
 		"sfx_volume": sfx_volume,
+		"cinematic_music_active": _cinematic_music_active,
 	}
+
+
+func begin_cinematic_music() -> void:
+	if _cinematic_music_active:
+		return
+	_cinematic_music_active = true
+	stop_music()
+	_apply_music_bus_state()
+
+
+func end_cinematic_music() -> void:
+	if not _cinematic_music_active:
+		return
+	_cinematic_music_active = false
+	_apply_music_bus_state()
+	start_music()
 
 
 func play_ui_click() -> void:
@@ -191,4 +210,13 @@ func _apply_bus_volume(bus_name: StringName, linear_volume: float) -> void:
 		return
 	var safe_volume := clampf(linear_volume, 0.0, 1.0)
 	AudioServer.set_bus_mute(bus_index, safe_volume <= 0.0001)
+	AudioServer.set_bus_volume_db(bus_index, linear_to_db(maxf(safe_volume, 0.0001)))
+
+
+func _apply_music_bus_state() -> void:
+	var bus_index := AudioServer.get_bus_index(MUSIC_BUS)
+	if bus_index < 0:
+		return
+	var safe_volume := clampf(music_volume, 0.0, 1.0)
+	AudioServer.set_bus_mute(bus_index, not music_enabled or safe_volume <= 0.0001)
 	AudioServer.set_bus_volume_db(bus_index, linear_to_db(maxf(safe_volume, 0.0001)))

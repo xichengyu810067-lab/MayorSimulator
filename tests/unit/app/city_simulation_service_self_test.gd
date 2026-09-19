@@ -193,10 +193,13 @@ func _initialize() -> void:
 
 	var pressure_patch: Dictionary = CitySimulationServiceScript.city_pressure_metric_patch(metrics, 300, city_grid)
 	_check(pressure_patch == {"traffic": 67, "environment": 68, "security": 69, "satisfaction": 70}, "monthly city pressure formulas are unchanged")
+	_check(CitySimulationServiceScript.city_pressure_metric_deltas(300, city_grid) == {"traffic": -3, "environment": -2, "security": -1, "satisfaction": 0}, "city pressure exposes unclamped deltas for saturated baseline accounting")
 	var effect_patch: Dictionary = CitySimulationServiceScript.metric_effect_patch(metrics, {"security": 3, "environment": -2, "satisfaction": 4})
 	_check(int(effect_patch.get("security", 0)) == 73 and int(effect_patch.get("environment", 0)) == 68 and int(effect_patch.get("satisfaction", 0)) == 74, "building effects return a bounded authoritative metric patch")
 	var policy_patch: Dictionary = CitySimulationServiceScript.monthly_policy_metric_patch(metrics, policies, active_policies)
 	_check(int(policy_patch.get("environment", 0)) == 71 and int(policy_patch.get("traffic", 0)) == 72 and int(policy_patch.get("satisfaction", 0)) == 72, "monthly policy effects preserve their metric deltas")
+	var policy_deltas: Dictionary = CitySimulationServiceScript.monthly_policy_metric_deltas(policies, active_policies)
+	_check(int(policy_deltas.get("environment", 0)) == 1 and int(policy_deltas.get("traffic", 0)) == 2 and int(policy_deltas.get("satisfaction", 0)) == 2, "monthly policy deltas remain available before visible-score clamping")
 
 	var satisfaction_result: Dictionary = CitySimulationServiceScript.satisfaction_result(
 		metrics,

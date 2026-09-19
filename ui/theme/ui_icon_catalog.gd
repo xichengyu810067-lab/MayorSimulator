@@ -57,6 +57,7 @@ const KEY_TO_FILENAME := {
 	"finance": "treasury.png",
 	"treasury": "treasury.png",
 	"population": "population.png",
+	"capacity": "building_housing.png",
 	"satisfaction": "wellbeing.png",
 	"wellbeing": "wellbeing.png",
 	"security": "building_civic.png",

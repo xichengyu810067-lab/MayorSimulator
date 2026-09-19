@@ -207,9 +207,32 @@ func _test_mode_compatible_supporting_infrastructure() -> void:
 func _test_continuous_session_and_round_trip() -> void:
 	var coordinator = CoordinatorScript.new(20_260_902, 3_000_000)
 	coordinator.terrain_map = CityTerrainMapScript.new()
-	var first_tile := _tile(coordinator, 2, 3)
-	var second_tile := _tile(coordinator, 4, 3)
+	# Keep both station footprints north of a continuous, unoccupied road corridor.
+	var first_tile := _tile(coordinator, 2, 4)
+	var second_tile := _tile(coordinator, 6, 4)
+	var blocked_tile := _tile(coordinator, 4, 3) # Human-reviewed tile 19.
 	var city_grid := _empty_city_grid(coordinator)
+	var road_tiles := _horizontal_tiles(coordinator, 2, 5, 6)
+	var depot_tile := _tile(coordinator, 1, 5)
+	var first_quote := coordinator.placement_footprint_quote("公車站", first_tile, 5)
+	var second_quote := coordinator.placement_footprint_quote("公車站", second_tile, 5)
+	var blocked_quote := coordinator.placement_footprint_quote("公車站", blocked_tile, 5)
+	var road_quote := coordinator.transport_project_quote("road", "build", road_tiles, 10, city_grid)
+	var depot_quote := coordinator.transport_project_quote("bus_depot", "build", [depot_tile], 10, city_grid)
+	if not (bool(first_quote.get("ok", false)) and bool(first_quote.get("can_afford", false))
+		and int(first_quote.get("available_workers", 0)) >= 5
+		and bool(second_quote.get("ok", false)) and bool(second_quote.get("can_afford", false))
+		and int(second_quote.get("available_workers", 0)) >= 5
+		and bool(road_quote.get("ok", false)) and bool(road_quote.get("can_start", false))
+		and bool(depot_quote.get("ok", false)) and bool(depot_quote.get("can_start", false))
+		and not bool(blocked_quote.get("ok", false))
+		and int(blocked_quote.get("blocked_tile_id", -1)) == 19):
+		_check(false, "transport fixture preflight: first=%d %s second=%d %s blocked=%d %s road=%s %s depot=%d %s funds=%d state=%s" % [
+			first_tile, str(first_quote), second_tile, str(second_quote), blocked_tile, str(blocked_quote),
+			str(road_tiles), str(road_quote), depot_tile, str(depot_quote), coordinator.treasury_balance(),
+			str(coordinator.transport_planning_session_snapshot())
+		])
+		return
 	var begun: Dictionary = coordinator.begin_transport_planning_session("公車站")
 	_check(bool(begun.get("ok", false)), "a bus-station blueprint starts one planning session")
 	var session_id := str(begun.get("session", {}).get("id", ""))
@@ -232,8 +255,28 @@ func _test_continuous_session_and_round_trip() -> void:
 		Array(coordinator.transport_planning_session_snapshot().get("station_refs", [])) == refs_after_first,
 		"invalid second station leaves the first station reference unchanged"
 	)
+	coordinator.drain_ui_events()
+	var ledger_before_blocked: int = int(coordinator.session.state.ledger.get_entries().size())
+	var facts_before_blocked: int = int(coordinator.session.state.event_book.size())
+	var blocked: Dictionary = coordinator.place_transport_session_station(blocked_tile, 5)
+	_check(not bool(blocked.get("ok", false)) and int(blocked.get("blocked_tile_id", -1)) == 19,
+		"human-reviewed tile 19 remains rejected: %s" % str(blocked))
+	_check(coordinator.treasury_balance() == funds_after_first and coordinator.construction.jobs.size() == jobs_after_first,
+		"blocked tile 19 creates no charge or construction job")
+	_check(coordinator.session.state.ledger.get_entries().size() == ledger_before_blocked
+		and coordinator.session.state.event_book.size() == facts_before_blocked
+		and coordinator.drain_ui_events().is_empty(), "blocked tile 19 creates no ledger, fact, or UI event")
+	_check(Array(coordinator.transport_planning_session_snapshot().get("station_refs", [])) == refs_after_first,
+		"blocked tile 19 creates no station reference")
+	var live_second_quote := coordinator.placement_footprint_quote("公車站", second_tile, 5)
+	if not bool(live_second_quote.get("ok", false)) or not bool(live_second_quote.get("can_afford", false)) or int(live_second_quote.get("available_workers", 0)) < 5:
+		_check(false, "second station live preflight: tile=%d quote=%s state=%s" % [
+			second_tile, str(live_second_quote), str(coordinator.transport_planning_session_snapshot())])
+		return
 	var second: Dictionary = coordinator.place_transport_session_station(second_tile, 5)
-	_check(bool(second.get("ok", false)), "same session starts a second station of the selected type")
+	_check(bool(second.get("ok", false)), "same session starts a second station of the selected type: %s" % str(second))
+	if not bool(second.get("ok", false)):
+		return
 	_check(
 		Array(coordinator.transport_planning_session_snapshot().get("station_refs", [])).size() == 2,
 		"one session retains both station job identities"
@@ -265,7 +308,6 @@ func _test_continuous_session_and_round_trip() -> void:
 	_check(_all_refs_status(station_refs, "completed"), "both completed jobs materialize station identities")
 	_check(not str(Dictionary(station_refs[0]).get("station_id", "")).is_empty(), "completed station reference points at topology identity")
 
-	var road_tiles := _horizontal_tiles(restored, 1, 2, 5)
 	var begin_network: Dictionary = restored.begin_transport_session_network_placement(
 		"road", {"tile_ids": road_tiles.duplicate()}
 	)
@@ -291,8 +333,15 @@ func _test_continuous_session_and_round_trip() -> void:
 	_check(restored.transport.to_dict() == failed_network_transport_before, "failed network command leaves topology unchanged")
 	_check(restored.construction.to_dict() == failed_network_construction_before, "failed network command leaves jobs unchanged")
 	_check(restored.treasury_balance() == failed_network_funds_before, "failed network command leaves treasury unchanged")
+	var live_road_quote := restored.transport_project_quote("road", "build", road_tiles, 10, city_grid)
+	if not bool(live_road_quote.get("ok", false)) or not bool(live_road_quote.get("can_start", false)):
+		_check(false, "road live preflight: tiles=%s quote=%s state=%s" % [
+			str(road_tiles), str(live_road_quote), str(restored.transport_planning_session_snapshot())])
+		return
 	var road: Dictionary = restored.start_transport_session_network_project("road", road_tiles, 10, city_grid)
-	_check(bool(road.get("ok", false)), "same session starts its guideway project")
+	_check(bool(road.get("ok", false)), "same session starts its guideway project: %s" % str(road))
+	if not bool(road.get("ok", false)):
+		return
 	_check(str(restored.transport_planning_session_snapshot().get("id", "")) == session_id, "network placement does not recreate the session")
 	var road_wait: Dictionary = restored.wait_for_transport_session_construction("network_placement")
 	_check(bool(road_wait.get("ok", false)), "network construction can enter waiting state")
@@ -318,9 +367,15 @@ func _test_continuous_session_and_round_trip() -> void:
 	restored.advance_days(_maximum_active_days(restored), {}, false)
 	_check(str(restored.transport_planning_session_snapshot().get("state", "")) == "network_placement", "network completion resumes network placement")
 
-	var depot_tile := _tile(restored, 1, 3)
+	var live_depot_quote := restored.transport_project_quote("bus_depot", "build", [depot_tile], 10, city_grid)
+	if not bool(live_depot_quote.get("ok", false)) or not bool(live_depot_quote.get("can_start", false)):
+		_check(false, "depot live preflight: tile=%d quote=%s state=%s" % [
+			depot_tile, str(live_depot_quote), str(restored.transport_planning_session_snapshot())])
+		return
 	var depot: Dictionary = restored.start_transport_session_network_project("bus_depot", [depot_tile], 10, city_grid)
-	_check(bool(depot.get("ok", false)), "same network phase can place its required depot")
+	_check(bool(depot.get("ok", false)), "same network phase can place its required depot: %s" % str(depot))
+	if not bool(depot.get("ok", false)):
+		return
 	restored.advance_days(_maximum_active_days(restored), {}, false)
 	var route_edit: Dictionary = restored.begin_transport_session_route_edit({
 		"station_tile_ids": [first_tile, second_tile],
@@ -441,7 +496,7 @@ func _test_schema_nine_migrates_inactive_and_schema_eleven_fails_closed() -> voi
 func _test_close_does_not_cancel_authoritative_construction() -> void:
 	var coordinator = CoordinatorScript.new(20_260_905, 500_000)
 	coordinator.terrain_map = CityTerrainMapScript.new()
-	var tile_id := _tile(coordinator, 7, 7)
+	var tile_id := _tile(coordinator, 7, 4)
 	_check(bool(coordinator.begin_transport_planning_session("公車站").get("ok", false)), "close fixture begins session")
 	var started: Dictionary = coordinator.place_transport_session_station(tile_id, 10)
 	_check(bool(started.get("ok", false)), "close fixture starts station construction")

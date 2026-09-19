@@ -2,6 +2,8 @@ extends SceneTree
 
 const TestCleanup := preload("res://tests/helpers/scene_tree_test_cleanup.gd")
 const VerticalSliceCoordinatorScript := preload("res://scripts/app/vertical_slice_coordinator.gd")
+const BuildingTerrainLabelsScript := preload("res://data/catalogs/building_terrain_labels.gd")
+const TEST_SAVE_PATH := "user://civil-tale-local-integration-20260914-r2/tests/building_footprint_visual_navigation.json"
 
 const CITY_CONTEXT := {
 	"population": 300,
@@ -29,9 +31,11 @@ func _run() -> void:
 	await process_frame
 
 	_test_capture_argument_contract()
+	_test_human_reviewed_terrain_navigation(main)
 	_test_cross_catalog_canonical_order()
 	_test_footprint_render_geometry_bounds()
 	_test_preview_groups(main)
+	_test_rotation_control_and_preview(main)
 	_test_completed_visuals_selection_and_navigation(main)
 	_test_large_construction_completion_load_and_demolition(main)
 	var capture_seconds := _capture_seconds_from_cli()
@@ -90,6 +94,73 @@ func _test_capture_argument_contract() -> void:
 		false
 	)
 	_check(relative_path.is_empty(), "capture path parser rejects relative paths")
+
+
+func _test_human_reviewed_terrain_navigation(main) -> void:
+	var no_reserved_tiles: Array[int] = []
+	main.call("_set_onboarding_npc_reservation", no_reserved_tiles)
+	main.debug_sync_npc_navigation_obstacles()
+	var navigation = main.get_npc_navigation_grid()
+	var terrain = main.vertical_slice.terrain_map
+	var human_blocked_count := 0
+	var candidate_count := 0
+	for tile_id in BuildingTerrainLabelsScript.CELL_COUNT:
+		var center: Vector2 = main.call("_iso_tile_center", tile_id)
+		var human_blocked := BuildingTerrainLabelsScript.is_blocked(tile_id)
+		var naturally_walkable: bool = bool(terrain.is_walkable(tile_id))
+		if human_blocked:
+			human_blocked_count += 1
+			_check(not navigation.is_position_walkable(center), "human-reviewed blocked tile %d remained walkable for NPCs" % tile_id)
+			_check(main.is_npc_tile_blocked(tile_id), "human-reviewed blocked tile %d is absent from controller authority" % tile_id)
+		else:
+			candidate_count += 1
+			_check(
+				navigation.is_position_walkable(center) == naturally_walkable,
+				"candidate tile %d did not preserve its saved natural-terrain walkability" % tile_id
+			)
+	_check(human_blocked_count == 54, "human-reviewed navigation blocker count is not 54")
+	_check(candidate_count == 46, "human-reviewed candidate count is not 46")
+	for corrected_candidate: int in [32, 48, 64, 78, 88, 96]:
+		_check(not BuildingTerrainLabelsScript.is_blocked(corrected_candidate), "corrected candidate %d regressed to a human blocker" % corrected_candidate)
+	for retained_blocker: int in [50, 71]:
+		_check(BuildingTerrainLabelsScript.is_blocked(retained_blocker), "retained blocker %d was reopened" % retained_blocker)
+
+
+func _test_rotation_control_and_preview(main) -> void:
+	main.placement_mode_active = true
+	main.placement_building_name = "體育館"
+	main.placement_rotation_quarter_turns_ccw = 0
+	main.call("_sync_placement_banner")
+	_check(main.placement_rotate_button != null, "building placement creates a rotation button")
+	_check(main.placement_rotate_button.name == "RotateBuildingButton", "rotation button keeps a stable UI identity")
+	_check(main.placement_rotate_button.visible, "rotation button is visible during ordinary building placement")
+	_check(main.placement_rotate_button.text.contains("逆時針"), "rotation button states its counter-clockwise direction")
+
+	var terrain = main.vertical_slice.terrain_map
+	var anchor_coordinate := Vector2i(4, 4)
+	var anchor_tile_id := int(terrain.tile_id_for_coordinate(anchor_coordinate))
+	var expected_offsets := [
+		[Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0)],
+		[Vector2i(0, 0), Vector2i(0, -1), Vector2i(0, -2)],
+		[Vector2i(0, 0), Vector2i(-1, 0), Vector2i(-2, 0)],
+		[Vector2i(0, 0), Vector2i(0, 1), Vector2i(0, 2)],
+	]
+	var first_occupied_tile_ids: Array = []
+	for rotation_quarter_turns_ccw: int in 4:
+		main.call("_refresh_placement_preview", anchor_tile_id)
+		var preview: Dictionary = main.get_placement_preview_snapshot()
+		var expected_tile_ids: Array = []
+		for offset: Vector2i in expected_offsets[rotation_quarter_turns_ccw]:
+			expected_tile_ids.append(int(terrain.tile_id_for_coordinate(anchor_coordinate + offset)))
+		_check(main.placement_rotation_quarter_turns_ccw == rotation_quarter_turns_ccw, "rotation press count %d is preserved" % rotation_quarter_turns_ccw)
+		_check(int(preview.get("rotation_quarter_turns_ccw", -1)) == rotation_quarter_turns_ccw, "preview uses rotation %d" % rotation_quarter_turns_ccw)
+		_check(Array(preview.get("occupied_tile_ids", [])) == expected_tile_ids, "preview rotation %d uses the expected three cells" % rotation_quarter_turns_ccw)
+		if rotation_quarter_turns_ccw == 0:
+			first_occupied_tile_ids = expected_tile_ids.duplicate()
+		main.call("_rotate_building_placement_ccw")
+	_check(main.placement_rotation_quarter_turns_ccw == 0, "four button presses return to the initial rotation")
+	_check(Array(main.get_placement_preview_snapshot().get("occupied_tile_ids", [])) == first_occupied_tile_ids, "four button presses return the preview to its initial cells")
+	main.call("_clear_building_placement_ui")
 
 
 func _prepare_capture_surface(main) -> void:
@@ -327,18 +398,47 @@ func _test_completed_visuals_selection_and_navigation(main) -> void:
 	_check(main.selected_cell_index == int(large_record.get("anchor_tile_id", -1)), "clicking a completed secondary cell normalizes selection to the anchor")
 	_check(main.building_context_panel != null and main.building_context_panel.visible, "secondary click opens the anchor building context")
 
-	# The real save-loaded event hook must rebuild anchor-only identity while the
-	# footprint view immediately restores every secondary visual and blocker.
+	# Persist through the production schema-10 path, then rebuild runtime-only
+	# navigation from the canonical occupied ids after the real load event.
+	_cleanup_test_save()
+	DirAccess.make_dir_recursive_absolute(
+		ProjectSettings.globalize_path(TEST_SAVE_PATH).get_base_dir()
+	)
+	var save_error: Error = main.vertical_slice.save_game(TEST_SAVE_PATH)
+	_check(save_error == OK, "multi-cell building fixture could not be saved")
+	var save_text := FileAccess.get_file_as_string(
+		ProjectSettings.globalize_path(TEST_SAVE_PATH)
+	)
+	_check(not save_text.is_empty(), "multi-cell save did not produce a readable envelope")
+	_check(
+		not save_text.contains("navigation_revision")
+		and not save_text.contains("path_navigation_revision"),
+		"runtime navigation revision leaked into the serialized save"
+	)
+	var revision_before_load := int(main.npc_map_controller.navigation_revision())
 	for cell in main.grid_buttons:
 		cell.set_tile({"index": int(cell.tile_index)})
 	main.get_npc_navigation_grid().clear_dynamic_blockers()
-	var load_events: Array[Dictionary] = [{"type": "save_loaded", "payload": {}}]
+	_check(main.vertical_slice.load_game(TEST_SAVE_PATH), "production load rejected the valid schema-10 multi-cell save")
+	var load_events: Array[Dictionary] = main.vertical_slice.drain_ui_events()
+	_check(
+		load_events.any(func(event: Dictionary) -> bool: return str(event.get("type", "")) == "save_loaded"),
+		"successful schema-10 load did not emit the production save_loaded event"
+	)
 	main.call("_consume_vertical_events", load_events)
 	main.call("_update_ui")
+	var revision_after_load := int(main.npc_map_controller.navigation_revision())
+	_check(revision_after_load > revision_before_load, "schema-10 load did not rebuild navigation authority")
+	if main.get_visible_npc_count() > 0:
+		_check(
+			int(main.get_npc_acceptance_snapshot(0).get("path_navigation_revision", -1)) == revision_after_load,
+			"schema-10 load left a resident on a pre-load navigation revision"
+		)
 	for tile_variant: Variant in large_tiles:
 		var tile_id := int(tile_variant)
 		_check(int(main.grid_buttons[tile_id].get_footprint_visual_snapshot().get("owner_anchor_tile_id", -1)) == int(large_tiles[0]), "save-loaded hook restores secondary visual ownership")
 		_check(not main.get_npc_navigation_grid().is_position_walkable(main.call("_iso_tile_center", tile_id)), "save-loaded hook restores every footprint blocker")
+	_cleanup_test_save()
 
 
 func _test_large_construction_completion_load_and_demolition(main) -> void:
@@ -346,6 +446,7 @@ func _test_large_construction_completion_load_and_demolition(main) -> void:
 	_check(not run.is_empty(), "large construction fixture has a legal run")
 	if run.is_empty():
 		return
+	var revision_before_start := int(main.npc_map_controller.navigation_revision())
 	var start: Dictionary = main.vertical_slice.start_approved_building("體育館", int(run["anchor"]), 20)
 	_check(bool(start.get("ok", false)), "large construction starts")
 	if not bool(start.get("ok", false)):
@@ -354,6 +455,8 @@ func _test_large_construction_completion_load_and_demolition(main) -> void:
 	main.call("_consume_vertical_events", main.vertical_slice.drain_ui_events())
 	main.call("_update_ui")
 	main.debug_sync_npc_navigation_obstacles()
+	var revision_after_start := int(main.npc_map_controller.navigation_revision())
+	_check(revision_after_start > revision_before_start, "construction start did not invalidate resident navigation")
 	main.call("_close_building_context")
 	main.grid_buttons[int(occupied[2])].emit_signal("pressed")
 	_check(main.selected_cell_index == int(occupied[0]), "active building job secondary press normalizes selection to its anchor")
@@ -379,6 +482,8 @@ func _test_large_construction_completion_load_and_demolition(main) -> void:
 	var events: Array[Dictionary] = main.vertical_slice.advance_days(days, CITY_CONTEXT, false)
 	main.call("_consume_vertical_events", events)
 	main.call("_update_ui")
+	var revision_after_completion := int(main.npc_map_controller.navigation_revision())
+	_check(revision_after_completion > revision_after_start, "construction completion did not replace worksite navigation authority")
 	for tile_variant: Variant in occupied:
 		var tile_id := int(tile_variant)
 		_check(str(main.vertical_slice.footprint_cell_view(tile_id).get("kind", "")) == "building", "completion fans out the building view to every occupied cell")
@@ -409,6 +514,10 @@ func _test_large_construction_completion_load_and_demolition(main) -> void:
 	main.call("_consume_vertical_events", demolition_events)
 	main.call("_update_ui")
 	main.debug_sync_npc_navigation_obstacles()
+	_check(
+		int(main.npc_map_controller.navigation_revision()) > revision_after_completion,
+		"demolition completion did not invalidate the occupied footprint routes"
+	)
 	for tile_variant: Variant in occupied:
 		var tile_id := int(tile_variant)
 		var visual: Dictionary = main.grid_buttons[tile_id].get_footprint_visual_snapshot()
@@ -427,6 +536,7 @@ func _find_available_flat_run(coordinator, length: int) -> Dictionary:
 				var tile_id := int(coordinator.terrain_map.tile_id_for_coordinate(Vector2i(column + offset, row)))
 				if (
 					not coordinator.terrain_map.is_buildable(tile_id)
+					or not coordinator.is_building_tile_buildable(tile_id)
 					or not coordinator.get_building_by_tile(tile_id).is_empty()
 					or not coordinator.active_construction_for_tile(tile_id).is_empty()
 					or transport_tiles.has(tile_id)
@@ -450,6 +560,7 @@ func _find_available_flat_run_for_main(main, length: int, minimum_row: int = 0) 
 				var tile_id := int(coordinator.terrain_map.tile_id_for_coordinate(Vector2i(column + offset, row)))
 				if (
 					not coordinator.terrain_map.is_buildable(tile_id)
+					or not coordinator.is_building_tile_buildable(tile_id)
 					or not coordinator.get_building_by_tile(tile_id).is_empty()
 					or not coordinator.active_construction_for_tile(tile_id).is_empty()
 					or transport_tiles.has(tile_id)
@@ -506,6 +617,14 @@ func _save_capture_png(capture_path: String) -> void:
 	var save_error := capture_image.save_png(capture_path)
 	if save_error != OK:
 		_check(false, "capture PNG could not be saved: %s" % error_string(save_error))
+
+
+func _cleanup_test_save() -> void:
+	var absolute_path := ProjectSettings.globalize_path(TEST_SAVE_PATH)
+	for suffix: String in ["", ".tmp", ".bak"]:
+		var candidate := absolute_path + suffix
+		if FileAccess.file_exists(candidate):
+			DirAccess.remove_absolute(candidate)
 
 
 func _check(condition: bool, message: String) -> void:

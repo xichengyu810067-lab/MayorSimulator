@@ -25,6 +25,7 @@
 *.wav -text
 *.ogg -text
 *.mp3 -text
+*.ogv -text
 *.ttf -text
 *.otf -text
 *.woff -text

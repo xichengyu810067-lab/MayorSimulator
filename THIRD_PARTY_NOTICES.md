@@ -2,12 +2,13 @@
 
 This file records the third-party runtime component that is verifiably used by
 the current project tree. It is **not** a license for the project's own source
-code, data, writing, or media. No project-level license has been selected; that
-decision remains with the project owner.
+code, data, writing, or media. No public or open-source project license has
+been selected; the enclosed `LICENSE.txt` governs internal access-controlled
+testing only.
 
 ## Godot Engine 4.7
 
-《城諾之音》 / CivicTale: Voice of Promise is built with and distributed using Godot Engine 4.7.
+《城諾之音》 / CivicTale: Voice of Promise Internal Alpha is built with and distributed using Godot Engine 4.7.
 Godot Engine is licensed under the MIT/Expat license. The official license and
 the exhaustive notices for components incorporated into the engine are:
 
@@ -37,29 +38,16 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-## Project media provenance (not third-party packages)
+## Project media status (not third-party packages)
 
-- The six runtime WAV files under `assets/audio/storybook_v1/` are documented
-  as original deterministic synthesis produced by
-  `tools/audio/generate_storybook_audio.py`, without third-party recordings,
-  samples, melodies, or sound libraries.
-- The active Storybook UI, building, tutorial, and NPC art has local generation
-  provenance records identifying OpenAI `image_gen` and the project's local
-  post-processing pipeline. Source sheets, prompts, archives, preview GIFs,
-  pipeline metadata, concepts, and the root reference image are development
-  material and are excluded by the release presets.
-- The runtime city background at
-  `assets/images/world/backgrounds/city-map-background.png` is a pre-existing
-  project asset migrated from `幻想遊戲地圖風景.png` (SHA-256
-  `B968762C5F8756B26874D1B3610D889D2472B251C7E6F3D052B9C0533612E119`).
-  The repository does not establish its author or license. Public distribution
-  therefore requires the project owner to confirm the usage rights or approve
-  a replacement before public release. It is INTERNAL-ONLY in this RC.
-- The train-station runtime image is separately blocked: its exact runtime,
-  processed-source, and raw checksums, together with the required closure
-  material, are in `docs/release/ASSET_PROVENANCE.md` and
-  `docs/release/train_station_asset_provenance_blocker.md`. Do not infer its
-  provenance from the other Storybook building records.
+- The runtime audio is project-produced and does not include third-party
+  recordings, samples, melodies, or sound libraries.
+- This Internal Alpha package includes project media solely for authorized
+  internal testing. It does not grant a recipient rights to redistribute,
+  license, or reuse project media.
+- Public distribution remains blocked until the project owner closes the
+  applicable source, attribution, and redistribution-rights requirements for
+  project media, including the city background and train-station image.
 - The current tree contains no `addons/`, GDExtension, native DLL, bundled
   third-party font, or external runtime package. If any such dependency is
   added later, this notice must be updated before distribution.

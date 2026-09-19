@@ -9,6 +9,8 @@ var _map_presses := 0
 var _target_presses := 0
 var _advanced_targets: Array[String] = []
 var _product_inputs := 0
+var _defer_requests := 0
+var _result_review_confirmations := 0
 
 
 func _initialize() -> void:
@@ -30,6 +32,8 @@ func _run() -> void:
 	var guide = OnboardingGuideScript.new()
 	guide.advanced.connect(func(target_id: String, _receipt: Dictionary) -> void: _advanced_targets.append(target_id))
 	guide.target_input_observed.connect(func(_target_id: String, _input_kind: String) -> void: _product_inputs += 1)
+	guide.defer_requested.connect(func() -> void: _defer_requests += 1)
+	guide.result_review_confirmed.connect(func() -> void: _result_review_confirmations += 1)
 	host.add_child(guide)
 	await _settle(3)
 
@@ -46,6 +50,21 @@ func _run() -> void:
 	_check(guide.open_product_target(progress, target, guide.INPUT_MOUSE_LEFT, KEY_NONE, "perform the real action"), "product target gate opens")
 	await _click_at(target.get_global_rect().get_center())
 	_check(_product_inputs == 1 and progress.next_index() == 0 and progress.receipts().is_empty(), "target click reaches product UI but cannot synthesize or skip an authoritative receipt")
+	var slider := HSlider.new()
+	slider.position = Vector2(520, 400)
+	slider.size = Vector2(220, 32)
+	slider.min_value = 0
+	slider.max_value = 30
+	slider.step = 1
+	slider.value = 10
+	host.add_child(slider)
+	guide.invalidate_target()
+	_check(guide.open_product_target(progress, slider, guide.INPUT_MOUSE_LEFT, KEY_NONE, "adjust the real slider"), "product slider target gate opens")
+	slider.grab_focus()
+	await _settle(2)
+	await _press_key(KEY_RIGHT)
+	_check(is_equal_approx(slider.value, 11.0), "product guide leaves native slider arrow-key adjustment available")
+	_check(progress.next_index() == 0 and progress.receipts().is_empty(), "slider keyboard input cannot synthesize onboarding completion")
 	guide.invalidate_target()
 	_check(guide.open_for_target(progress, target, guide.INPUT_MOUSE_LEFT, KEY_NONE, "authority_0", "entity_0", 1, "click"), "mouse target gate opens")
 	await _settle(2)
@@ -68,7 +87,7 @@ func _run() -> void:
 	await _click_at(target_center)
 	_check(progress.next_index() == progress_after_mouse and _advanced_targets.size() == 1, "old mouse binding cannot advance again")
 
-	_check(guide.open_for_target(progress, target, guide.INPUT_KEY, KEY_B, "authority_1", "entity_1", 2, "key"), "key target gate opens")
+	_check(guide.open_for_target(progress, target, guide.INPUT_KEY, KEY_B, "authority_1", "entity_1", 4, "key"), "key target gate opens on the scheduled day")
 	target.grab_focus()
 	await _settle(2)
 	var presses_before_wrong_key := _target_presses
@@ -81,7 +100,7 @@ func _run() -> void:
 	var stale_target := _button("StaleTarget", Vector2(760, 420), Vector2(160, 70))
 	host.add_child(stale_target)
 	await _settle(1)
-	_check(guide.open_for_target(progress, stale_target, guide.INPUT_MOUSE_LEFT, KEY_NONE, "authority_2", "entity_2", 3), "stale-reference scenario binds")
+	_check(guide.open_for_target(progress, stale_target, guide.INPUT_MOUSE_LEFT, KEY_NONE, "authority_2", "entity_2", 7), "stale-reference scenario binds")
 	stale_target.queue_free()
 	await _settle(3)
 	_check(not guide.is_open() and guide.target_control() == null, "freed target invalidates the guide reference")
@@ -91,9 +110,37 @@ func _run() -> void:
 	var replacement := _button("ReplacementTarget", Vector2(760, 420), Vector2(160, 70))
 	host.add_child(replacement)
 	await _settle(2)
-	_check(guide.open_for_target(progress, replacement, guide.INPUT_MOUSE_LEFT, KEY_NONE, "authority_2", "entity_2", 3), "replacement target can bind after rebuild")
+	_check(guide.open_for_target(progress, replacement, guide.INPUT_MOUSE_LEFT, KEY_NONE, "authority_2", "entity_2", 7), "replacement target can bind after rebuild")
 	await _click_at(replacement.get_global_rect().get_center())
 	_check(progress.next_index() == 3 and _advanced_targets.back() == "route", "replacement target advances the unchanged current step")
+
+	var defer_progress = OnboardingProgressScript.new()
+	defer_progress.begin_guide()
+	_check(guide.show_waiting(defer_progress, "目前工人不足；可先調整工人或延後教學。"), "active unavailable presentation opens without a product target")
+	_check(guide.is_waiting_mode() and not guide.is_open() and guide.target_control() == null, "active unavailable presentation owns no guided target or input hole")
+	var defer_button := guide.get_node("OnboardingDeferButton") as Button
+	_check(defer_button != null and defer_button.visible and defer_button.text == "延後教學", "active unavailable presentation exposes the exact defer action")
+	_check(guide.get_node_or_null("OnboardingGuideCard") is PanelContainer, "active unavailable explanation uses the same solid guide card")
+	for index in 4:
+		_check(not (guide.get_child(index) as Control).visible, "active unavailable presentation hides input mask %d" % index)
+	var map_presses_before_waiting := _map_presses
+	await _click_at(map_button.get_global_rect().get_center())
+	_check(_map_presses == map_presses_before_waiting + 1 and guide.is_waiting_mode(), "active unavailable presentation leaves ordinary map input available")
+	defer_button.pressed.emit()
+	_check(_defer_requests == 1 and defer_progress.next_index() == 0 and defer_progress.receipts().is_empty(), "defer UI requests scheduling without fabricating completion")
+
+	var review_progress = _progress_at_judicial()
+	_check(guide.show_result_review(review_progress, "司法案件 judicial_1 已結案。結果：裁處罰款；結案日期：第 1 年 1 月 22 日。"), "resolved-case review presentation opens for a case target")
+	var review_button := guide.get_node("OnboardingResultReviewButton") as Button
+	_check(guide.is_result_review_mode() and not guide.is_open() and review_button != null and review_button.visible and review_button.text == "已閱讀結果，繼續", "result review exposes the explicit localized confirmation action without a target gate")
+	var map_presses_before_review := _map_presses
+	await _click_at(map_button.get_global_rect().get_center())
+	_check(_map_presses == map_presses_before_review + 1, "result review leaves ordinary map input available")
+	if review_button != null:
+		review_button.pressed.emit()
+	_check(_result_review_confirmations == 1 and review_progress.current_target() == "judicial" and review_progress.receipts().size() == 7, "result-review UI requests authority validation without fabricating its own receipt")
+	defer_button.pressed.emit()
+	_check(_defer_requests == 2 and review_progress.receipts().size() == 7, "resolved-case review keeps the repeatable defer action")
 
 	var exit_code := 1 if _failed else 0
 	if not _failed:
@@ -108,6 +155,21 @@ func _button(node_name: String, position: Vector2, button_size: Vector2) -> Butt
 	button.size = button_size
 	button.text = node_name
 	return button
+
+
+func _progress_at_judicial():
+	var progress = OnboardingProgressScript.new()
+	progress.begin_guide()
+	for index in 7:
+		var target_id := progress.current_target()
+		var game_day := index * 3
+		progress.record_current_target(target_id, {
+			"kind": target_id,
+			"authority_id": "authority_%d" % index,
+			"entity_id": "entity_%d" % index,
+			"game_day": game_day,
+		})
+	return progress
 
 
 func _click_at(position: Vector2) -> void:

@@ -148,6 +148,20 @@ static func _square_model_for_tile_id(tile_id: int) -> Dictionary:
 		return {}
 	var coordinate := coordinate_for_tile_id(tile_id)
 	var plot_rect := SquareGridLayoutScript.rect_for_coordinate(coordinate)
+	var classification := _classify_plot_rect(plot_rect, CityBackdropTerrainCatalog.static_polygons())
+	return {
+		"tile_id": tile_id,
+		"coordinate": coordinate,
+		"kind": str(classification.get("kind", "flat_grass")),
+		"coverage": float(classification.get("coverage", 0.0)),
+		"feature_ids": Array(classification.get("feature_ids", [])).duplicate(),
+		"source_asset": SOURCE_ASSET,
+		"plot_center": plot_rect.get_center(),
+		"plot_half_extents": plot_rect.size * 0.5,
+	}
+
+
+static func _classify_plot_rect(plot_rect: Rect2, polygons: Array) -> Dictionary:
 	var plot := PackedVector2Array([
 		plot_rect.position,
 		plot_rect.position + Vector2(plot_rect.size.x, 0.0),
@@ -158,7 +172,7 @@ static func _square_model_for_tile_id(tile_id: int) -> Dictionary:
 	var coverage_by_kind: Dictionary = {}
 	var feature_ids_by_kind: Dictionary = {}
 	var kind_order := PackedStringArray()
-	for polygon_data: Dictionary in CityBackdropTerrainCatalog.static_polygons():
+	for polygon_data: Dictionary in polygons:
 		var overlap_area := 0.0
 		for intersection: PackedVector2Array in Geometry2D.intersect_polygons(
 			plot, PackedVector2Array(polygon_data["points"])
@@ -184,14 +198,9 @@ static func _square_model_for_tile_id(tile_id: int) -> Dictionary:
 			winning_kind = kind
 			winning_coverage = coverage
 	return {
-		"tile_id": tile_id,
-		"coordinate": coordinate,
 		"kind": winning_kind,
 		"coverage": winning_coverage,
 		"feature_ids": Array(feature_ids_by_kind.get(winning_kind, [])).duplicate(),
-		"source_asset": SOURCE_ASSET,
-		"plot_center": plot_rect.get_center(),
-		"plot_half_extents": plot_rect.size * 0.5,
 	}
 
 
