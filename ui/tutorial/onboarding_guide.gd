@@ -541,7 +541,8 @@ func _layout_waiting() -> void:
 	var action_height := maxf(defer_size.y, review_size.y if is_result_review_mode() else 0.0)
 	var total_height := maxf(FAIRY_SIZE.y, guide_size.y + (8.0 + action_height if action_height > 0.0 else 0.0))
 	var left := maxf(edge_margin, size.x - total_width - CARD_HORIZONTAL_PADDING - edge_margin)
-	var top := clampf(96.0, edge_margin, maxf(edge_margin, size.y - total_height - edge_margin))
+	# StatusHud ends at y=116; card padding begins 10px above this anchor, leaving 2px clear.
+	var top := clampf(128.0, edge_margin, maxf(edge_margin, size.y - total_height - edge_margin))
 	_fairy.position = Vector2(left, top)
 	_guide.position = Vector2(left + FAIRY_SIZE.x + companion_gap, top)
 	_defer_button.position = Vector2(_guide.position.x, _guide.position.y + guide_size.y + 8.0)
