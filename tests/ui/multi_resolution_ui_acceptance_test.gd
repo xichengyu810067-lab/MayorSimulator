@@ -9,6 +9,22 @@ const RESOLUTIONS: Array[Vector2i] = [
 	Vector2i(2560, 1440),
 	Vector2i(2880, 1800),
 ]
+const HUD_LOCALES := ["zh_TW", "zh_CN", "en", "ja", "ko"]
+const CAPACITY_TEXT_SOURCE := "住房 %d\n就業 %d・職缺 %d"
+const CAPACITY_AVAILABLE_TOOLTIP_SOURCE := "尚有 %d 人住房空間；現有建築提供 %d 個職缺。"
+const CAPACITY_OVERAGE_TOOLTIP_SOURCE := "現有居民比住房容量多 %d 人；不會驅逐居民，但新遷入會暫停。"
+const HUD_CAPACITY_EXACT_COPY := {
+	"zh_CN": {
+		"card": "住房 %d\n就业 %d・职位空缺 %d",
+		"available_tooltip": "住房还可容纳 %d 人；现有建筑提供 %d 个职位空缺。",
+		"overage_tooltip": "现有居民比住房容量多 %d 人；不会驱逐居民，但新迁入将暂停。",
+	},
+	"ja": {
+		"card": "住宅 %d\n雇用 %d・求人枠 %d",
+		"available_tooltip": "住宅にはあと %d 人が入居でき、現在の建物は %d 件の求人を提供しています。",
+		"overage_tooltip": "居住者数が住宅容量を %d 人上回っています。既存の居住者は退去させませんが、新規転入は一時停止します。",
+	},
+}
 const MUNICIPAL_PAGES: PackedStringArray = [
 	"buildings",
 	"governance",
@@ -47,6 +63,24 @@ func _run() -> void:
 	if packed_main == null:
 		await TestCleanup.finish(self, [], 1)
 		return
+	var l10n = root.get_node_or_null("L10n")
+	_check(l10n != null, "HUD locale regression has the L10n autoload")
+	if l10n != null:
+		var japanese_resolution := Vector2i(1280, 720)
+		root.content_scale_size = japanese_resolution
+		root.size = japanese_resolution
+		l10n.set_locale("ja", false)
+		var japanese_main := packed_main.instantiate()
+		root.add_child(japanese_main)
+		await _settle(5)
+		_assert_japanese_capacity_literal(japanese_main, "initial-ja")
+		l10n.set_locale("zh_CN", false)
+		await _settle(2)
+		l10n.set_locale("ja", false)
+		await _settle(2)
+		_assert_japanese_capacity_literal(japanese_main, "zh_CN-to-ja")
+		await TestCleanup.release_fixtures(self, [japanese_main])
+		l10n.set_locale("zh_TW", false)
 
 	for resolution in RESOLUTIONS:
 		root.content_scale_size = resolution
@@ -102,6 +136,43 @@ func _validate_resolution(main: Control, expected_resolution: Vector2i) -> void:
 	await _settle(2)
 
 	_validate_required_surface(main.status_hud, viewport_rect, "StatusHud@%s" % expected_resolution)
+	if expected_resolution in [Vector2i(1280, 720), Vector2i(1440, 900)]:
+		var brand := main.status_hud.find_child("StatusBrand", true, false) as Label
+		var funds_label := main.labels.get("funds") as Label
+		if brand != null and funds_label != null:
+			var font := brand.get_theme_font("font")
+			var font_size := brand.get_theme_font_size("font_size")
+			var brand_width := font.get_string_size(brand.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+			var funds_font := funds_label.get_theme_font("font")
+			var funds_size := funds_label.get_theme_font_size("font_size")
+			var regular_width := funds_font.get_string_size("$103,350", HORIZONTAL_ALIGNMENT_LEFT, -1, funds_size).x
+			var long_width := funds_font.get_string_size("$1,234,567", HORIZONTAL_ALIGNMENT_LEFT, -1, funds_size).x
+			print("HUD measured viewport=%s brand_text=%.1f brand_alloc=%.1f funds_alloc=%.1f regular=%.1f long=%.1f" % [expected_resolution, brand_width, brand.size.x, funds_label.size.x, regular_width, long_width])
+			_check(
+				brand.autowrap_mode == TextServer.AUTOWRAP_WORD_SMART
+				and brand.get_line_count() <= brand.max_lines_visible
+				and brand.get_visible_line_count() == brand.get_line_count(),
+				"%s keeps every brand line readable" % expected_resolution
+			)
+			var status_row := main.status_hud.find_child("StatusMetricRow", true, false) as HBoxContainer
+			var metric_card_count := 0
+			if status_row != null:
+				for child in status_row.get_children():
+					if child is PanelContainer and str(child.name).begins_with("StatusMetric_"):
+						metric_card_count += 1
+						_validate_required_surface(child, viewport_rect, "%s@%s" % [child.name, expected_resolution])
+			_check(metric_card_count == 9, "%s keeps all nine existing metric cards within the viewport" % expected_resolution)
+			_check(funds_label.autowrap_mode == TextServer.AUTOWRAP_OFF and funds_label.max_lines_visible == 1, "%s funds HUD cannot automatically wrap to a second line" % expected_resolution)
+			for amount in [103_350, 1_234_567]:
+				var exact := str(main.call("_funds_full_currency", amount))
+				var shown := str(main.call("_funds_hud_currency", amount))
+				_check(shown == exact and funds_font.get_string_size(shown, HORIZONTAL_ALIGNMENT_LEFT, -1, funds_size).x <= funds_label.size.x - 2.0, "%s shows the exact grouped amount %s without clipping" % [expected_resolution, exact])
+			var huge := str(main.call("_funds_hud_currency", 9_876_543_210))
+			_check(huge.begins_with("≈$") and funds_font.get_string_size(huge, HORIZONTAL_ALIGNMENT_LEFT, -1, funds_size).x <= funds_label.size.x - 2.0, "%s only shortens an actually unfit huge amount and marks it approximate" % expected_resolution)
+			var negative_carry := str(main.call("_funds_hud_currency", -999_999_999))
+			_check(negative_carry.begins_with("≈-$1") and negative_carry.ends_with("B") and funds_font.get_string_size(negative_carry, HORIZONTAL_ALIGNMENT_LEFT, -1, funds_size).x <= funds_label.size.x - 2.0, "%s preserves the negative sign and promotes rounded millions to billions" % expected_resolution)
+			_check(str(main.call("_funds_full_currency", -999_999_999)) == "-$999,999,999" and funds_label.tooltip_text.contains(str(main.call("_funds_full_currency", main.funds))), "%s preserves the precise signed full amount in the existing HUD tooltip" % expected_resolution)
+			await _validate_status_hud_locales(main, expected_resolution)
 	_validate_required_surface(main.action_dock, viewport_rect, "ActionDock@%s" % expected_resolution)
 	_validate_non_overlapping_controls(
 		[main.status_hud, main.action_dock],
@@ -184,6 +255,90 @@ func _validate_resolution(main: Control, expected_resolution: Vector2i) -> void:
 		await _validate_municipal_surface(municipal_overlay, page_id, expected_resolution)
 	municipal_overlay.call("close_overlay")
 	await _settle(1)
+
+
+func _validate_status_hud_locales(main: Control, resolution: Vector2i) -> void:
+	var l10n = root.get_node_or_null("L10n")
+	_check(l10n != null, "HUD@%s has the L10n autoload for locale-layout validation" % resolution)
+	if l10n == null:
+		return
+	var status_hud := main.status_hud as Control
+	var status_row := status_hud.find_child("StatusMetricRow", true, false) as HBoxContainer if status_hud != null else null
+	var brand := status_hud.find_child("StatusBrand", true, false) as Label if status_hud != null else null
+	_check(status_row != null and brand != null, "HUD@%s exposes its localized brand and metric row" % resolution)
+	if status_row == null or brand == null:
+		return
+	for locale in HUD_LOCALES:
+		l10n.set_locale(locale, false)
+		await _settle(2)
+		var brand_font := brand.get_theme_font("font")
+		var brand_size := brand.get_theme_font_size("font_size")
+		var brand_width := brand_font.get_string_size(brand.text, HORIZONTAL_ALIGNMENT_LEFT, -1, brand_size).x
+		_check(
+			brand.text == str(l10n.text("城諾之音")) and brand.tooltip_text == str(l10n.text("療癒城市治理模擬")),
+			"HUD@%s %s refreshes the localized brand and tooltip (actual=%s / %s expected=%s / %s)" % [resolution, locale, brand.text, brand.tooltip_text, l10n.text("城諾之音"), l10n.text("療癒城市治理模擬")]
+		)
+		_check(
+			brand.autowrap_mode == TextServer.AUTOWRAP_WORD_SMART
+			and brand.get_line_count() <= brand.max_lines_visible
+			and brand.get_visible_line_count() == brand.get_line_count(),
+			"HUD@%s %s keeps every brand line readable" % [resolution, locale]
+		)
+		var capacity := main.call("_building_capacity_snapshot") as Dictionary
+		var capacity_template := str(l10n.text(CAPACITY_TEXT_SOURCE))
+		var exact_copy: Dictionary = HUD_CAPACITY_EXACT_COPY.get(locale, {})
+		if not exact_copy.is_empty():
+			var catalog: Dictionary = l10n.catalogs.get(locale, {})
+			_check(catalog.has(CAPACITY_TEXT_SOURCE) and str(catalog[CAPACITY_TEXT_SOURCE]) == str(exact_copy["card"]), "HUD@%s %s has an exact capacity-card catalog entry instead of replacement fallback" % [resolution, locale])
+			_check(str(l10n.text(CAPACITY_TEXT_SOURCE)) % [42, 17, 5] == str(exact_copy["card"]) % [42, 17, 5], "HUD@%s %s renders fixed capacity placeholders with exact copy" % [resolution, locale])
+			capacity_template = str(exact_copy["card"])
+		var expected_capacity := capacity_template % [
+			int(capacity.get("housing_capacity", 0)), int(capacity.get("employed", 0)), int(capacity.get("job_capacity", 0))
+		]
+		if not exact_copy.is_empty():
+			var housing_available := int(capacity.get("housing_available", 0))
+			var housing_over_capacity := int(capacity.get("housing_over_capacity", 0))
+			var job_capacity := int(capacity.get("job_capacity", 0))
+			var tooltip_source := CAPACITY_AVAILABLE_TOOLTIP_SOURCE if housing_over_capacity <= 0 else CAPACITY_OVERAGE_TOOLTIP_SOURCE
+			var tooltip_key := "available_tooltip" if housing_over_capacity <= 0 else "overage_tooltip"
+			var tooltip_values := [housing_available, job_capacity] if housing_over_capacity <= 0 else [housing_over_capacity]
+			var tooltip_catalog: Dictionary = l10n.catalogs.get(locale, {})
+			_check(tooltip_catalog.has(tooltip_source) and str(tooltip_catalog[tooltip_source]) == str(exact_copy[tooltip_key]), "HUD@%s %s has an exact capacity-tooltip catalog entry instead of replacement fallback" % [resolution, locale])
+			_check(str(l10n.text(tooltip_source)) % tooltip_values == str(exact_copy[tooltip_key]) % tooltip_values, "HUD@%s %s renders fixed capacity-tooltip placeholders with exact copy" % [resolution, locale])
+			_check(main.labels.get("capacity").tooltip_text == str(exact_copy[tooltip_key]) % tooltip_values, "HUD@%s %s shows the exact capacity tooltip with authoritative values (actual=%s expected=%s)" % [resolution, locale, main.labels.get("capacity").tooltip_text, str(exact_copy[tooltip_key]) % tooltip_values])
+		var cards: Array[Control] = []
+		for key in ["month", "funds", "population", "capacity", "satisfaction", "grievance", "trust", "score", "rating"]:
+			var label := main.labels.get(key) as Label
+			_check(label != null and not label.text.is_empty() and not label.tooltip_text.is_empty(), "HUD@%s %s keeps %s text and tooltip" % [resolution, locale, key])
+			if label == null:
+				continue
+			var card := status_hud.find_child("StatusMetric_%s" % key.capitalize(), true, false) as Control
+			_check(card != null and _encloses_with_epsilon(status_hud.get_global_rect(), card.get_global_rect()), "HUD@%s %s keeps %s card inside the status surface" % [resolution, locale, key])
+			if card != null:
+				cards.append(card)
+				_check(_encloses_with_epsilon(card.get_global_rect(), label.get_global_rect()), "HUD@%s %s keeps %s text inside its metric card" % [resolution, locale, key])
+			if key == "funds":
+				_check(label.autowrap_mode == TextServer.AUTOWRAP_OFF and label.max_lines_visible == 1, "HUD@%s %s keeps funds on one line" % [resolution, locale])
+			else:
+				_check(not label.clip_text and label.get_visible_line_count() == label.get_line_count(), "HUD@%s %s shows every %s label line without clipping (visible=%d total=%d size=%s)" % [resolution, locale, key, label.get_visible_line_count(), label.get_line_count(), label.size])
+		_check(main.labels.get("capacity").text == expected_capacity, "HUD@%s %s keeps housing capacity separate from actual population (actual=%s expected=%s)" % [resolution, locale, main.labels.get("capacity").text, expected_capacity])
+		_check(cards.size() == 9, "HUD@%s %s retains all nine metric cards" % [resolution, locale])
+		_validate_non_overlapping_controls(cards, "HUD metrics@%s %s" % [resolution, locale])
+	l10n.set_locale("zh_TW", false)
+	await _settle(2)
+
+
+func _assert_japanese_capacity_literal(main: Control, context: String) -> void:
+	var capacity: Dictionary = main.call("_building_capacity_snapshot")
+	var expected_copy: Dictionary = HUD_CAPACITY_EXACT_COPY["ja"]
+	var expected_text := str(expected_copy["card"]) % [
+		int(capacity.get("housing_capacity", 0)), int(capacity.get("employed", 0)), int(capacity.get("job_capacity", 0))
+	]
+	var housing_over_capacity := int(capacity.get("housing_over_capacity", 0))
+	var tooltip_key := "available_tooltip" if housing_over_capacity <= 0 else "overage_tooltip"
+	var tooltip_values := [int(capacity.get("housing_available", 0)), int(capacity.get("job_capacity", 0))] if housing_over_capacity <= 0 else [housing_over_capacity]
+	_check(main.labels.get("capacity").text == expected_text, "HUD %s preserves the exact Japanese capacity card after runtime localization" % context)
+	_check(main.labels.get("capacity").tooltip_text == str(expected_copy[tooltip_key]) % tooltip_values, "HUD %s preserves the exact Japanese capacity tooltip after runtime localization" % context)
 
 
 func _validate_modal(modal: Control, label: String, resolution: Vector2i) -> void:

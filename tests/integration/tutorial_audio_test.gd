@@ -100,9 +100,21 @@ func _run() -> void:
 	_check(audio.music_player.bus == &"Music", "background music is routed through the Music bus")
 	for player: AudioStreamPlayer in audio.sfx_players:
 		_check(player.bus == &"SFX", "sound effects are routed through the SFX bus")
+	audio.start_music()
+	await process_frame
+	_check(audio.music_player.playing, "city BGM starts before the cinematic claim")
+	audio.begin_cinematic_music()
+	_check(bool(audio.audio_state().get("cinematic_music_active", false)) and not audio.music_player.playing, "cinematic claim suppresses city BGM without changing the preference")
+	var music_bus := AudioServer.get_bus_index(&"Music")
+	audio.set_music_enabled(false)
+	_check(AudioServer.is_bus_mute(music_bus) and not audio.music_player.playing, "music-off silences the cinematic Music bus without starting city BGM")
+	audio.set_music_enabled(true)
+	_check(not AudioServer.is_bus_mute(music_bus) and not audio.music_player.playing, "music-on restores film audio but keeps city BGM suppressed")
+	audio.end_cinematic_music()
+	await process_frame
+	_check(not bool(audio.audio_state().get("cinematic_music_active", true)) and audio.music_player.playing, "releasing the cinematic claim resumes city BGM from the current preference")
 	audio.set_music_volume(0.5)
 	audio.set_sfx_volume(0.25)
-	var music_bus := AudioServer.get_bus_index(&"Music")
 	var sfx_bus := AudioServer.get_bus_index(&"SFX")
 	_check(music_bus >= 0 and is_equal_approx(AudioServer.get_bus_volume_db(music_bus), linear_to_db(0.5)), "music bus applies the normalized user gain")
 	_check(sfx_bus >= 0 and is_equal_approx(AudioServer.get_bus_volume_db(sfx_bus), linear_to_db(0.25)), "SFX bus applies the normalized user gain")

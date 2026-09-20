@@ -15,8 +15,10 @@ const STOP_NEUTRAL_FRAMES: Array[int] = [0, 2]
 const REQUIRED_NAVIGATION_METHODS := [
 	"is_position_walkable",
 	"is_segment_walkable",
+	"is_evacuation_segment_walkable",
 	"static_classification_at",
 	"nearest_safe_position",
+	"nearest_safe_evacuation_position",
 	"find_path",
 	"set_building_blocker",
 	"set_construction_blocker",
@@ -56,6 +58,8 @@ const REQUIRED_SNAPSHOT_FIELDS := [
 	"destination",
 	"replan_count",
 	"blocked_waiting",
+	"navigation_revision",
+	"path_navigation_revision",
 ]
 
 var _failed := false
@@ -125,7 +129,9 @@ func _run() -> void:
 	main.set_process(false)
 	await _validate_distance_driven_locomotion(main, main_grid)
 	await _validate_dynamic_building_replan(main, main_grid)
+	await _validate_blocked_position_evacuation(main)
 	await _validate_no_route_waiting(main, main_grid)
+	_validate_null_navigation_waits(main)
 
 	_check(int(population.call("population_count")) == 300, "navigation/animation changed the authoritative population")
 	_check(str(population.call("stable_hash")) == stable_hash_before, "navigation/animation mutated authoritative NPC data")
@@ -313,7 +319,10 @@ func _validate_distance_driven_locomotion(main: Object, grid: Object) -> void:
 
 
 func _validate_dynamic_building_replan(main: Object, grid: Object) -> void:
-	grid.call("clear_dynamic_blockers")
+	var controller: Object = main.get("npc_map_controller")
+	var source_snapshot: Dictionary = Dictionary(
+		controller.get("_source_map_snapshot")
+	).duplicate(true)
 	var npc_index := 0
 	var initial := _npc_snapshot(main, npc_index)
 	var safe_target: Variant = _choose_far_walkable_target(grid, Vector2(initial.get("feet_position", Vector2.ZERO)))
@@ -329,16 +338,35 @@ func _validate_dynamic_building_replan(main: Object, grid: Object) -> void:
 	if active_path.size() < 2:
 		return
 	var blocker_center := _point_along_path(active_path, Vector2(before.get("feet_position", Vector2.ZERO)), 72.0)
-	grid.call("set_building_blocker", DYNAMIC_TILE_INDEX, blocker_center, true, Vector2(42, 26))
+	var blocked_snapshot := source_snapshot.duplicate(true)
+	var building_centers := Dictionary(blocked_snapshot.get("building_centers", {})).duplicate(true)
+	building_centers[DYNAMIC_TILE_INDEX] = blocker_center
+	blocked_snapshot["building_centers"] = building_centers
+	var blocked_tiles := Dictionary(blocked_snapshot.get("blocked_tiles", {})).duplicate(true)
+	blocked_tiles[DYNAMIC_TILE_INDEX] = true
+	blocked_snapshot["blocked_tiles"] = blocked_tiles
 	var record_id_before := str(before.get("record_id", ""))
 	var position_before := Vector2(before.get("position", Vector2.ZERO))
 	var replan_before := int(before.get("replan_count", 0))
-	_check(bool(main.call("debug_force_npc_repath", npc_index, true)), "NPC failed to replan around a newly placed building")
+	var revision_before := int(controller.call("navigation_revision"))
+	controller.call("sync_map_snapshot", blocked_snapshot)
+	var revision_after := int(controller.call("navigation_revision"))
+	_check(revision_after > revision_before, "logical building blocker change did not advance navigation revision")
+	var stale := _npc_snapshot(main, npc_index)
+	_check(
+		int(stale.get("path_navigation_revision", -1)) < revision_after,
+		"new navigation authority did not make the previous resident path stale"
+	)
+	_step_npcs(main, SIMULATION_DELTA)
 	var replanned := _npc_snapshot(main, npc_index)
 	_check(str(replanned.get("record_id", "")) == record_id_before, "building replan changed the canonical NPC")
 	_check(bool(replanned.get("visible", false)), "building replan hid the NPC")
 	_check(Vector2(replanned.get("position", Vector2.ZERO)).distance_to(position_before) <= MAX_POSITION_SLACK, "building replan teleported the NPC before movement resumed")
 	_check(int(replanned.get("replan_count", 0)) > replan_before, "building replan counter did not advance")
+	_check(
+		int(replanned.get("path_navigation_revision", -1)) == revision_after,
+		"resident kept a path from an older navigation revision"
+	)
 	_validate_path_clearance(grid, _path_from_variant(replanned.get("path", PackedVector2Array())), "replanned building path")
 
 	var previous_position := Vector2(replanned.get("position", Vector2.ZERO))
@@ -368,7 +396,155 @@ func _validate_dynamic_building_replan(main: Object, grid: Object) -> void:
 			str(final_replan_snapshot.get("velocity", Vector2.ZERO)),
 		]
 	)
-	grid.call("set_building_blocker", DYNAMIC_TILE_INDEX, blocker_center, false, Vector2(42, 26))
+	controller.call("sync_map_snapshot", blocked_snapshot)
+	_check(
+		int(controller.call("navigation_revision")) == revision_after,
+		"identical map authority caused a meaningless navigation revision"
+	)
+	var blocker_id := "building:%d" % DYNAMIC_TILE_INDEX
+	var drifted_center := blocker_center + Vector2(93.0, -47.0)
+	grid.call(
+		"set_dynamic_rect",
+		blocker_id,
+		drifted_center,
+		Vector2(4.0, 6.0),
+		true,
+		"building",
+		DYNAMIC_TILE_INDEX,
+		"building"
+	)
+	var drifted_record := _dynamic_blocker_by_id(grid, blocker_id)
+	_check(
+		Vector2(drifted_record.get("center", Vector2.ZERO)).is_equal_approx(drifted_center),
+		"same-id geometry drift fixture did not move the building blocker"
+	)
+	var before_geometry_repair := _npc_snapshot(main, npc_index)
+	var repair_position_before := Vector2(
+		before_geometry_repair.get("position", Vector2.ZERO)
+	)
+	var repair_replan_before := int(before_geometry_repair.get("replan_count", 0))
+	controller.call("sync_map_snapshot", blocked_snapshot)
+	var repair_revision := int(controller.call("navigation_revision"))
+	_check(
+		repair_revision > revision_after,
+		"same-id building geometry drift did not advance navigation revision"
+	)
+	var repaired_record := _dynamic_blocker_by_id(grid, blocker_id)
+	var expected_extents := Vector2(blocked_snapshot.get(
+		"dynamic_blocker_half_extents",
+		blocked_snapshot.get("structure_blocker_half_extents", Vector2.ZERO)
+	))
+	_check(
+		Vector2(repaired_record.get("center", Vector2.ZERO)).is_equal_approx(blocker_center),
+		"same-id building geometry drift did not restore the authoritative center"
+	)
+	_check(
+		Vector2(repaired_record.get("half_extents", Vector2.ZERO)).is_equal_approx(
+			expected_extents
+		),
+		"same-id building geometry drift did not restore authoritative extents"
+	)
+	_check(
+		int(before_geometry_repair.get("path_navigation_revision", -1)) < repair_revision,
+		"geometry repair did not invalidate the resident's previous path"
+	)
+	_step_npcs(main, SIMULATION_DELTA)
+	var after_geometry_repair := _npc_snapshot(main, npc_index)
+	_check(
+		int(after_geometry_repair.get("path_navigation_revision", -1)) == repair_revision,
+		"resident did not replan against repaired building geometry before moving"
+	)
+	_check(
+		int(after_geometry_repair.get("replan_count", 0)) > repair_replan_before,
+		"same-id geometry repair did not increment the resident replan count"
+	)
+	_check(
+		Vector2(after_geometry_repair.get("position", Vector2.ZERO)).distance_to(
+			repair_position_before
+		) <= MAX_POSITION_SLACK,
+		"same-id geometry repair teleported the resident"
+	)
+	_check(
+		bool(grid.call(
+			"is_position_walkable",
+			Vector2(after_geometry_repair.get("feet_position", Vector2.ZERO))
+		)),
+		"resident entered the restored authoritative building wall"
+	)
+	_validate_path_clearance(
+		grid,
+		_path_from_variant(after_geometry_repair.get("path", PackedVector2Array())),
+		"same-id geometry-repaired path"
+	)
+	controller.call("sync_map_snapshot", source_snapshot)
+	_check(
+		int(controller.call("navigation_revision")) > repair_revision,
+		"removing the building blocker did not invalidate resident paths"
+	)
+
+
+func _validate_blocked_position_evacuation(main: Object) -> void:
+	var controller: Object = main.get("npc_map_controller")
+	var grid: Object = controller.call("get_navigation_grid")
+	var source_snapshot: Dictionary = Dictionary(
+		controller.get("_source_map_snapshot")
+	).duplicate(true)
+	var npc_index := 0
+	var before := _npc_snapshot(main, npc_index)
+	var starting_foot := Vector2(before.get("feet_position", Vector2.ZERO))
+	var blocked_snapshot := source_snapshot.duplicate(true)
+	var building_centers := Dictionary(blocked_snapshot.get("building_centers", {})).duplicate(true)
+	building_centers[DYNAMIC_TILE_INDEX] = starting_foot
+	blocked_snapshot["building_centers"] = building_centers
+	var blocked_tiles := Dictionary(blocked_snapshot.get("blocked_tiles", {})).duplicate(true)
+	blocked_tiles[DYNAMIC_TILE_INDEX] = true
+	blocked_snapshot["blocked_tiles"] = blocked_tiles
+	controller.call("sync_map_snapshot", blocked_snapshot)
+	_check(not bool(grid.call("is_position_walkable", starting_foot)), "evacuation fixture did not block the resident's existing position")
+	var escaped := false
+	var previous_foot := starting_foot
+	for _frame in 180:
+		_step_npcs(main, SIMULATION_DELTA)
+		var snapshot := _npc_snapshot(main, npc_index)
+		var current_foot := Vector2(snapshot.get("feet_position", previous_foot))
+		if current_foot.distance_to(previous_foot) > 0.001:
+			_check(
+				bool(grid.call(
+					"is_evacuation_segment_walkable", previous_foot, current_foot
+				)),
+				"blocked resident crossed another obstacle while evacuating"
+			)
+		previous_foot = current_foot
+		if bool(grid.call("is_position_walkable", current_foot)):
+			escaped = true
+			break
+	_check(escaped, "resident did not reach a demonstrably safe exit from a newly blocked position")
+	controller.call("sync_map_snapshot", source_snapshot)
+
+
+func _validate_null_navigation_waits(main: Object) -> void:
+	var controller: Object = main.get("npc_map_controller")
+	var source_snapshot: Dictionary = Dictionary(
+		controller.get("_source_map_snapshot")
+	).duplicate(true)
+	var npc_index := 0
+	var before := _npc_snapshot(main, npc_index)
+	var position_before := Vector2(before.get("position", Vector2.ZERO))
+	var travelled_before := float(before.get("travelled_distance", 0.0))
+	controller.set("_navigation", null)
+	_step_npcs(main, SIMULATION_DELTA)
+	var waiting := _npc_snapshot(main, npc_index)
+	_check(
+		Vector2(waiting.get("position", Vector2.ZERO)).is_equal_approx(position_before),
+		"resident moved through a direct-line fallback while navigation was absent"
+	)
+	_check(
+		is_equal_approx(float(waiting.get("travelled_distance", 0.0)), travelled_before),
+		"resident accumulated travel while navigation was absent"
+	)
+	_check(bool(waiting.get("blocked_waiting", false)), "null navigation did not leave resident safely waiting")
+	_check(not bool(waiting.get("is_walking", true)), "null navigation left resident in a walking state")
+	controller.call("configure_navigation", source_snapshot)
 
 
 func _validate_no_route_waiting(main: Object, grid: Object) -> void:
@@ -603,6 +779,14 @@ func _path_length(path: PackedVector2Array) -> float:
 func _circular_distance(first: float, second: float) -> float:
 	var difference := absf(fposmod(first, 1.0) - fposmod(second, 1.0))
 	return minf(difference, 1.0 - difference)
+
+
+func _dynamic_blocker_by_id(grid: Object, blocker_id: String) -> Dictionary:
+	for blocker_variant: Variant in grid.call("get_debug_dynamic_polygons"):
+		var blocker: Dictionary = blocker_variant
+		if str(blocker.get("id", "")) == blocker_id:
+			return blocker
+	return {}
 
 
 func _cleanup_save() -> void:

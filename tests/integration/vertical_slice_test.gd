@@ -337,20 +337,34 @@ func _test_population_building_lifecycle() -> void:
 	_check(bool(started.get("ok", false)), "residence construction can start")
 	if not bool(started.get("ok", false)):
 		return
+	_check(int(coordinator.building_capacity_snapshot().get("housing_capacity", -1)) == 0, "unfinished residence grants no housing capacity")
+	_check_population_mirror(coordinator, 300, "unfinished residence")
 	coordinator.advance_days(int(started.get("job", {}).get("projected_remaining_days", 0)), CITY_CONTEXT)
 	var completed: Dictionary = coordinator.get_building_by_tile(residence_tile)
 	var resident_ids := PackedStringArray(completed.get("resident_ids", []))
-	_check(resident_ids.size() == 28, "residence completion stores all 28 added resident IDs")
-	_check(int(completed.get("population_delta", 0)) == 28, "residence completion records its actual population delta")
-	_check_population_mirror(coordinator, 328, "completed residence")
-	for resident_id: String in resident_ids:
-		_check(coordinator.population.get_record(resident_id) != null, "completed residence owns canonical resident: %s" % resident_id)
+	_check(resident_ids.is_empty(), "residence completion does not create or own residents")
+	_check(int(completed.get("population_delta", -1)) == 0, "residence completion records no direct population delta")
+	var completed_capacity: Dictionary = coordinator.building_capacity_snapshot()
+	_check(int(completed_capacity.get("housing_capacity", -1)) == 28, "completed residence grants exactly 28 housing capacity")
+	_check(int(completed_capacity.get("housing_available", -1)) == 0 and int(completed_capacity.get("housing_over_capacity", -1)) == 272, "legacy residents above housing capacity are retained and reported")
+	_check_population_mirror(coordinator, 300, "completed residence")
+	var blocked_growth: Dictionary = coordinator.adjust_population(20, "test.capacity_blocked")
+	_check(int(blocked_growth.get("accepted_delta", -1)) == 0 and bool(blocked_growth.get("capacity_limited", false)), "positive population growth is blocked when no spare housing exists")
+	_check_population_mirror(coordinator, 300, "capacity-blocked growth")
+	var spare_city = _coordinator_script.new(TEST_SEED + 24, TEST_FUNDS, 0)
+	spare_city.register_existing_building(13, "住宅")
+	var accepted_growth: Dictionary = spare_city.adjust_population(20, "test.capacity_available")
+	_check(int(accepted_growth.get("accepted_delta", -1)) == 20 and not bool(accepted_growth.get("capacity_limited", true)), "normal population growth uses available housing capacity")
+	var spare_capacity: Dictionary = spare_city.building_capacity_snapshot()
+	_check(int(spare_capacity.get("population", -1)) == 20 and int(spare_capacity.get("housing_available", -1)) == 8, "accepted growth consumes housing capacity without exceeding it")
+	_check_population_mirror(spare_city, 20, "capacity-backed growth")
 
 	var demolition: Dictionary = coordinator.start_demolition(residence_tile, 20)
 	_check(bool(demolition.get("ok", false)), "populated residence demolition can start")
 	if not bool(demolition.get("ok", false)):
 		return
 	coordinator.advance_days(int(demolition.get("job", {}).get("projected_remaining_days", 0)), CITY_CONTEXT)
+	_check(int(coordinator.building_capacity_snapshot().get("housing_capacity", -1)) == 0, "demolishing residence removes capacity only")
 	_check_population_mirror(coordinator, 300, "demolished residence")
 	for baseline_id: String in baseline_ids:
 		_check(coordinator.population.get_record(baseline_id) != null, "residence demolition preserves baseline resident: %s" % baseline_id)
@@ -359,7 +373,8 @@ func _test_population_building_lifecycle() -> void:
 func _test_population_scrap_and_legacy_migration() -> void:
 	var scrapped = _coordinator_script.new(TEST_SEED + 21, TEST_FUNDS)
 	var scrapped_building: Dictionary = scrapped.register_existing_building(14, "住宅")
-	_check_population_mirror(scrapped, 328, "seeded residence before scrapping")
+	_check(int(scrapped.building_capacity_snapshot().get("housing_capacity", -1)) == 28, "seeded residence grants housing capacity before scrapping")
+	_check_population_mirror(scrapped, 300, "seeded residence before scrapping")
 	var damage: Dictionary = scrapped.durability.apply_damage(
 		str(scrapped_building.get("building_id", "")),
 		61,
@@ -372,6 +387,7 @@ func _test_population_scrap_and_legacy_migration() -> void:
 	var scrapped_record: Dictionary = scrapped.get_building_by_tile(14)
 	_check(str(scrapped_record.get("status", "")) == "scrapped", "scrapped residence status reaches core state")
 	_check(PackedStringArray(scrapped_record.get("resident_ids", [])).is_empty(), "scrapped residence clears its resident ownership list")
+	_check(int(scrapped.building_capacity_snapshot().get("housing_capacity", -1)) == 0, "scrapped residence no longer grants housing capacity")
 	_check_population_mirror(scrapped, 300, "scrapped residence")
 	var scrap_demolition: Dictionary = scrapped.start_demolition(14, 20)
 	_check(bool(scrap_demolition.get("ok", false)), "scrapped residence can be demolished")
@@ -382,13 +398,10 @@ func _test_population_scrap_and_legacy_migration() -> void:
 	var legacy = _coordinator_script.new(TEST_SEED + 22, TEST_FUNDS)
 	var baseline_ids: Array[String] = legacy.population.sorted_npc_ids()
 	var legacy_building: Dictionary = legacy.register_existing_building(15, "住宅")
-	var originally_assigned := PackedStringArray(legacy_building.get("resident_ids", []))
-	legacy.population.remove_residents_by_id(originally_assigned, legacy.game_day(), "test.legacy_setup")
-	legacy._sync_population_to_core("test.legacy_setup")
-	legacy_building.erase("resident_ids")
-	legacy_building.erase("population_delta")
+	legacy_building["resident_ids"] = PackedStringArray(baseline_ids.slice(0, 5))
+	legacy_building["population_delta"] = 5
 	legacy._upsert_building(legacy_building, "test.legacy_building")
-	_check_population_mirror(legacy, 300, "legacy residence without resident IDs")
+	_check_population_mirror(legacy, 300, "legacy residence with old ownership metadata")
 	var legacy_demolition: Dictionary = legacy.start_demolition(15, 20)
 	_check(bool(legacy_demolition.get("ok", false)), "legacy residence demolition can start")
 	if bool(legacy_demolition.get("ok", false)):
@@ -448,8 +461,9 @@ func _test_save_round_trip() -> void:
 	var source = _coordinator_script.new(TEST_SEED, TEST_FUNDS)
 	var source_building: Dictionary = source.register_existing_building(3, "住宅", {"wall_color": "white"})
 	var resident_ids_before := PackedStringArray(source_building.get("resident_ids", []))
-	_check(resident_ids_before.size() == 28, "save fixture residence owns 28 residents")
-	_check_population_mirror(source, 328, "save fixture residence")
+	_check(resident_ids_before.is_empty(), "save fixture residence owns no residents")
+	_check(int(source.building_capacity_snapshot().get("housing_capacity", -1)) == 28, "save fixture residence contributes housing capacity")
+	_check_population_mirror(source, 300, "save fixture residence")
 	source.set_maintenance_payment(false)
 	source.refresh_requests(CITY_CONTEXT)
 	source.advance_days(45, CITY_CONTEXT)
@@ -459,7 +473,7 @@ func _test_save_round_trip() -> void:
 	_check(source.save_game(TEST_SAVE_PATH) == OK, "versioned snapshot saves atomically")
 	var persisted_state: Dictionary = source.session.make_envelope().state
 	_check(not persisted_state.has("npcs"), "save JSON omits the runtime CityState NPC mirror")
-	_check(Array(persisted_state.get("metadata", {}).get("vertical_slice", {}).get("population", {}).get("records", [])).size() == 328, "save JSON keeps all records under canonical population only")
+	_check(Array(persisted_state.get("metadata", {}).get("vertical_slice", {}).get("population", {}).get("records", [])).size() == 300, "save JSON keeps all records under canonical population only")
 	var hash_before: String = source.deterministic_hash()
 	var operation_sequence_before: int = source.next_operation_sequence
 	var event_sequence_before: int = source.session.kernel.event_sequence
@@ -472,12 +486,13 @@ func _test_save_round_trip() -> void:
 	_check(restored.session.kernel.event_sequence == event_sequence_before, "load reconciliation does not emit events when population is already equivalent")
 	_check(restored.treasury_balance() == balance_before, "save round-trip preserves treasury")
 	_check(restored.current_date() == date_before, "save round-trip preserves game date")
-	_check(restored.population.population_count() == 328, "save round-trip preserves building-added NPCs")
+	_check(restored.population.population_count() == 300, "save round-trip preserves population without building-created NPCs")
 	_check(restored.population.stable_hash() == population_hash_before, "save round-trip preserves population records")
 	var restored_building: Dictionary = restored.get_building_by_tile(3)
 	_check(str(restored_building.get("building_name", "")) == "住宅", "save round-trip preserves buildings")
 	_check(PackedStringArray(restored_building.get("resident_ids", [])) == resident_ids_before, "save round-trip preserves exact building resident ownership")
-	_check_population_mirror(restored, 328, "restored residence")
+	_check(int(restored.building_capacity_snapshot().get("housing_capacity", -1)) == 28, "save round-trip restores housing capacity once")
+	_check_population_mirror(restored, 300, "restored residence")
 	var idempotent_operation_sequence: int = restored.next_operation_sequence
 	var idempotent_event_sequence: int = restored.session.kernel.event_sequence
 	restored._sync_population_to_core("test.idempotent_reconcile")

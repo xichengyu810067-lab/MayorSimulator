@@ -3,6 +3,8 @@ extends SceneTree
 const IntroCinematicScript := preload("res://ui/tutorial/intro_cinematic.gd")
 const TestCleanup := preload("res://tests/helpers/scene_tree_test_cleanup.gd")
 const TEST_SAVE_PATH := "user://mayor_simulator/tests/guided_onboarding_entry.json"
+const NATURAL_FILM_ENV := "MAYOR_E2_NATURAL_OPENING_PLAYBACK"
+const CINEMATIC_LIFECYCLE_ENV := "MAYOR_F0_CINEMATIC_LIFECYCLE"
 
 var _failed := false
 
@@ -26,11 +28,12 @@ func _run() -> void:
 	await _wait_for_loading(first)
 	await _settle(3)
 	_check(first.tutorial_overlay != null and first.tutorial_overlay.get_script() == IntroCinematicScript, "formal new-game entry owns IntroCinematic rather than TutorialStoryOverlay")
-	_check(first.tutorial_overlay.name == "IntroCinematic" and first.tutorial_overlay.is_open(), "first entry visibly opens the fixed CG sequence")
-	_check(first.tutorial_overlay.current_index == 0 and first.tutorial_overlay.PAGES.size() == 8, "first entry starts on shot one of eight")
+	_check(first.tutorial_overlay.name == "IntroCinematic" and first.tutorial_overlay.is_open(), "first entry visibly opens the canonical 90-second film")
+	_check(first.tutorial_overlay.current_index == 0 and first.tutorial_overlay.PAGES.size() == 8, "first entry starts at the first story chapter")
+	_check(first.tutorial_overlay.video_player.stream is VideoStream and first.tutorial_overlay.video_player.is_playing(), "formal new-game entry loads and plays the real OGV")
 	_check(first.tutorial_overlay.skip_button != null and first.tutorial_overlay.skip_button.visible, "the previously supported skip action remains available")
 	_check(first.onboarding_progress.is_story_pending() and first.onboarding_progress.receipts().is_empty(), "CG presentation cannot create an authoritative receipt")
-	_check(not first.onboarding_guide.is_open() and first.vertical_slice.is_time_paused(), "CG blocks the guide and pauses simulation until completion")
+	_check(not first.onboarding_guide.is_open() and not first.vertical_slice.is_time_paused(), "CG blocks product guidance while active-city simulation continues")
 	_assert_cinematic_modal_order(first, "initial CG")
 	root.content_scale_size = Vector2i(1440, 900)
 	root.size = Vector2i(1440, 900)
@@ -40,6 +43,12 @@ func _run() -> void:
 	await _click_at(first.municipal_button.get_global_rect().get_center())
 	_check(first.municipal_overlay == null, "CG consumes the pointer before the underlying Municipal button can open its lazy overlay")
 	_check(_presentation_authority_snapshot(first) == cg_authority_before, "CG pointer handling cannot change date, funds, report history, or guide receipts")
+	if OS.get_environment(CINEMATIC_LIFECYCLE_ENV) == "1":
+		await _verify_cinematic_reentry_and_ui_rebuild_guard(first)
+		return
+	if OS.get_environment(NATURAL_FILM_ENV) == "1":
+		await _verify_natural_opening_completion(first)
+		return
 
 	first.tutorial_overlay.skip_button.emit_signal("pressed")
 	await _settle(5)
@@ -128,8 +137,13 @@ func _run() -> void:
 	_check(first.vertical_slice.session.state.construction_jobs.size() == construction_jobs_before + 1, "real confirmation creates exactly one authoritative construction job")
 	_check(first.vertical_slice.treasury_balance() == treasury_before_construction - placement_cost, "real confirmation deducts the approved quoted construction cost from the authoritative treasury")
 	_check(first.onboarding_progress.current_target() == "blueprint" and first.onboarding_progress.receipts().size() == 1, "real construction confirmation advances the guide once to blueprint")
+	await _advance_to_onboarding_due(first, "blueprint")
 	var blueprint_municipal_target := first.onboarding_guide.target_control() as Control
 	_check(blueprint_municipal_target == first.municipal_button, "blueprint step returns to the real Municipal entry after construction")
+	if blueprint_municipal_target == null:
+		_cleanup_save()
+		await TestCleanup.finish(self, [first], 1)
+		return
 	await _click_at(blueprint_municipal_target.get_global_rect().get_center())
 	await _settle(3)
 	var park_buildings_target := first.onboarding_guide.target_control() as Control
@@ -164,22 +178,11 @@ func _run() -> void:
 	await _click_at(park_submit_target.get_global_rect().get_center())
 	await _settle(3)
 	_check(first.onboarding_progress.current_target() == "route" and first.onboarding_progress.receipts().size() == 2, "real Park blueprint submit advances once to the route step")
-	var route_back_target := first.onboarding_guide.target_control() as Control
 	_check(first.municipal_overlay != null and first.municipal_overlay.is_open() and first.municipal_overlay.current_page() == "blueprint", "successful Park blueprint leaves the real Municipal blueprint page open")
-	_check(route_back_target != null and route_back_target.name == "BackButton" and route_back_target.is_visible_in_tree() and route_back_target != first.municipal_button, "route guide uses the visible Municipal BackButton instead of the hidden background Municipal button")
-	_assert_wrong_page_resolvers_use_foreground_back(first, route_back_target)
-	await _click_at(route_back_target.get_global_rect().get_center())
-	await _settle(3)
-	var mobility_group_target := first.onboarding_guide.target_control() as Control
-	_check(first.municipal_overlay.current_page() == "buildings" and mobility_group_target != null and mobility_group_target.name == "BuildingGroup_mobility", "Municipal Back returns to Buildings and route guide advances to mobility")
-	await _click_at(mobility_group_target.get_global_rect().get_center())
-	await _settle(3)
-	var bus_stop_target := first.onboarding_guide.target_control() as Control
-	_check(bus_stop_target != null and bus_stop_target.name == "BuildingCard_公車站", "mobility guide advances to the real Bus Stop card")
-	await _click_at(bus_stop_target.get_global_rect().get_center())
-	await _settle(3)
-	var bus_stop_blueprint_target := first.onboarding_guide.target_control() as Control
-	_check(first.selected_building == "公車站" and bus_stop_blueprint_target != null and bus_stop_blueprint_target.name == "SubmitBlueprintButton", "Bus Stop card enters its real route blueprint action")
+	_check(first.onboarding_guide.is_waiting_mode() and not first.onboarding_guide.is_open(), "new route D+3 interval shows passive timing without an actionable target in the real modal")
+	var route_foreground_back := first.call("_visible_municipal_back_target") as Control
+	_check(route_foreground_back != null and route_foreground_back.name == "BackButton", "the still-open blueprint page keeps its real foreground Back control while the next segment waits")
+	_assert_wrong_page_resolvers_use_foreground_back(first, route_foreground_back)
 
 	await TestCleanup.release_fixtures(self, [first])
 	var resumed = _new_main()
@@ -193,17 +196,19 @@ func _run() -> void:
 	_check(resumed.onboarding_progress.is_active() and resumed.onboarding_progress.current_target() == "route", "continue restores the exact route target after completed build and blueprint steps")
 	_check(resumed.onboarding_progress.receipts().size() == 2, "continue restores the two authoritative completed-step receipts without synthesizing more")
 	_check(not resumed.tutorial_overlay.is_open(), "continue does not replay an already-seen CG")
-	_check(resumed.onboarding_guide.is_open() and resumed.onboarding_guide.is_product_mode(), "continue restores the real target guide")
+	_check(resumed.onboarding_guide.is_waiting_mode() and not resumed.onboarding_guide.is_open() and resumed.onboarding_progress.is_waiting(resumed.vertical_slice.game_day()), "continue restores the exact passive route schedule without an early target")
 
 	var replay_authority_before := _presentation_authority_snapshot(resumed)
 	resumed.call("_replay_tutorial")
 	await _settle(3)
-	_check(resumed.tutorial_overlay.is_open() and resumed.tutorial_overlay.current_index == 0, "settings replay reopens the CG from shot one")
+	_check(resumed.tutorial_overlay.is_open() and resumed.tutorial_overlay.current_index == 0 and resumed.tutorial_overlay.video_player.is_playing(), "settings replay restarts the film from its beginning")
 	_assert_cinematic_modal_order(resumed, "settings replay CG")
 	_check(_presentation_authority_snapshot(resumed) == replay_authority_before, "replaying the CG cannot change date, funds, report history, or guide receipts")
 	resumed.tutorial_overlay.skip_button.emit_signal("pressed")
 	await _settle(3)
 	_check(resumed.onboarding_progress.current_target() == "route" and resumed.onboarding_progress.receipts().size() == 2, "replay completion cannot reset, complete, or skip the authoritative route guide")
+	_check(resumed.onboarding_guide.is_waiting_mode() and resumed.onboarding_progress.is_waiting(resumed.vertical_slice.game_day()), "replay completion preserves the passive route waiting schedule")
+	await _advance_to_onboarding_due(resumed, "route")
 
 	var route_entry_target := resumed.onboarding_guide.target_control() as Control
 	for expected_name: String in ["MunicipalButton", "BuildingsButton", "BuildingGroup_mobility", "BuildingCard_公車站"]:
@@ -272,6 +277,10 @@ func _run() -> void:
 	var station_placements: Array = Dictionary(route_session.get("route_draft", {})).get("station_placements", [])
 	_check(station_placements.size() == 2 and _station_placements_are_distinct(station_placements), "second real guided click preserves both distinct nonoverlapping drafts")
 	_check(resumed.onboarding_guide.target_control() == resumed.placement_confirm_button and not resumed.placement_confirm_button.disabled, "two valid station drafts guide to the real station-phase confirmation")
+	print("ROUTE_GUIDE_STATIONS first=%d second=%d drafts=%d" % [first_station_index, second_station_index, station_placements.size()])
+	if station_placements.size() != 2 or resumed.onboarding_guide.target_control() != resumed.placement_confirm_button:
+		await TestCleanup.finish(self, [resumed], 1)
+		return
 	await _click_at(resumed.placement_confirm_button.get_global_rect().get_center())
 	await _settle(6)
 	route_session = resumed.vertical_slice.transport_planning_session_snapshot()
@@ -340,6 +349,19 @@ func _run() -> void:
 	var package_continue_control := resumed.find_child("TransportPlanningSessionContinue", true, false) as Button
 	var route_draft: Dictionary = route_session.get("route_draft", {})
 	_check(str(route_session.get("state", "")) == "route_edit" and not Array(route_draft.get("station_placements", [])).is_empty() and not Array(route_session.get("network_draft", {}).get("tile_ids", [])).is_empty(), "corridor confirmation reaches route_edit with station placements and network draft")
+	var wait_reserved_tiles: Array[int] = _station_footprint_tiles(station_placements)
+	for corridor_tile: int in completed_corridor:
+		if not wait_reserved_tiles.has(corridor_tile):
+			wait_reserved_tiles.append(corridor_tile)
+	var blocker_start: Dictionary = _start_route_wait_blocker(resumed, wait_reserved_tiles)
+	_check(bool(blocker_start.get("ok", false)), "guided route wait starts one real independent terrain job after the staged days")
+	resumed.call("_consume_vertical_events", resumed.vertical_slice.drain_ui_events())
+	resumed.call("_sync_vertical_state")
+	resumed.call("_update_ui")
+	resumed.call("_refresh_transport_planning_panel")
+	resumed.call("_refresh_onboarding_guide")
+	await _settle(4)
+	package_wait_target = resumed.onboarding_guide.target_control() as Button
 	var plan_route_bus := resumed.find_child("PlanRoute_bus", true, false) as Button
 	var package_quote: Dictionary = resumed.vertical_slice.transport_session_package_quote(resumed.city_grid)
 	var package_active_jobs: Array = resumed.vertical_slice.construction.active_jobs()
@@ -347,11 +369,15 @@ func _run() -> void:
 	var package_requested_workers: int = int(package_quote.get("requested_workers", -1))
 	route_session = resumed.vertical_slice.transport_planning_session_snapshot()
 	_check(bool(package_quote.get("ok", false)) and bool(package_quote.get("can_afford", false)) and not bool(package_quote.get("can_start", true)), "route-edit package waits when the otherwise valid affordable quote lacks workers")
-	_check(package_available_workers < package_requested_workers and package_active_jobs.size() == 1 and int(Dictionary(package_active_jobs[0]).get("worker_count", 0)) == 5, "natural-wait fixture has one five-worker blocker and the exact package worker shortage")
+	_check(package_available_workers < package_requested_workers and package_active_jobs.size() == 1 and int(Dictionary(package_active_jobs[0]).get("worker_count", 0)) == 20, "natural-wait fixture has one short real blocker and the exact package worker shortage")
 	_check(package_continue_control != null and package_continue_control.is_visible_in_tree() and package_continue_control.disabled, "worker shortage keeps the actual package Continue visible and disabled")
-	_check(package_wait_target != null and package_wait_target.name == "CloseButton" and package_wait_target.is_visible_in_tree() and not package_wait_target.disabled, "disabled package Continue guides to the real municipal Close control")
+	var package_wait_message := (resumed.onboarding_guide.get_node("OnboardingMessage") as Label).text
+	var package_modal_close := resumed.find_child("CloseButton", true, false) as Button
+	_check(package_wait_target == null and resumed.onboarding_guide.is_waiting_mode(), "disabled package Continue immediately uses the non-modal waiting presentation")
+	_check("人力不足" in package_wait_message and "可先處理城市與工程" in package_wait_message, "open route modal explains the real worker shortage and leaves the defer action available")
+	_check(package_modal_close != null and package_modal_close.is_visible_in_tree() and not package_modal_close.disabled, "the real municipal Close remains available beside non-modal guidance")
 	_check(package_wait_target != plan_route_bus, "route package wait guide does not target PlanRoute_bus or require legacy station_tile_ids")
-	if package_wait_target == null or package_active_jobs.size() != 1:
+	if package_modal_close == null or package_active_jobs.size() != 1:
 		await TestCleanup.finish(self, [resumed], 1)
 		return
 
@@ -363,13 +389,14 @@ func _run() -> void:
 	var wait_job_count_before: int = resumed.vertical_slice.construction.jobs.size()
 	var wait_receipt_count_before: int = resumed.onboarding_progress.receipts().size()
 	var wait_package_ledger_before := _ledger_reason_count(resumed, "construction.transport_package_total")
-	await _click_at(package_wait_target.get_global_rect().get_center())
+	await _click_at(package_modal_close.get_global_rect().get_center())
 	await _settle(4)
-	var municipal_wait_target := resumed.onboarding_guide.target_control() as Button
 	_check(not resumed.municipal_overlay.is_open() and not resumed.vertical_slice.is_time_paused(), "actual Close hides the municipal modal and resumes the city clock")
-	_check(municipal_wait_target != null and municipal_wait_target.name == "MunicipalButton" and municipal_wait_target.is_visible_in_tree(), "closed route package keeps the guide on the real Municipal entry while time runs")
+	var worker_wait_message := (resumed.onboarding_guide.get_node("OnboardingMessage") as Label).text
+	_check(resumed.onboarding_guide.is_waiting_mode() and resumed.onboarding_guide.target_control() == null and resumed._resolve_route_onboarding_target() == null, "closed route package suppresses the Municipal re-entry loop with a non-modal waiting card while authority is not ready")
+	_check("人力不足" in worker_wait_message and "可先處理城市與工程" in worker_wait_message, "worker wait card explains the real shortage and leaves the defer action available")
 	_check(resumed.vertical_slice.transport_planning_session_snapshot() == wait_session_before, "closing the modal preserves the complete route-package draft")
-	if municipal_wait_target == null or blocking_job_id.is_empty() or blocking_remaining_days <= 0:
+	if blocking_job_id.is_empty() or blocking_remaining_days <= 0:
 		await TestCleanup.finish(self, [resumed], 1)
 		return
 
@@ -384,7 +411,8 @@ func _run() -> void:
 	_check(resumed.vertical_slice.transport_planning_session_snapshot() == wait_session_before, "natural construction completion preserves the uncommitted route-package session and drafts")
 	_check(resumed.vertical_slice.transport.to_dict() == wait_transport_before and resumed.vertical_slice.construction.jobs.size() == wait_job_count_before, "natural wait creates no route, transport project, station, or package construction job")
 	_check(resumed.onboarding_progress.receipts().size() == wait_receipt_count_before and _ledger_reason_count(resumed, "construction.transport_package_total") == wait_package_ledger_before, "natural wait produces no route receipt or package ledger transaction")
-	_check(resumed.onboarding_guide.target_control() == municipal_wait_target and not resumed.vertical_slice.is_time_paused(), "natural completion leaves the visible Municipal guide available without pausing time")
+	var municipal_wait_target := resumed.onboarding_guide.target_control() as Button
+	_check(municipal_wait_target != null and municipal_wait_target.name == "MunicipalButton" and municipal_wait_target.is_visible_in_tree() and not resumed.vertical_slice.is_time_paused(), "natural completion restores the Municipal guide only after authority becomes ready")
 	print("ROUTE_GUIDE_R8_NATURAL_WAIT_JSON=" + JSON.stringify({
 		"blocking_job_id": blocking_job_id,
 		"blocking_remaining_days": blocking_remaining_days,
@@ -395,11 +423,15 @@ func _run() -> void:
 		"available_workers_after": resumed.vertical_slice.construction.available_workers(),
 	}))
 
+	if municipal_wait_target == null:
+		_cleanup_save()
+		await TestCleanup.finish(self, [resumed], 1)
+		return
 	await _click_at(municipal_wait_target.get_global_rect().get_center())
 	await _settle(6)
 	package_quote = resumed.vertical_slice.transport_session_package_quote(resumed.city_grid)
 	var package_continue_target := resumed.onboarding_guide.target_control() as Button
-	_check(resumed.municipal_overlay.current_page() == "transport_planning" and resumed.vertical_slice.is_time_paused(), "actual Municipal input re-enters the active route package directly and pauses the modal")
+	_check(resumed.municipal_overlay.current_page() == "transport_planning" and not resumed.vertical_slice.is_time_paused(), "actual Municipal input re-enters the active route package while simulation continues")
 	_check(bool(package_quote.get("ok", false)) and bool(package_quote.get("can_start", false)), "natural worker release makes the same package quote startable")
 	_check(package_continue_target != null and package_continue_target == package_continue_control and package_continue_target.name == "TransportPlanningSessionContinue" and not package_continue_target.disabled, "re-entered route_edit automatically guides the visible enabled Continue for the actual package commit")
 	if package_continue_target == null or not bool(package_quote.get("can_start", false)):
@@ -421,15 +453,17 @@ func _run() -> void:
 	_check(package_treasury_before - int(resumed.vertical_slice.treasury_balance()) == int(package_quote.get("total_cost", -1)), "actual package commit posts the exact quoted debit")
 	_check(_negative_ledger_count(resumed) == package_negative_ledger_before + 1, "actual package commit posts exactly one negative ledger entry")
 	_check(resumed.onboarding_progress.current_target() == "fiscal" and resumed.onboarding_progress.receipts().size() == package_receipts_before + 1, "one successful package produces exactly one route receipt and advances to fiscal")
-	var fiscal_back_target := resumed.onboarding_guide.target_control() as Control
-	_check(fiscal_back_target != null and fiscal_back_target.name == "BackButton" and fiscal_back_target.is_visible_in_tree(), "post-package fiscal guide retains the foreground municipal Back target")
-	if fiscal_back_target == null:
+	_check(resumed.onboarding_guide.is_waiting_mode() and resumed.onboarding_guide.target_control() == null, "post-package fiscal D+3 interval shows passive timing without capturing the foreground modal")
+	await _advance_to_onboarding_due(resumed, "fiscal")
+	var fiscal_municipal_target := resumed.onboarding_guide.target_control() as Control
+	_check(fiscal_municipal_target != null and fiscal_municipal_target.name == "MunicipalButton" and fiscal_municipal_target.is_visible_in_tree(), "due fiscal segment resumes at the real Municipal entry")
+	if fiscal_municipal_target == null:
 		await TestCleanup.finish(self, [resumed], 1)
 		return
-	await _click_at(fiscal_back_target.get_global_rect().get_center())
+	await _click_at(fiscal_municipal_target.get_global_rect().get_center())
 	await _settle(4)
 	var finance_target := resumed.onboarding_guide.target_control() as Control
-	_check(finance_target != null and finance_target.name == "FinanceButton" and finance_target.is_visible_in_tree(), "foreground Back returns the fiscal guide to Finance")
+	_check(finance_target != null and finance_target.name == "FinanceButton" and finance_target.is_visible_in_tree(), "Municipal opens the due fiscal guide at Finance")
 	if finance_target == null:
 		await TestCleanup.finish(self, [resumed], 1)
 		return
@@ -442,6 +476,97 @@ func _run() -> void:
 	if not _failed:
 		print("Guided onboarding formal entry test passed.")
 	await TestCleanup.finish(self, [resumed], exit_code)
+
+
+func _verify_cinematic_reentry_and_ui_rebuild_guard(main) -> void:
+	var overlay = main.tutorial_overlay
+	var completion_states: Array[bool] = []
+	var playback_started_count := [0]
+	var playback_stopped_reasons: Array[String] = []
+	overlay.completed.connect(func(skipped: bool) -> void: completion_states.append(skipped))
+	overlay.playback_started.connect(func() -> void: playback_started_count[0] += 1)
+	overlay.playback_stopped.connect(func(reason: String) -> void: playback_stopped_reasons.append(reason))
+	var autosaves_before: int = int(main._autosave_count)
+	var dark_mode_before: bool = bool(main.is_dark_mode)
+	var settings_overlay_before = main.settings_overlay
+	var first_position: float = await _wait_for_decoder_position(overlay, 0.5, 5_000)
+	_check(first_position >= 0.5 and overlay.video_player.is_playing(), "F0 observes the real canonical decoder advancing before re-entry")
+	var first_audio_state: Dictionary = main.audio_director.audio_state()
+	_check(bool(first_audio_state.get("cinematic_music_active", false)) and not main.audio_director.music_player.playing, "F0 initial film owns Music and suppresses city BGM")
+
+	await _click_at(main.settings_button.get_global_rect().get_center())
+	_check(main.settings_overlay == settings_overlay_before and not main.settings_overlay.is_open(), "F0 film prevents the player from reaching Settings and its theme rebuild path")
+	_check(main.tutorial_overlay == overlay and overlay.is_open() and overlay.video_player.is_playing(), "F0 blocked Settings click preserves the current overlay and decoder")
+	_check(bool(main.is_dark_mode) == dark_mode_before and int(main._autosave_count) == autosaves_before, "F0 blocked Settings click cannot toggle theme or create an autosave")
+
+	_check(overlay.open(true), "F0 accepts a second open while the first canonical playback is active")
+	await _settle(3)
+	_check(playback_stopped_reasons == ["reopened"] and playback_started_count == [1], "F0 re-entry releases the old claim before claiming the new playback exactly once")
+	_check(completion_states.is_empty() and int(main._autosave_count) == autosaves_before, "F0 re-entry cannot complete onboarding or autosave")
+	_check(overlay.video_player.stream is VideoStream and overlay.video_player.is_playing() and float(overlay.video_player.stream_position) < first_position, "F0 re-entry resets and starts a new canonical decoder playback")
+	var reopened_audio_state: Dictionary = main.audio_director.audio_state()
+	_check(bool(reopened_audio_state.get("cinematic_music_active", false)) and not main.audio_director.music_player.playing, "F0 old release cannot cancel the new Music claim or restart BGM")
+	var reopened_position: float = await _wait_for_decoder_position(overlay, 0.5, 5_000)
+	_check(reopened_position >= 0.5 and playback_stopped_reasons == ["reopened"] and completion_states.is_empty(), "F0 new decoder keeps advancing without a stale finish or release callback")
+
+	overlay.skip_button.emit_signal("pressed")
+	await _settle(8)
+	_check(completion_states == [true] and playback_stopped_reasons == ["reopened", "skipped"], "F0 final skip completes once and releases only the active playback")
+	_check(not overlay.is_open() and overlay.video_player.stream == null, "F0 final release closes and detaches the decoder")
+	_check(main.onboarding_progress.is_active() and main.onboarding_progress.current_target() == "build", "F0 re-entered initial story still begins the authoritative guide")
+	_check(int(main._autosave_count) == autosaves_before + 1, "F0 completion persists exactly once after re-entry")
+	var final_audio_state: Dictionary = main.audio_director.audio_state()
+	_check(not bool(final_audio_state.get("cinematic_music_active", true)) and main.audio_director.music_player.playing == main.music_enabled, "F0 final release restores BGM according to the current Music preference")
+	await _settle(8)
+	_check(completion_states == [true] and int(main._autosave_count) == autosaves_before + 1, "F0 late frames cannot duplicate completion or autosave")
+
+	_cleanup_save()
+	var exit_code := 1 if _failed else 0
+	if not _failed:
+		print("Guided onboarding formal entry test passed. F0Reopen=true FirstPosition=%.3f ReopenedPosition=%.3f" % [first_position, reopened_position])
+	await TestCleanup.finish(self, [main], exit_code)
+
+
+func _wait_for_decoder_position(overlay, minimum_position: float, timeout_msec: int) -> float:
+	var started_ms := Time.get_ticks_msec()
+	var position := float(overlay.video_player.stream_position)
+	while overlay.is_open() and overlay.video_player.is_playing() and position < minimum_position and Time.get_ticks_msec() - started_ms < timeout_msec:
+		await process_frame
+		position = float(overlay.video_player.stream_position)
+	return position
+
+
+func _verify_natural_opening_completion(main) -> void:
+	var completion_states: Array[bool] = []
+	main.tutorial_overlay.completed.connect(func(skipped: bool) -> void: completion_states.append(skipped))
+	var autosaves_before: int = int(main._autosave_count)
+	var wall_started_ms := Time.get_ticks_msec()
+	var first_position := float(main.tutorial_overlay.video_player.stream_position)
+	var greatest_position := first_position
+	var observed_progress_samples := 0
+	while main.tutorial_overlay.is_open() and Time.get_ticks_msec() - wall_started_ms < 110_000:
+		await process_frame
+		var position := float(main.tutorial_overlay.video_player.stream_position)
+		if position > greatest_position + 0.25:
+			greatest_position = position
+			observed_progress_samples += 1
+	var wall_elapsed_seconds := float(Time.get_ticks_msec() - wall_started_ms) / 1000.0
+	_check(is_equal_approx(Engine.time_scale, 1.0), "natural film evidence keeps the engine at normal time scale")
+	_check(first_position < 2.0 and greatest_position >= 88.0 and observed_progress_samples > 20, "real decoder position advances continuously from the beginning through the full film")
+	_check(wall_elapsed_seconds >= 88.0 and wall_elapsed_seconds <= 110.0, "natural completion consumes the real approximately 90-second wall-clock interval")
+	_check(not main.tutorial_overlay.is_open(), "the real VideoStreamPlayer finished signal closes the film")
+	_check(completion_states == [false], "natural playback completes exactly once without skipped=true")
+	_check(main.tutorial_overlay.video_player.stream == null, "natural completion detaches the decoder stream")
+	_check(main.onboarding_progress.is_active() and main.onboarding_progress.current_target() == "build", "natural completion begins the ordered product guide")
+	_check(main.onboarding_progress.receipts().is_empty(), "natural film completion grants no product receipt")
+	_check(main.onboarding_guide.is_open() and main.onboarding_guide.is_product_mode(), "natural completion binds the first real guide target")
+	_check(main.vertical_slice.has_save_game(TEST_SAVE_PATH) and int(main._autosave_count) == autosaves_before + 1, "natural story-to-guide transition persists exactly once")
+	_check(main.audio_director.music_player.playing == main.music_enabled, "natural completion restores city BGM according to the current preference")
+	_cleanup_save()
+	var exit_code := 1 if _failed else 0
+	if not _failed:
+		print("Guided onboarding formal entry test passed. NaturalFilmSeconds=%.3f MaxPosition=%.3f" % [wall_elapsed_seconds, greatest_position])
+	await TestCleanup.finish(self, [main], exit_code)
 
 
 func _new_main():
@@ -457,6 +582,29 @@ func _wait_for_loading(main) -> void:
 		if not main.start_screen.is_loading():
 			return
 	_fail("loading animation did not finish within 120 frames")
+
+
+func _advance_to_onboarding_due(main, expected_target: String) -> void:
+	var current_day: int = main.vertical_slice.game_day()
+	var due_day: int = main.onboarding_progress.due_game_day()
+	_check(main.onboarding_progress.current_target() == expected_target, "%s is the scheduled next guided segment" % expected_target)
+	_check(due_day == current_day + 3 and main.onboarding_progress.is_waiting(current_day), "%s waits three full game days" % expected_target)
+	if main.municipal_overlay != null and main.municipal_overlay.is_open():
+		main.municipal_overlay.close_overlay()
+	await _settle(2)
+	main.call("_sync_time_pause_for_ui")
+	_check(not main.vertical_slice.is_time_paused(), "%s schedule releases tutorial time pause" % expected_target)
+	var events: Array[Dictionary] = main.vertical_slice.advance_days(
+		due_day - current_day,
+		main.call("_vertical_city_context"),
+		false
+	)
+	main.call("_consume_vertical_events", events)
+	main.call("_sync_vertical_state")
+	main.call("_update_ui")
+	main.call("_refresh_onboarding_guide")
+	await _settle(3)
+	_check(main.vertical_slice.game_day() == due_day and main.onboarding_progress.is_current_target_available(due_day), "%s opens on its exact due day" % expected_target)
 
 
 func _settle(frames: int) -> void:
@@ -611,6 +759,16 @@ func _find_illegal_route_first_tile(main, stations: Array[Dictionary]) -> int:
 		if tile_id not in first_access and tile_id not in second_access and main._route_package_corridor_tile_is_available(tile_id, reserved):
 			return tile_id
 	return -1
+
+
+func _start_route_wait_blocker(main, reserved_tiles: Array[int]) -> Dictionary:
+	for tile_id in main.grid_buttons.size():
+		if reserved_tiles.has(tile_id):
+			continue
+		var quote: Dictionary = main.vertical_slice.terrain_flatten_quote(tile_id, 20)
+		if bool(quote.get("ok", false)) and bool(quote.get("can_start", false)) and int(quote.get("duration_days", 0)) > 1:
+			return main.vertical_slice.flatten_terrain(tile_id, 20)
+	return {}
 
 
 func _station_placements_are_distinct(placements: Array) -> bool:

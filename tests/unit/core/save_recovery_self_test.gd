@@ -1729,11 +1729,45 @@ func _build_current_schema_corruption_fixture(fixture_kind: String, path: String
 				)
 		"active_build", "two_active_builds":
 			var requested_count := 2 if fixture_kind == "two_active_builds" else 1
-			var tiles := _find_free_buildable_tiles(coordinator, requested_count)
-			_check(tiles.size() == requested_count, "%s fixture finds distinct buildable tiles" % fixture_kind)
-			for tile_id: int in tiles:
+			_check(
+				coordinator.construction.available_workers() == ConstructionSystemScript.MAX_WORKERS,
+				"%s fixture starts with the canonical worker pool" % fixture_kind
+			)
+			for job_index: int in range(requested_count):
+				var tile_id := _find_placeable_building_anchor(coordinator, "住宅", 10)
+				_check(tile_id >= 0, "%s fixture finds a fully placeable building anchor" % fixture_kind)
+				if tile_id < 0:
+					continue
 				var started: Dictionary = coordinator.start_approved_building("住宅", tile_id, 10)
-				_check(bool(started.get("ok", false)), "%s fixture starts a canonical building job" % fixture_kind)
+				_check(
+					bool(started.get("ok", false)),
+					"%s fixture starts canonical building job %d (error=%s)" % [
+						fixture_kind,
+						job_index + 1,
+						str(started.get("error", "")),
+					]
+				)
+			var active_jobs: Array[Dictionary] = coordinator.construction.active_jobs()
+			_check(active_jobs.size() == requested_count, "%s fixture retains every requested active job" % fixture_kind)
+			var allocated_workers := 0
+			for active_job: Dictionary in active_jobs:
+				var active_worker_count := int(active_job.get("worker_count", 0))
+				_check(active_worker_count == 10, "%s fixture preserves ten workers per active job" % fixture_kind)
+				allocated_workers += active_worker_count
+			_check(
+				allocated_workers == requested_count * 10,
+				"%s fixture worker allocation matches its active jobs" % fixture_kind
+			)
+			_check(
+				coordinator.construction.available_workers() == ConstructionSystemScript.MAX_WORKERS - allocated_workers,
+				"%s fixture available-worker remainder matches canonical capacity" % fixture_kind
+			)
+			var population_snapshot: Dictionary = coordinator.population.to_dict()
+			_check(PopulationSystemScript.validate_snapshot(population_snapshot), "%s fixture population snapshot is canonical" % fixture_kind)
+			_check(
+				coordinator.population.population_count() == int(coordinator.session.state.metrics.get("population", -1)),
+				"%s fixture population metric matches canonical population" % fixture_kind
+			)
 		"external_station":
 			var tiles := _find_free_buildable_tiles(coordinator, 1)
 			_check(tiles.size() == 1, "external-station fixture finds a buildable tile")
@@ -1791,6 +1825,14 @@ func _find_free_buildable_tiles(coordinator, requested_count: int) -> Array[int]
 		if result.size() >= requested_count:
 			break
 	return result
+
+
+func _find_placeable_building_anchor(coordinator, display_name: String, worker_count: int) -> int:
+	for tile_id: int in range(coordinator.terrain_map.cell_count()):
+		var quote: Dictionary = coordinator.placement_footprint_quote(display_name, tile_id, worker_count)
+		if bool(quote.get("ok", false)):
+			return tile_id
+	return -1
 
 
 func _find_free_buildable_run(coordinator, length: int) -> Array[int]:

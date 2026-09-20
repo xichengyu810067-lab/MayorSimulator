@@ -14,6 +14,7 @@ const TransportPlanningSessionScript = preload("res://scripts/systems/city/trans
 const CityTerrainMapScript = preload("res://scripts/world/city_terrain_map.gd")
 const TransportModesScript = preload("res://data/catalogs/transport_modes.gd")
 const BuildingFootprintsScript = preload("res://data/catalogs/building_footprints.gd")
+const BuildingTerrainLabelsScript = preload("res://data/catalogs/building_terrain_labels.gd")
 
 signal domain_event(event)
 signal state_changed(view_model: Dictionary)
@@ -1106,7 +1107,13 @@ func _validate_terrain_construction_links(vertical: Dictionary, restored_state) 
 		if not bool(footprint_validation.get("valid", false)):
 			return false
 		for occupied_tile_id: int in footprint_validation.get("occupied_tile_ids", []):
-			if not terrain_map.is_buildable(occupied_tile_id):
+			# Keep legacy cities readable when their stored terrain was previously
+			# accepted, while allowing reviewed candidates that the old classifier
+			# marked incorrectly. New placement remains label-authoritative.
+			if (
+				not terrain_map.is_buildable(occupied_tile_id)
+				and not BuildingTerrainLabelsScript.is_buildable(occupied_tile_id)
+			):
 				return false
 	var construction: Dictionary = vertical.get("construction", {})
 	var jobs: Dictionary = construction.get("jobs", {})
@@ -1123,7 +1130,10 @@ func _validate_terrain_construction_links(vertical: Dictionary, restored_state) 
 			if footprint_tiles_value == null:
 				return false
 			for occupied_tile_id: int in footprint_tiles_value:
-				if not terrain_map.is_buildable(occupied_tile_id):
+				if (
+					not terrain_map.is_buildable(occupied_tile_id)
+					and not BuildingTerrainLabelsScript.is_buildable(occupied_tile_id)
+				):
 					return false
 		if str(metadata.get("entity_kind", "")) != ConstructionSystemScript.TERRAIN_FLATTEN_ENTITY_KIND:
 			continue

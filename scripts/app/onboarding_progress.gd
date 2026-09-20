@@ -1,10 +1,15 @@
 class_name OnboardingProgress
 extends RefCounted
 
-const SHELL_SCHEMA_VERSION := 9
-const SNAPSHOT_SCHEMA_VERSION := 1
+const SHELL_SCHEMA_VERSION := 10
+const SNAPSHOT_SCHEMA_VERSION := 2
+const MIN_SNAPSHOT_SCHEMA_VERSION := 1
 const MAX_RECEIPTS := 9
 const MAX_GAME_DAY := 100_000_000
+const MAX_SCHEDULE_GAME_DAY := 2_000_000_000
+const STAGE_DELAY_DAYS := 3
+const CASE_STAGE_DELAY_DAYS := 1
+const UNSCHEDULED_GAME_DAY := -1
 const MAX_ID_LENGTH := 96
 const PHASE_STORY := "story"
 const PHASE_ACTIVE := "active"
@@ -23,13 +28,23 @@ const ORDERED_TARGETS: Array[String] = [
 	"judicial",
 	"oversight",
 ]
-const SNAPSHOT_KEYS := ["schema_version", "phase", "next_index", "current_target", "completion_basis", "receipts"]
+const SNAPSHOT_V1_KEYS := ["schema_version", "phase", "next_index", "current_target", "completion_basis", "receipts"]
+const SNAPSHOT_V2_KEYS := ["schema_version", "phase", "next_index", "current_target", "completion_basis", "receipts", "due_game_day"]
 const RECEIPT_KEYS := ["kind", "authority_id", "entity_id", "game_day"]
+const BUILDING_METRIC_BASELINE_KEYS := [
+	"security",
+	"environment",
+	"traffic",
+	"education",
+	"healthcare",
+	"satisfaction",
+]
 
 var _phase := PHASE_STORY
 var _next_index := 0
 var _completion_basis := ""
 var _receipts: Array[Dictionary] = []
+var _due_game_day := UNSCHEDULED_GAME_DAY
 var _lock_reason := ""
 
 
@@ -38,6 +53,7 @@ func reset_for_new_game() -> void:
 	_next_index = 0
 	_completion_basis = ""
 	_receipts.clear()
+	_due_game_day = UNSCHEDULED_GAME_DAY
 	_lock_reason = ""
 
 
@@ -54,6 +70,9 @@ func record_current_target(target_id: String, receipt: Dictionary) -> bool:
 	var normalized := _validate_receipt(receipt, target_id)
 	if not bool(normalized.get("ok", false)):
 		return false
+	var receipt_day := int(Dictionary(normalized["receipt"])["game_day"])
+	if is_waiting(receipt_day):
+		return false
 	if _receipts.size() >= MAX_RECEIPTS:
 		return false
 	_receipts.append(Dictionary(normalized["receipt"]).duplicate(true))
@@ -61,6 +80,21 @@ func record_current_target(target_id: String, receipt: Dictionary) -> bool:
 	if _next_index >= ORDERED_TARGETS.size():
 		_phase = PHASE_COMPLETED
 		_completion_basis = COMPLETION_BASIS_RECEIPTS
+		_due_game_day = UNSCHEDULED_GAME_DAY
+	else:
+		var next_target := current_target()
+		var delay_days := CASE_STAGE_DELAY_DAYS if next_target == "judicial" or next_target == "oversight" else STAGE_DELAY_DAYS
+		_due_game_day = receipt_day + delay_days
+	return true
+
+
+func defer_current_target(current_game_day: int) -> bool:
+	if _phase != PHASE_ACTIVE or current_game_day < 0 or current_game_day > MAX_SCHEDULE_GAME_DAY:
+		return false
+	var schedule_base := maxi(current_game_day, _due_game_day)
+	if schedule_base > MAX_SCHEDULE_GAME_DAY - STAGE_DELAY_DAYS:
+		return false
+	_due_game_day = schedule_base + STAGE_DELAY_DAYS
 	return true
 
 
@@ -71,6 +105,10 @@ func restore_from_shell_state(shell_state: Dictionary) -> Dictionary:
 	var shell_schema := int(shell_schema_result["value"])
 	if shell_schema > SHELL_SCHEMA_VERSION:
 		return _lock("future_shell_schema")
+	if shell_schema >= 10:
+		var baseline_validation := validate_building_metric_baselines(shell_state)
+		if not bool(baseline_validation.get("ok", false)):
+			return _lock(str(baseline_validation.get("error", "invalid_building_metric_baselines")))
 	if shell_schema <= 8:
 		reset_for_new_game()
 		if bool(shell_state.get("tutorial_completed", false)):
@@ -87,11 +125,34 @@ func restore_from_shell_state(shell_state: Dictionary) -> Dictionary:
 	_phase = str(normalized["phase"])
 	_next_index = int(normalized["next_index"])
 	_completion_basis = str(normalized["completion_basis"])
+	_due_game_day = int(normalized["due_game_day"])
 	_receipts.clear()
 	for receipt_variant: Variant in normalized["receipts"]:
 		_receipts.append(Dictionary(receipt_variant).duplicate(true))
 	_lock_reason = ""
-	return {"ok": true, "source_schema": shell_schema, "migration": "none"}
+	return {
+		"ok": true,
+		"source_schema": shell_schema,
+		"migration": "onboarding_snapshot_v1_to_v2" if int(validation["source_schema"]) == 1 else "none",
+	}
+
+
+func validate_building_metric_baselines(shell_state: Dictionary) -> Dictionary:
+	if not shell_state.has("building_metric_baselines"):
+		return {"ok": false, "error": "missing_building_metric_baselines"}
+	var baselines_value: Variant = shell_state["building_metric_baselines"]
+	if not baselines_value is Dictionary:
+		return {"ok": false, "error": "invalid_building_metric_baseline_type"}
+	var baselines: Dictionary = baselines_value
+	if not _has_exact_keys(baselines, BUILDING_METRIC_BASELINE_KEYS):
+		return {"ok": false, "error": "invalid_building_metric_baseline_keys"}
+	var normalized: Dictionary = {}
+	for metric_name: String in BUILDING_METRIC_BASELINE_KEYS:
+		var baseline_result := _bounded_integer(baselines[metric_name], 0, 100)
+		if not bool(baseline_result.get("ok", false)):
+			return {"ok": false, "error": "invalid_building_metric_baseline_value"}
+		normalized[metric_name] = int(baseline_result["value"])
+	return {"ok": true, "baselines": normalized}
 
 
 func snapshot() -> Dictionary:
@@ -102,6 +163,7 @@ func snapshot() -> Dictionary:
 		"current_target": current_target(),
 		"completion_basis": _completion_basis,
 		"receipts": receipts(),
+		"due_game_day": _due_game_day,
 	}
 
 
@@ -120,6 +182,18 @@ func current_target() -> String:
 
 func next_index() -> int:
 	return _next_index
+
+
+func due_game_day() -> int:
+	return _due_game_day
+
+
+func is_waiting(current_game_day: int) -> bool:
+	return _phase == PHASE_ACTIVE and _due_game_day >= 0 and current_game_day < _due_game_day
+
+
+func is_current_target_available(current_game_day: int) -> bool:
+	return _phase == PHASE_ACTIVE and not is_waiting(current_game_day)
 
 
 func phase() -> String:
@@ -147,11 +221,15 @@ func is_locked() -> bool:
 
 
 func _validate_snapshot(value: Dictionary) -> Dictionary:
-	if not _has_exact_keys(value, SNAPSHOT_KEYS):
+	if not value.has("schema_version"):
 		return {"ok": false, "error": "onboarding_snapshot_keys"}
-	var schema_result := _bounded_integer(value["schema_version"], SNAPSHOT_SCHEMA_VERSION, SNAPSHOT_SCHEMA_VERSION)
+	var schema_result := _bounded_integer(value["schema_version"], MIN_SNAPSHOT_SCHEMA_VERSION, SNAPSHOT_SCHEMA_VERSION)
 	if not bool(schema_result.get("ok", false)):
 		return {"ok": false, "error": "onboarding_snapshot_schema"}
+	var source_schema := int(schema_result["value"])
+	var expected_keys := SNAPSHOT_V1_KEYS if source_schema == 1 else SNAPSHOT_V2_KEYS
+	if not _has_exact_keys(value, expected_keys):
+		return {"ok": false, "error": "onboarding_snapshot_keys"}
 	if not (value["phase"] is String) or not (value["current_target"] is String) or not (value["completion_basis"] is String):
 		return {"ok": false, "error": "onboarding_snapshot_types"}
 	if not (value["receipts"] is Array):
@@ -163,6 +241,10 @@ func _validate_snapshot(value: Dictionary) -> Dictionary:
 	var next_value := int(index_result["value"])
 	var target_value := str(value["current_target"])
 	var basis_value := str(value["completion_basis"])
+	var due_result := _bounded_integer(value.get("due_game_day", UNSCHEDULED_GAME_DAY), UNSCHEDULED_GAME_DAY, MAX_SCHEDULE_GAME_DAY)
+	if not bool(due_result.get("ok", false)):
+		return {"ok": false, "error": "onboarding_due_game_day"}
+	var due_value := int(due_result["value"])
 	var raw_receipts: Array = value["receipts"]
 	if raw_receipts.size() > MAX_RECEIPTS:
 		return {"ok": false, "error": "onboarding_receipts_bounded"}
@@ -176,13 +258,13 @@ func _validate_snapshot(value: Dictionary) -> Dictionary:
 		normalized_receipts.append(Dictionary(receipt_result["receipt"]).duplicate(true))
 	match phase_value:
 		PHASE_STORY:
-			if next_value != 0 or target_value != "" or basis_value != "" or not normalized_receipts.is_empty():
+			if next_value != 0 or target_value != "" or basis_value != "" or not normalized_receipts.is_empty() or due_value != UNSCHEDULED_GAME_DAY:
 				return {"ok": false, "error": "onboarding_story_order"}
 		PHASE_ACTIVE:
 			if next_value >= ORDERED_TARGETS.size() or target_value != ORDERED_TARGETS[next_value] or basis_value != "" or normalized_receipts.size() != next_value:
 				return {"ok": false, "error": "onboarding_active_order"}
 		PHASE_COMPLETED:
-			if next_value != ORDERED_TARGETS.size() or target_value != "":
+			if next_value != ORDERED_TARGETS.size() or target_value != "" or due_value != UNSCHEDULED_GAME_DAY:
 				return {"ok": false, "error": "onboarding_completed_order"}
 			if basis_value == COMPLETION_BASIS_RECEIPTS and normalized_receipts.size() != ORDERED_TARGETS.size():
 				return {"ok": false, "error": "onboarding_completed_receipts"}
@@ -192,13 +274,14 @@ func _validate_snapshot(value: Dictionary) -> Dictionary:
 				return {"ok": false, "error": "onboarding_completion_basis"}
 		_:
 			return {"ok": false, "error": "onboarding_unknown_phase"}
-	return {"ok": true, "snapshot": {
+	return {"ok": true, "source_schema": source_schema, "snapshot": {
 		"schema_version": SNAPSHOT_SCHEMA_VERSION,
 		"phase": phase_value,
 		"next_index": next_value,
 		"current_target": target_value,
 		"completion_basis": basis_value,
 		"receipts": normalized_receipts,
+		"due_game_day": due_value,
 	}}
 
 
@@ -251,5 +334,6 @@ func _lock(reason: String) -> Dictionary:
 	_next_index = 0
 	_completion_basis = ""
 	_receipts.clear()
+	_due_game_day = UNSCHEDULED_GAME_DAY
 	_lock_reason = reason
 	return {"ok": false, "error": reason}

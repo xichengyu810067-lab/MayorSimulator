@@ -455,16 +455,50 @@ func _update_placement_quote(quote: Dictionary) -> void:
 	var total_cost := int(quote.get("total_cost", base_cost + labor_cost))
 	var duration_days := int(quote.get("duration_days", quote.get("days", estimate.get("duration_days", 0))))
 	var blueprint: Dictionary = quote.get("blueprint", {})
-	var footprint_count := int(quote.get("footprint_count", {"small": 1, "medium": 2, "large": 3}.get(str(blueprint.get("size_tier", "")), 0)))
-	_quote_label.text = L10n.text("草稿估價｜%s・%s・%d 樓・%s・%s｜占地 %d 格｜基礎／設計 $%s ＋ 人工 $%s ＝ 總額 $%s｜工期 %d 日") % [
+	var footprint_count := maxi(0, int(quote.get("footprint_count", 0)))
+	var outcome_text := _quote_building_outcome_text(quote)
+	_quote_label.text = L10n.text("草稿估價｜%s・%s・%d 樓・%s・%s｜占地 %d 格｜基礎／設計 $%s ＋ 人工 $%s ＝ 總額 $%s｜工期 %d 日\n完工後｜%s｜每月維護 $%s") % [
 		_selected_text(_material_picker), _selected_text(_size_picker), int(blueprint.get("floors", 0)), _selected_text(_worker_input), _selected_text(_decor_picker),
-		footprint_count, _format_money(base_cost), _format_money(labor_cost), _format_money(total_cost), duration_days
+		footprint_count, _format_money(base_cost), _format_money(labor_cost), _format_money(total_cost), duration_days,
+		outcome_text, _format_money(maxi(0, int(quote.get("monthly_maintenance", 0))))
 	]
 	_quote_label.add_theme_color_override("font_color", _text_color())
 	# Keep the complete live estimate inside the first 1280x800 view. The quote
 	# text already names the card, so a second title only consumed the final row.
-	_quote_label.custom_minimum_size = Vector2(0, 64)
+	_quote_label.custom_minimum_size = Vector2(0, 92)
 	_quote_label.visible = true
+
+
+func _quote_building_outcome_text(quote: Dictionary) -> String:
+	var effects: Dictionary = quote.get("effects", {})
+	var parts: Array[String] = []
+	var housing := maxi(0, int(quote.get("housing_capacity", effects.get("housing_capacity", 0))))
+	var jobs := maxi(0, int(quote.get("job_capacity", effects.get("job_capacity", effects.get("job_attraction", 0)))))
+	if housing > 0:
+		parts.append(L10n.text("住房 +%d 人") % housing)
+	if jobs > 0:
+		parts.append(L10n.text("職缺 +%d") % jobs)
+	if int(effects.get("commercial_income", 0)) != 0:
+		parts.append(L10n.text("月商業產值 +$%s") % _format_money(int(effects.get("commercial_income", 0))))
+	if int(effects.get("industrial_income", 0)) != 0:
+		parts.append(L10n.text("月工業產值 +$%s") % _format_money(int(effects.get("industrial_income", 0))))
+	var labels := {
+		"satisfaction": "滿意", "security": "治安", "environment": "環境",
+		"traffic": "交通", "education": "教育", "healthcare": "醫療", "score_bonus": "評分",
+	}
+	for effect_key: String in ["satisfaction", "security", "environment", "traffic", "education", "healthcare", "score_bonus"]:
+		var value := int(effects.get(effect_key, 0))
+		if value != 0:
+			parts.append("%s %+d" % [L10n.text(str(labels[effect_key])), value])
+	var utility_value: Variant = effects.get("utility_efficiency", {})
+	if utility_value is Dictionary:
+		var gas_percent := roundi(float((utility_value as Dictionary).get("gas", 0.0)) * 100.0)
+		if gas_percent != 0:
+			parts.append(L10n.text("瓦斯收入效率 %+d%%") % gas_percent)
+	var service_value: Variant = effects.get("public_service", {})
+	if service_value is Dictionary and str((service_value as Dictionary).get("id", "")) == "healthcare":
+		parts.append(L10n.text("醫療容量 +%d 人") % maxi(0, int((service_value as Dictionary).get("capacity_per_facility", 0))))
+	return "・".join(parts) if not parts.is_empty() else L10n.text("無額外容量或城市效果")
 
 func _format_money(amount: int) -> String:
 	var digits := str(absi(amount))

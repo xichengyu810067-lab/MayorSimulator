@@ -51,6 +51,41 @@ func _initialize() -> void:
 	_check(str(with_policy[3].get("job_id", "")) == "policy:public_service", "active-law jobs keep the existing public-service namespace")
 	_check(int(with_policy[3].get("slots", 0)) == 2, "active-law capacity retains the existing rounding rule")
 
+	var authoritative_records := {
+		"building_000004": {
+			"building_id": "building_000004",
+			"building_name": "工廠",
+			"occupied_tile_ids": [12, 13],
+			"status": "active",
+		},
+		"building_000005": {
+			"building_id": "building_000005",
+			"building_name": "大型商場",
+			"occupied_tile_ids": [20, 21, 22],
+			"status": "active",
+		},
+		"building_000006": {
+			"building_id": "building_000006",
+			"building_name": "工廠",
+			"occupied_tile_ids": [30, 31],
+			"status": "scrapped",
+		},
+	}
+	var authoritative_jobs: Array[Dictionary] = MunicipalEconomyServiceScript.build_open_jobs(
+		authoritative_records,
+		{
+			"工廠": {"category": "產業類", "job_capacity": 8, "job_attraction": 99},
+			"大型商場": {"category": "商業類", "job_capacity": 5},
+		},
+		100,
+		0.0
+	)
+	_check(authoritative_jobs.size() == 2, "authoritative building records emit one job offer per active building, not per occupied cell")
+	_check(str(authoritative_jobs[0].get("job_id", "")) == "building:building_000004:工業", "authoritative job ID uses the stable building record ID")
+	_check(int(authoritative_jobs[0].get("slots", 0)) == 8, "job_capacity overrides the legacy job_attraction fallback")
+	_check(int(authoritative_jobs[1].get("slots", 0)) == 5, "multi-cell commercial building capacity is counted once")
+	_check(authoritative_jobs.all(func(job: Dictionary) -> bool: return not str(job.get("job_id", "")).contains("building_000006")), "scrapped building offers no jobs")
+
 	_check(MunicipalEconomyServiceScript.job_sector_for_building("大型商場", buildings) == "商業", "commercial category mapping is preserved")
 	_check(MunicipalEconomyServiceScript.job_sector_for_building("工廠", buildings) == "工業", "industrial category mapping is preserved")
 	_check(MunicipalEconomyServiceScript.job_sector_for_building("未知建築", buildings) == "服務業", "missing definitions fail safely to the existing service sector")

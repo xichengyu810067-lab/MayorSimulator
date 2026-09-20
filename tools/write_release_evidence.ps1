@@ -812,7 +812,7 @@ function Assert-ExportStaging {
         [Parameter(Mandatory)][string]$WindowsDirectory,
         [Parameter(Mandatory)][string]$LinuxDirectory
     )
-    $commonDocuments = @('RELEASE_README.txt', 'THIRD_PARTY_NOTICES.md', 'GODOT_COPYRIGHT.txt')
+    $commonDocuments = @('RELEASE_README.txt', 'THIRD_PARTY_NOTICES.md', 'GODOT_COPYRIGHT.txt', 'LICENSE.txt', 'TERMS_OF_USE.md', 'PRIVACY_NOTICE.md')
     Assert-ExactRegularFiles -Directory $WindowsDirectory -ExpectedNames (@('MayorSimulator.exe', 'MayorSimulator.pck') + $commonDocuments) -Label 'Windows staging'
     Assert-ExactRegularFiles -Directory $LinuxDirectory -ExpectedNames (@('MayorSimulator.x86_64', 'MayorSimulator.pck') + $commonDocuments) -Label 'Linux staging'
 
@@ -1160,7 +1160,7 @@ try {
         throw 'Linux export emitted product diagnostics or leak signatures.'
     }
 
-    foreach ($documentName in @('RELEASE_README.txt', 'THIRD_PARTY_NOTICES.md', 'GODOT_COPYRIGHT.txt')) {
+    foreach ($documentName in @('RELEASE_README.txt', 'THIRD_PARTY_NOTICES.md', 'GODOT_COPYRIGHT.txt', 'LICENSE.txt', 'TERMS_OF_USE.md', 'PRIVACY_NOTICE.md')) {
         foreach ($directory in @($windowsStaging, $linuxStaging)) {
             Copy-Item -LiteralPath (Join-Path $projectRoot $documentName) -Destination (Join-Path $directory $documentName)
         }
@@ -1284,11 +1284,17 @@ try {
         windows_release_readme = Get-FileEvidence -Path (Join-Path $windowsStaging 'RELEASE_README.txt')
         windows_third_party_notices = Get-FileEvidence -Path (Join-Path $windowsStaging 'THIRD_PARTY_NOTICES.md')
         windows_godot_copyright = Get-FileEvidence -Path (Join-Path $windowsStaging 'GODOT_COPYRIGHT.txt')
+        windows_license = Get-FileEvidence -Path (Join-Path $windowsStaging 'LICENSE.txt')
+        windows_terms_of_use = Get-FileEvidence -Path (Join-Path $windowsStaging 'TERMS_OF_USE.md')
+        windows_privacy_notice = Get-FileEvidence -Path (Join-Path $windowsStaging 'PRIVACY_NOTICE.md')
         linux_executable = Get-FileEvidence -Path $linuxExe -Label 'Linux staged executable'
         linux_pck = Get-FileEvidence -Path (Join-Path $linuxStaging 'MayorSimulator.pck') -Label 'Linux staged PCK'
         linux_release_readme = Get-FileEvidence -Path (Join-Path $linuxStaging 'RELEASE_README.txt')
         linux_third_party_notices = Get-FileEvidence -Path (Join-Path $linuxStaging 'THIRD_PARTY_NOTICES.md')
         linux_godot_copyright = Get-FileEvidence -Path (Join-Path $linuxStaging 'GODOT_COPYRIGHT.txt')
+        linux_license = Get-FileEvidence -Path (Join-Path $linuxStaging 'LICENSE.txt')
+        linux_terms_of_use = Get-FileEvidence -Path (Join-Path $linuxStaging 'TERMS_OF_USE.md')
+        linux_privacy_notice = Get-FileEvidence -Path (Join-Path $linuxStaging 'PRIVACY_NOTICE.md')
     }
     $evidence = [ordered]@{
         schema_version = 3
@@ -1363,7 +1369,7 @@ try {
             pck_byte_identical = $exportContract.pck_byte_identical
             pck_bytes = $exportContract.pck_bytes
             pck_sha256 = $exportContract.pck_sha256
-            exact_staging_contract = 'five regular files per platform'
+            exact_staging_contract = 'eight regular files per platform'
             files = $stagedFiles
         }
         windows_product_smoke = [ordered]@{
@@ -1387,12 +1393,15 @@ try {
             release_readme = Get-FileEvidence -Path (Join-Path $projectRoot 'RELEASE_README.txt')
             third_party_notices = Get-FileEvidence -Path (Join-Path $projectRoot 'THIRD_PARTY_NOTICES.md')
             godot_copyright = Get-FileEvidence -Path (Join-Path $projectRoot 'GODOT_COPYRIGHT.txt')
+            license = Get-FileEvidence -Path (Join-Path $projectRoot 'LICENSE.txt')
+            terms_of_use = Get-FileEvidence -Path (Join-Path $projectRoot 'TERMS_OF_USE.md')
+            privacy_notice = Get-FileEvidence -Path (Join-Path $projectRoot 'PRIVACY_NOTICE.md')
         }
         limitations = @(
             'The Windows exported product was smoke-tested in this run; the Linux executable was exported and packaged but not executed on Windows.',
             'A real Linux runner or CI job must execute the Linux smoke test.',
             'Windows binaries and archives are unsigned.',
-            'Background-material redistribution rights and the project-level LICENSE remain release blockers; this package is Internal Alpha only.'
+            'Background-material redistribution rights and a public distribution license remain release blockers; the enclosed LICENSE.txt is for Internal Alpha access-controlled testing only.'
         )
     }
 

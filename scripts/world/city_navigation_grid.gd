@@ -192,6 +192,86 @@ func nearest_safe_position(position: Vector2, max_search_distance: float = 160.0
 	return best_position
 
 
+## Finds a safe point that can be reached while leaving only the obstacle(s)
+## already containing the resident. Other terrain, structures, worksites, and
+## stage boundaries remain solid for the entire 4 px sampled segment.
+func nearest_safe_evacuation_position(
+	position: Vector2,
+	max_search_distance: float = 160.0
+) -> Variant:
+	if is_position_walkable(position):
+		return position
+	if max_search_distance < 0.0 or not _inside_stage_with_clearance(position):
+		return null
+	var direct_id := _position_to_id(position)
+	var origin_id := Vector2i(
+		clampi(direct_id.x, 0, GRID_SIZE.x - 1),
+		clampi(direct_id.y, 0, GRID_SIZE.y - 1)
+	)
+	var search_cells := ceili(max_search_distance / GRID_CELL_SIZE)
+	var best_position := Vector2.ZERO
+	var best_distance_squared := INF
+	for y in range(
+		maxi(0, origin_id.y - search_cells),
+		mini(GRID_SIZE.y, origin_id.y + search_cells + 1)
+	):
+		for x in range(
+			maxi(0, origin_id.x - search_cells),
+			mini(GRID_SIZE.x, origin_id.x + search_cells + 1)
+		):
+			var point_id := Vector2i(x, y)
+			if _astar.is_point_solid(point_id):
+				continue
+			var candidate := _astar.get_point_position(point_id)
+			var distance_squared := position.distance_squared_to(candidate)
+			if (
+				distance_squared > max_search_distance * max_search_distance
+				or distance_squared >= best_distance_squared
+				or not is_position_walkable(candidate)
+				or not is_evacuation_segment_walkable(position, candidate)
+			):
+				continue
+			best_position = candidate
+			best_distance_squared = distance_squared
+	return null if best_distance_squared == INF else best_position
+
+
+func is_evacuation_segment_walkable(
+	from_position: Vector2,
+	to_position: Vector2
+) -> bool:
+	if is_position_walkable(from_position):
+		return is_segment_walkable(from_position, to_position)
+	if not _inside_stage_with_clearance(from_position):
+		return false
+	var ignored_static := {}
+	for polygon_data: Dictionary in _static_polygons:
+		if _point_touches_polygon(from_position, polygon_data["points"], _foot_radius):
+			ignored_static[str(polygon_data.get("id", ""))] = true
+	var ignored_dynamic := {}
+	for blocker_id_variant: Variant in _dynamic_blockers.keys():
+		var blocker: Dictionary = _dynamic_blockers[blocker_id_variant]
+		if (
+			not _blocker_has_open_transport_aperture(blocker)
+			and _point_touches_polygon(from_position, blocker["points"], _foot_radius)
+		):
+			ignored_dynamic[str(blocker_id_variant)] = true
+	if ignored_static.is_empty() and ignored_dynamic.is_empty():
+		return false
+	var distance := from_position.distance_to(to_position)
+	var sample_count := maxi(1, ceili(distance / STRING_PULL_SAMPLE_STEP))
+	for sample_index in range(sample_count + 1):
+		var sample_position := from_position.lerp(
+			to_position,
+			float(sample_index) / float(sample_count)
+		)
+		if _point_blocked_during_evacuation(
+			sample_position, ignored_static, ignored_dynamic
+		):
+			return false
+	return true
+
+
 func find_path(
 	from_position: Vector2,
 	to_position: Vector2,
@@ -680,6 +760,30 @@ func _point_inside_flattened_terrain_aperture(position: Vector2) -> bool:
 func _point_blocked_by_dynamic(position: Vector2) -> bool:
 	for blocker_variant: Variant in _dynamic_blockers.values():
 		var blocker: Dictionary = blocker_variant
+		if _blocker_has_open_transport_aperture(blocker):
+			continue
+		if _point_touches_polygon(position, blocker["points"], _foot_radius):
+			return true
+	return false
+
+
+func _point_blocked_during_evacuation(
+	position: Vector2,
+	ignored_static: Dictionary,
+	ignored_dynamic: Dictionary
+) -> bool:
+	if not _inside_stage_with_clearance(position):
+		return true
+	if not _point_inside_flattened_terrain_aperture(position):
+		for polygon_data: Dictionary in _static_polygons:
+			if ignored_static.has(str(polygon_data.get("id", ""))):
+				continue
+			if _point_touches_polygon(position, polygon_data["points"], _foot_radius):
+				return true
+	for blocker_id_variant: Variant in _dynamic_blockers.keys():
+		if ignored_dynamic.has(str(blocker_id_variant)):
+			continue
+		var blocker: Dictionary = _dynamic_blockers[blocker_id_variant]
 		if _blocker_has_open_transport_aperture(blocker):
 			continue
 		if _point_touches_polygon(position, blocker["points"], _foot_radius):

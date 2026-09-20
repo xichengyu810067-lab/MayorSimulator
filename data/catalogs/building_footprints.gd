@@ -3,9 +3,9 @@ extends RefCounted
 
 ## Canonical logical occupancy for buildings.
 ##
-## A building remains one domain record anchored at its westernmost tile.  The
-## occupied tile ids are derived through CityTerrainMap so the stable, non-row-
-## major tile identities remain authoritative.
+## A building remains one domain record anchored at the tile selected by the
+## player.  The occupied tile ids are derived through CityTerrainMap so the
+## stable, non-row-major tile identities remain authoritative.
 
 const SINGLE_V1 := "single_v1"
 const LINE_2_EAST_V1 := "line_2_east_v1"
@@ -53,30 +53,49 @@ static func size_for_footprint(footprint_id: String) -> String:
 	return str((FOOTPRINTS[footprint_id] as Dictionary).get("size_tier", ""))
 
 
-static func offsets_for_footprint(footprint_id: String) -> Array[Vector2i]:
+static func offsets_for_footprint(
+	footprint_id: String,
+	rotation_quarter_turns_ccw: int = 0
+) -> Array[Vector2i]:
 	var result: Array[Vector2i] = []
 	if not FOOTPRINTS.has(footprint_id):
 		return result
+	var normalized_rotation := posmod(rotation_quarter_turns_ccw, 4)
 	for offset_variant: Variant in (FOOTPRINTS[footprint_id] as Dictionary).get("offsets", []):
-		result.append(offset_variant as Vector2i)
+		var offset := offset_variant as Vector2i
+		for _turn: int in normalized_rotation:
+			# Grid +Y points down on screen, so visual counter-clockwise is (x, y) -> (y, -x).
+			offset = Vector2i(offset.y, -offset.x)
+		result.append(offset)
 	return result
 
 
-static func resolve_for_size(size_tier: String, anchor_tile_id: int, terrain_map) -> Dictionary:
+static func resolve_for_size(
+	size_tier: String,
+	anchor_tile_id: int,
+	terrain_map,
+	rotation_quarter_turns_ccw: int = 0
+) -> Dictionary:
 	var footprint_id := footprint_id_for_size(size_tier)
 	if footprint_id.is_empty():
 		return {"ok": false, "error": "unsupported_building_size"}
-	return resolve_for_footprint(footprint_id, anchor_tile_id, terrain_map)
+	return resolve_for_footprint(footprint_id, anchor_tile_id, terrain_map, rotation_quarter_turns_ccw)
 
 
-static func resolve_for_footprint(footprint_id: String, anchor_tile_id: int, terrain_map) -> Dictionary:
+static func resolve_for_footprint(
+	footprint_id: String,
+	anchor_tile_id: int,
+	terrain_map,
+	rotation_quarter_turns_ccw: int = 0
+) -> Dictionary:
 	if not FOOTPRINTS.has(footprint_id):
 		return {"ok": false, "error": "unsupported_footprint"}
 	if terrain_map == null or not terrain_map.is_valid_tile_id(anchor_tile_id):
 		return {"ok": false, "error": "invalid_anchor_tile_id"}
 	var anchor_coordinate: Vector2i = terrain_map.coordinate_for_tile_id(anchor_tile_id)
 	var occupied_tile_ids: Array[int] = []
-	for offset: Vector2i in offsets_for_footprint(footprint_id):
+	var normalized_rotation := posmod(rotation_quarter_turns_ccw, 4)
+	for offset: Vector2i in offsets_for_footprint(footprint_id, normalized_rotation):
 		var coordinate := anchor_coordinate + offset
 		if not terrain_map.is_valid_coordinate(coordinate):
 			return {
@@ -94,6 +113,7 @@ static func resolve_for_footprint(footprint_id: String, anchor_tile_id: int, ter
 		"anchor_tile_id": anchor_tile_id,
 		"footprint_id": footprint_id,
 		"size_tier": size_for_footprint(footprint_id),
+		"rotation_quarter_turns_ccw": normalized_rotation,
 		"occupied_tile_ids": occupied_tile_ids,
 	}
 
@@ -127,10 +147,21 @@ static func validate_persisted_record(
 		if occupied_tile_ids.has(tile_id):
 			return {"valid": false, "error": "duplicate_occupied_tile_id"}
 		occupied_tile_ids.append(tile_id)
-	var resolved := resolve_for_footprint(str(footprint_value), anchor_tile_id, terrain_map)
-	if not bool(resolved.get("ok", false)):
-		return {"valid": false, "error": str(resolved.get("error", "invalid_footprint"))}
-	if occupied_tile_ids != (resolved.get("occupied_tile_ids", []) as Array):
+	var resolved: Dictionary = {}
+	for rotation_quarter_turns_ccw: int in 4:
+		var candidate := resolve_for_footprint(
+			str(footprint_value),
+			anchor_tile_id,
+			terrain_map,
+			rotation_quarter_turns_ccw
+		)
+		if (
+			bool(candidate.get("ok", false))
+			and occupied_tile_ids == (candidate.get("occupied_tile_ids", []) as Array)
+		):
+			resolved = candidate
+			break
+	if resolved.is_empty():
 		return {"valid": false, "error": "footprint_offsets_mismatch"}
 	var provenance_value: Variant = record.get(LEGACY_SINGLE_PROVENANCE_FIELD, null)
 	var has_legacy_provenance := record.has(LEGACY_SINGLE_PROVENANCE_FIELD)
@@ -155,6 +186,7 @@ static func validate_persisted_record(
 		"anchor_tile_id": anchor_tile_id,
 		"footprint_id": str(footprint_value),
 		"size_tier": authoritative_size_tier if not authoritative_size_tier.is_empty() else str(resolved.get("size_tier", "")),
+		"rotation_quarter_turns_ccw": int(resolved.get("rotation_quarter_turns_ccw", 0)),
 		"occupied_tile_ids": occupied_tile_ids,
 		"legacy_single_provenance": has_legacy_provenance,
 	}

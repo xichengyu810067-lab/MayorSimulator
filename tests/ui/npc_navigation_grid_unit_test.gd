@@ -26,6 +26,7 @@ func _run() -> void:
 	_validate_foot_radius_inflation(navigation)
 	_validate_dynamic_replanning(navigation)
 	_validate_corner_safety(navigation)
+	_validate_safe_evacuation(navigation)
 	_validate_nearest_and_no_route(navigation)
 	_validate_debug_contract(navigation)
 
@@ -259,6 +260,40 @@ func _validate_corner_safety(navigation) -> void:
 	var path: PackedVector2Array = navigation.find_path(start, target, false)
 	_assert_safe_path(navigation, path, start, target, "corner-cut prevention")
 	_check(path.size() >= 3, "corner obstacles were incorrectly collapsed to a direct diagonal")
+	navigation.clear_dynamic_blockers()
+
+
+func _validate_safe_evacuation(navigation) -> void:
+	navigation.clear_dynamic_blockers()
+	var trapped := Vector2(550, 500)
+	navigation.set_dynamic_rect(
+		"evacuation:origin", trapped, Vector2(22, 22), true, "building"
+	)
+	navigation.set_dynamic_rect(
+		"evacuation:unrelated_wall", Vector2(610, 500), Vector2(10, 90), true, "building"
+	)
+	var unsafe_beyond_wall := Vector2(650, 500)
+	_check(
+		not navigation.is_evacuation_segment_walkable(trapped, unsafe_beyond_wall),
+		"evacuation ignored an unrelated wall"
+	)
+	var safe_variant: Variant = navigation.nearest_safe_evacuation_position(trapped, 120.0)
+	_check(safe_variant != null, "evacuation could not find a safe exit from a new blocker")
+	if safe_variant != null:
+		var safe_position: Vector2 = safe_variant
+		_check(navigation.is_position_walkable(safe_position), "evacuation returned a blocked exit")
+		_check(
+			not navigation.is_segment_walkable(trapped, safe_position),
+			"ordinary segment validation unexpectedly accepted a blocked start"
+		)
+		_check(
+			navigation.is_evacuation_segment_walkable(trapped, safe_position),
+			"evacuation exit did not preserve 4px obstacle sampling"
+		)
+	_check(
+		navigation.nearest_safe_evacuation_position(trapped, 5.0) == null,
+		"evacuation ignored its strict search radius"
+	)
 	navigation.clear_dynamic_blockers()
 
 

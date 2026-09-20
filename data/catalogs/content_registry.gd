@@ -93,6 +93,8 @@ static func buildings_by_id() -> Dictionary:
 		definition.base_cost = int(source.get("cost", 0))
 		definition.monthly_maintenance = int(source.get("maintenance", 0))
 		definition.base_workload = _workload_for(source)
+		definition.housing_capacity = maxi(0, int(source.get("housing_capacity", source.get("population", 0))))
+		definition.job_capacity = maxi(0, int(source.get("job_capacity", source.get("job_attraction", 0))))
 		definition.default_material_id = _default_material_for(definition.category_id)
 		definition.core_acceptance = CORE_ACCEPTANCE_BUILDINGS.has(display_name)
 		definition.effects = _extract_effects(source)

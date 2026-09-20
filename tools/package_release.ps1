@@ -94,14 +94,20 @@ $windowsSpecs = @(
     [pscustomobject]@{ Name = 'MayorSimulator.pck'; MinimumBytes = 1KB; Magic = [byte[]]@(0x47, 0x44, 0x50, 0x43); Mode = 0 },
     [pscustomobject]@{ Name = 'RELEASE_README.txt'; MinimumBytes = 500; Magic = $null; Mode = 0 },
     [pscustomobject]@{ Name = 'THIRD_PARTY_NOTICES.md'; MinimumBytes = 100; Magic = $null; Mode = 0 },
-    [pscustomobject]@{ Name = 'GODOT_COPYRIGHT.txt'; MinimumBytes = 1000; Magic = $null; Mode = 0 }
+    [pscustomobject]@{ Name = 'GODOT_COPYRIGHT.txt'; MinimumBytes = 1000; Magic = $null; Mode = 0 },
+    [pscustomobject]@{ Name = 'LICENSE.txt'; MinimumBytes = 100; Magic = $null; Mode = 0 },
+    [pscustomobject]@{ Name = 'TERMS_OF_USE.md'; MinimumBytes = 100; Magic = $null; Mode = 0 },
+    [pscustomobject]@{ Name = 'PRIVACY_NOTICE.md'; MinimumBytes = 100; Magic = $null; Mode = 0 }
 )
 $linuxSpecs = @(
     [pscustomobject]@{ Name = 'MayorSimulator.x86_64'; MinimumBytes = 1MB; Magic = [byte[]]@(0x7F, 0x45, 0x4C, 0x46); Mode = 493 },
     [pscustomobject]@{ Name = 'MayorSimulator.pck'; MinimumBytes = 1KB; Magic = [byte[]]@(0x47, 0x44, 0x50, 0x43); Mode = 420 },
     [pscustomobject]@{ Name = 'RELEASE_README.txt'; MinimumBytes = 500; Magic = $null; Mode = 420 },
     [pscustomobject]@{ Name = 'THIRD_PARTY_NOTICES.md'; MinimumBytes = 100; Magic = $null; Mode = 420 },
-    [pscustomobject]@{ Name = 'GODOT_COPYRIGHT.txt'; MinimumBytes = 1000; Magic = $null; Mode = 420 }
+    [pscustomobject]@{ Name = 'GODOT_COPYRIGHT.txt'; MinimumBytes = 1000; Magic = $null; Mode = 420 },
+    [pscustomobject]@{ Name = 'LICENSE.txt'; MinimumBytes = 100; Magic = $null; Mode = 420 },
+    [pscustomobject]@{ Name = 'TERMS_OF_USE.md'; MinimumBytes = 100; Magic = $null; Mode = 420 },
+    [pscustomobject]@{ Name = 'PRIVACY_NOTICE.md'; MinimumBytes = 100; Magic = $null; Mode = 420 }
 )
 
 function Assert-FileMagic {
@@ -167,7 +173,7 @@ function Assert-CanonicalReleaseFiles {
         [Parameter(Mandatory)][System.Collections.IDictionary]$LinuxSnapshot
     )
 
-    foreach ($name in @('RELEASE_README.txt', 'THIRD_PARTY_NOTICES.md', 'GODOT_COPYRIGHT.txt')) {
+    foreach ($name in @('RELEASE_README.txt', 'THIRD_PARTY_NOTICES.md', 'GODOT_COPYRIGHT.txt', 'LICENSE.txt', 'TERMS_OF_USE.md', 'PRIVACY_NOTICE.md')) {
         $canonicalPath = Join-Path $projectRoot $name
         if (-not (Test-Path -LiteralPath $canonicalPath -PathType Leaf)) {
             throw "Canonical legal file is missing: $canonicalPath"
@@ -176,6 +182,23 @@ function Assert-CanonicalReleaseFiles {
         if ($WindowsSnapshot[$name] -ne $canonicalHash -or $LinuxSnapshot[$name] -ne $canonicalHash) {
             throw "Staged release document is not byte-identical to the canonical project file: $name"
         }
+    }
+}
+
+function Assert-ReleaseReadmeVersion {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$ExpectedVersion,
+        [Parameter(Mandatory)][string]$Label
+    )
+
+    $lines = [IO.File]::ReadAllLines($Path, [Text.UTF8Encoding]::new($false))
+    if ($lines.Count -lt 1) {
+        throw "$Label RELEASE_README.txt has no heading."
+    }
+    $match = [regex]::Match($lines[0], '(?:^|\s)(?<version>[^\s]+)\s*$')
+    if (-not $match.Success -or $match.Groups['version'].Value -cne $ExpectedVersion) {
+        throw "$Label RELEASE_README.txt heading version does not match package version $ExpectedVersion."
     }
 }
 
@@ -336,6 +359,8 @@ function Get-LinuxTarEntries {
 $windowsSnapshotBefore = Get-StagingSnapshot -StagingPath $windowsStaging -Specs $windowsSpecs
 $linuxSnapshotBefore = Get-StagingSnapshot -StagingPath $linuxStaging -Specs $linuxSpecs
 Assert-CanonicalReleaseFiles -WindowsSnapshot $windowsSnapshotBefore -LinuxSnapshot $linuxSnapshotBefore
+Assert-ReleaseReadmeVersion -Path (Join-Path $windowsStaging 'RELEASE_README.txt') -ExpectedVersion $Version -Label 'Windows staging'
+Assert-ReleaseReadmeVersion -Path (Join-Path $linuxStaging 'RELEASE_README.txt') -ExpectedVersion $Version -Label 'Linux staging'
 
 $windowsArchiveName = "MayorSimulator-Windows-x86_64-$Version.zip"
 $linuxArchiveName = "MayorSimulator-Linux-x86_64-$Version.tar.gz"

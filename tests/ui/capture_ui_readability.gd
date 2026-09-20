@@ -1,6 +1,8 @@
 extends SceneTree
 
 const FiscalScrollContract := preload("res://tests/helpers/fiscal_scroll_contract.gd")
+const IntroCinematicScript := preload("res://ui/tutorial/intro_cinematic.gd")
+const StorySequence := preload("res://data/tutorial/story_sequence.gd")
 const FULLSCREEN_SETTLE_LIMIT := 120
 const TEST_SAVE_PATH := "user://mayor_simulator/tests/ui_readability_autosave.json"
 const NATIVE_TEST_SAVE_PATH := "user://mayor_simulator/tests/native_ui_readability_autosave.json"
@@ -16,6 +18,19 @@ const CAPTURE_MIN_LUMINANCE_SD := 8.0
 const CAPTURE_MIN_LUMINANCE_RANGE := 40.0
 const RESULT_FILENAME := "capture-result.json"
 const NATIVE_RESULT_FILENAME := "native-result.json"
+const FILM_WAIT_TIMEOUT_MSEC := 95_000
+const NATURAL_INTRO_ENV := "MAYOR_UI_CAPTURE_NATURAL_INTRO"
+const NATURAL_INTRO_TIMEOUT_MSEC := 110_000
+const FILM_CAPTURE_SPECS := {
+	"tutorial_intro": {"minimum_position": 1.0, "chapter_index": 0, "chapter_id": "prosperity"},
+	"tutorial_governance": {"minimum_position": 46.0, "chapter_index": 4, "chapter_id": "mayor"},
+	"tutorial_buildings": {"minimum_position": 80.0, "chapter_index": 7, "chapter_id": "dawn"},
+	"tutorial_replay": {"minimum_position": 0.5, "chapter_index": 0, "chapter_id": "prosperity"},
+}
+const BLUEPRINT_SCOPE_FORBIDDEN_TERMS := [
+	"居民請求", "民怨", "市政信任", "法院審判", "監察質詢", "委員名單", "委員席次",
+	"維修至", "拆除選取", "強制執行", "儲存", "讀取",
+]
 const NATIVE_OUTPUTS := {
 	"start": "native-start-screen.png",
 	"tutorial": "native-tutorial-dialogue-strip.png",
@@ -75,6 +90,8 @@ var _native_captured_states: Dictionary = {}
 var _native_captured_hashes: Dictionary = {}
 var _started_at_utc := ""
 var _native_started_at_utc := ""
+var _native_natural_intro_enabled := false
+var _native_intro_evidence: Dictionary = {}
 var _expected_fiscal_slider_names: Array[String] = []
 var _capture_viewport: Viewport = null
 var _capture_surface_kind := ""
@@ -91,6 +108,14 @@ var _offscreen_notice: Label = null
 
 
 func _initialize() -> void:
+	if OS.has_environment(NATURAL_INTRO_ENV):
+		var mode_value := OS.get_environment(NATURAL_INTRO_ENV)
+		if mode_value not in ["0", "1"]:
+			push_error("Native intro mode must be unset, 0, or 1; explicit value is invalid: %s" % mode_value)
+			quit(1)
+			return
+		_native_natural_intro_enabled = mode_value == "1"
+	print("NATIVE_INTRO_MODE=%s" % ("natural_opt_in" if _native_natural_intro_enabled else "existing_skip"))
 	if not _prepare_output_directories():
 		quit(1)
 		return
@@ -141,33 +166,33 @@ func _capture_states() -> void:
 		quit(1)
 		return
 	var tutorial = scene.get("tutorial_overlay")
-	if tutorial == null or not tutorial.is_open() or tutorial.current_page != 0:
-		push_error("New game did not open the first story tutorial page.")
+	if tutorial == null or not tutorial.is_open():
+		push_error("New game did not open the canonical film tutorial.")
 		quit(1)
 		return
-	await _settle_frames(24)
-	if not _save_capture(OUTPUTS["tutorial_intro"]):
+	var intro_metadata := await _wait_for_film_capture(tutorial, "tutorial_intro")
+	if intro_metadata.is_empty() or not _save_capture(OUTPUTS["tutorial_intro"], intro_metadata):
 		quit(1)
 		return
-	tutorial.next_button.emit_signal("pressed")
-	await _settle_frames(18)
-	if tutorial.current_page != 1 or not _save_capture(OUTPUTS["tutorial_buildings"]):
-		push_error("Tutorial did not advance to the building guidance page.")
+	var intro_hash := _saved_capture_hash("tutorial_intro")
+	var governance_metadata := await _wait_for_film_capture(tutorial, "tutorial_governance")
+	if governance_metadata.is_empty() or not _save_capture(OUTPUTS["tutorial_governance"], governance_metadata):
 		quit(1)
 		return
-	while tutorial.current_page < 4:
-		tutorial.next_button.emit_signal("pressed")
-		await _settle_frames(18)
-	if not _save_capture(OUTPUTS["tutorial_governance"]):
+	var governance_hash := _saved_capture_hash("tutorial_governance")
+	var buildings_metadata := await _wait_for_film_capture(tutorial, "tutorial_buildings")
+	if buildings_metadata.is_empty() or not _save_capture(OUTPUTS["tutorial_buildings"], buildings_metadata):
 		quit(1)
 		return
-	while tutorial.current_page < tutorial.PAGES.size() - 1:
-		tutorial.next_button.emit_signal("pressed")
-		await _settle_frames(18)
-	tutorial.next_button.emit_signal("pressed")
+	var buildings_hash := _saved_capture_hash("tutorial_buildings")
+	if intro_hash.is_empty() or governance_hash.is_empty() or buildings_hash.is_empty() or intro_hash == governance_hash or intro_hash == buildings_hash or governance_hash == buildings_hash:
+		push_error("Canonical film timeline captures must contain three distinct rendered frames.")
+		quit(1)
+		return
+	tutorial.skip_button.emit_signal("pressed")
 	await _settle_frames(24)
 	if tutorial.is_open() or not bool(scene.get("tutorial_completed")):
-		push_error("Tutorial did not close and persist completion after the final button.")
+		push_error("Explicit film skip did not close the player and persist skipped onboarding state.")
 		quit(1)
 		return
 	if not _validate_main_hud(scene) or not _save_capture(OUTPUTS["main"]):
@@ -203,10 +228,10 @@ func _capture_states() -> void:
 		quit(1)
 		return
 	settings.tutorial_button.emit_signal("pressed")
-	await _settle_frames(18)
 	tutorial = scene.get("tutorial_overlay")
-	if tutorial == null or not tutorial.is_open() or not _save_capture(OUTPUTS["tutorial_replay"]):
-		push_error("Settings tutorial replay action did not reopen the story.")
+	var replay_metadata := await _wait_for_film_capture(tutorial, "tutorial_replay")
+	if tutorial == null or not tutorial.is_open() or replay_metadata.is_empty() or not _save_capture(OUTPUTS["tutorial_replay"], replay_metadata):
+		push_error("Settings tutorial replay action did not reopen and render the canonical film.")
 		quit(1)
 		return
 	tutorial.skip_button.emit_signal("pressed")
@@ -663,19 +688,25 @@ func _capture_native_gui_states(scene) -> bool:
 		return false
 	var tutorial = scene.get("tutorial_overlay")
 	if tutorial == null or not tutorial.is_open():
-		push_error("Native GUI new game did not expose the story tutorial.")
+		push_error("Native GUI new game did not expose the canonical film tutorial.")
 		return false
-	await _settle_frames(24)
-	var tutorial_panel := tutorial.get("story_panel") as Control
-	if tutorial_panel == null or not tutorial_panel.is_visible_in_tree():
-		push_error("Native GUI tutorial dialogue strip is not visibly rendered after settling.")
+	var tutorial_metadata := await _wait_for_film_capture(tutorial, "tutorial_replay")
+	var video_surface := tutorial.get("video_player") as VideoStreamPlayer
+	if tutorial_metadata.is_empty() or video_surface == null or not video_surface.is_visible_in_tree():
+		push_error("Native GUI canonical film surface is not visibly rendered after decoder progress.")
 		return false
-	if not _save_native_capture(NATIVE_OUTPUTS["tutorial"], tutorial_panel):
+	if not _save_native_capture(NATIVE_OUTPUTS["tutorial"], video_surface, tutorial_metadata):
 		return false
-	tutorial.skip_button.emit_signal("pressed")
+	if _native_natural_intro_enabled:
+		_native_intro_evidence = await _observe_native_natural_intro(scene, tutorial, video_surface)
+		if _native_intro_evidence.is_empty():
+			return false
+	else:
+		_native_intro_evidence = {"enabled": false, "mode": "existing_skip"}
+		tutorial.skip_button.emit_signal("pressed")
 	await _settle_frames(24)
 	if tutorial.is_open() or not _validate_main_hud(scene):
-		push_error("Native GUI could not reach a validated main HUD after skipping the tutorial.")
+		push_error("Native GUI could not reach a validated main HUD after the selected tutorial completion mode.")
 		return false
 	var status_hud := scene.find_child("StatusHud", true, false) as Control
 	if status_hud == null or not _save_native_capture(NATIVE_OUTPUTS["main"], status_hud):
@@ -703,6 +734,67 @@ func _capture_native_gui_states(scene) -> bool:
 	overlay.call("close_overlay")
 	await _settle()
 	return true
+
+
+func _observe_native_natural_intro(scene, tutorial, video_player: VideoStreamPlayer) -> Dictionary:
+	if scene.get_parent() != root or video_player == null or not tutorial.is_open() or not video_player.is_visible_in_tree() or not video_player.is_playing() or video_player.stream == null or not video_player.stream is VideoStream or str(video_player.stream.resource_path) != IntroCinematicScript.FILM_PATH:
+		push_error("Opt-in native intro must begin on the visible root with the canonical playing OGV.")
+		return {}
+	var first_position := float(video_player.stream_position)
+	var initial_audio: Dictionary = scene.audio_director.audio_state()
+	var music_preference := bool(scene.music_enabled)
+	var autosaves_before := int(scene._autosave_count)
+	var reviews_before: int = scene.vertical_slice.construction.reviews.size()
+	if first_position >= 2.0 or not is_equal_approx(Engine.time_scale, 1.0) or not bool(initial_audio.get("cinematic_music_active", false)) or scene.audio_director.music_player.playing or bool(initial_audio.get("music_enabled", not music_preference)) != music_preference:
+		push_error("Opt-in native intro did not start from a fresh decoder and exclusive Music claim.")
+		return {}
+	var observations := {"completion_count": 0, "skipped": false, "stop_count": 0, "stop_reason": ""}
+	tutorial.completed.connect(func(skipped: bool) -> void:
+		observations["completion_count"] = int(observations["completion_count"]) + 1
+		observations["skipped"] = skipped
+	)
+	tutorial.playback_stopped.connect(func(reason: String) -> void:
+		observations["stop_count"] = int(observations["stop_count"]) + 1
+		observations["stop_reason"] = reason
+	)
+	var wall_started_msec := Time.get_ticks_msec()
+	var greatest_position := first_position
+	var progress_samples := 0
+	var timeline_samples: Array[Dictionary] = []
+	var next_timeline_position := 10.0
+	while tutorial.is_open() and Time.get_ticks_msec() - wall_started_msec < NATURAL_INTRO_TIMEOUT_MSEC:
+		await process_frame
+		if not tutorial.is_open():
+			break
+		var current_audio: Dictionary = scene.audio_director.audio_state()
+		if not is_equal_approx(Engine.time_scale, 1.0) or not video_player.is_visible_in_tree() or not video_player.is_playing() or video_player.stream == null or str(video_player.stream.resource_path) != IntroCinematicScript.FILM_PATH or not bool(current_audio.get("cinematic_music_active", false)) or scene.audio_director.music_player.playing or bool(current_audio.get("music_enabled", not music_preference)) != music_preference:
+			push_error("Opt-in native intro lost its visible decoder, normal clock, or exclusive Music ownership during playback.")
+			return {}
+		var position := float(video_player.stream_position)
+		if position > greatest_position + 0.25:
+			greatest_position = position
+			progress_samples += 1
+		if position >= next_timeline_position:
+			timeline_samples.append({"wall_seconds": float(Time.get_ticks_msec() - wall_started_msec) / 1000.0, "position_seconds": position})
+			next_timeline_position += 10.0
+	var wall_seconds := float(Time.get_ticks_msec() - wall_started_msec) / 1000.0
+	var final_audio: Dictionary = scene.audio_director.audio_state()
+	if not (wall_seconds >= 88.0 and wall_seconds <= 110.0 and first_position < 2.0 and greatest_position >= 88.0 and progress_samples > 20 and not tutorial.is_open() and video_player.stream == null and not video_player.is_playing() and int(observations["completion_count"]) == 1 and not bool(observations["skipped"]) and int(observations["stop_count"]) == 1 and str(observations["stop_reason"]) == "finished" and bool(scene.tutorial_completed) and scene.onboarding_progress.is_active() and scene.onboarding_progress.current_target() == "build" and scene.vertical_slice.has_save_game(NATIVE_TEST_SAVE_PATH) and int(scene._autosave_count) == autosaves_before + 1 and str(scene._last_autosave_reason) == "onboarding:story_completed" and scene.vertical_slice.construction.reviews.size() == reviews_before and not bool(final_audio.get("cinematic_music_active", true)) and bool(final_audio.get("music_enabled", not music_preference)) == music_preference and is_equal_approx(float(final_audio.get("music_volume", -1.0)), float(initial_audio.get("music_volume", -2.0))) and scene.audio_director.music_player.playing == music_preference and is_equal_approx(Engine.time_scale, 1.0)):
+		push_error("Opt-in native intro did not naturally complete with a single authority/autosave and restored Music state: wall=%.3f first=%.3f max=%.3f samples=%d completion=%s audio=%s" % [wall_seconds, first_position, greatest_position, progress_samples, observations, final_audio])
+		return {}
+	var evidence := {
+		"enabled": true, "mode": "natural_opt_in", "film_source": IntroCinematicScript.FILM_PATH,
+		"wall_seconds": wall_seconds, "first_position_seconds": first_position,
+		"greatest_position_seconds": greatest_position, "progress_samples": progress_samples,
+		"timeline_samples": timeline_samples, "completion_count": int(observations["completion_count"]),
+		"completion_skipped": bool(observations["skipped"]), "playback_stop_reason": str(observations["stop_reason"]),
+		"autosave_delta": int(scene._autosave_count) - autosaves_before,
+		"tutorial_completed": bool(scene.tutorial_completed), "guide_target": scene.onboarding_progress.current_target(),
+		"stream_released": video_player.stream == null, "music_preference_restored": scene.audio_director.music_player.playing == music_preference,
+		"human_visual_review": "PENDING", "human_audio_review": "PENDING", "os_mouse_review": "PENDING",
+	}
+	print("NATIVE_INTRO_NATURAL_OBSERVED %s" % JSON.stringify(evidence))
+	return evidence
 
 
 func _release_native_scene(scene: Node) -> bool:
@@ -808,6 +900,70 @@ func _settle_frames(frame_count: int) -> void:
 	for _frame in range(frame_count):
 		await process_frame
 	await RenderingServer.frame_post_draw
+
+
+func _wait_for_film_capture(tutorial, state: String) -> Dictionary:
+	if tutorial == null or not FILM_CAPTURE_SPECS.has(state):
+		push_error("Film capture state is unavailable: %s" % state)
+		return {}
+	var spec: Dictionary = FILM_CAPTURE_SPECS[state]
+	var video_player := tutorial.get("video_player") as VideoStreamPlayer
+	if video_player == null or video_player.stream == null or not video_player.stream is VideoStream:
+		push_error("Film capture %s has no active VideoStreamPlayer stream." % state)
+		return {}
+	if str(video_player.stream.resource_path) != IntroCinematicScript.FILM_PATH:
+		push_error("Film capture %s is not using the canonical OGV: %s" % [state, video_player.stream.resource_path])
+		return {}
+	var minimum_position: float = float(spec["minimum_position"])
+	var started_msec := Time.get_ticks_msec()
+	var position := float(video_player.stream_position)
+	while tutorial.is_open() and video_player.is_playing() and position < minimum_position and Time.get_ticks_msec() - started_msec < FILM_WAIT_TIMEOUT_MSEC:
+		await process_frame
+		position = float(video_player.stream_position)
+	await _settle_frames(2)
+	position = float(video_player.stream_position)
+	var expected_index: int = int(spec["chapter_index"])
+	var expected_id := str(spec["chapter_id"])
+	var timeline_id := str(StorySequence.SHOTS[expected_index].get("id", "")) if expected_index >= 0 and expected_index < StorySequence.SHOTS.size() else ""
+	if (
+		position < minimum_position
+		or not tutorial.is_open()
+		or not video_player.is_playing()
+		or not video_player.is_visible_in_tree()
+		or int(tutorial.get("current_index")) != expected_index
+		or timeline_id != expected_id
+		or not is_equal_approx(Engine.time_scale, 1.0)
+	):
+		push_error(
+			"Film capture %s did not reach its real playback state: position=%.3f minimum=%.3f index=%d expected_index=%d id=%s expected_id=%s playing=%s visible=%s time_scale=%.3f" % [
+				state,
+				position,
+				minimum_position,
+				int(tutorial.get("current_index")),
+				expected_index,
+				timeline_id,
+				expected_id,
+				video_player.is_playing(),
+				video_player.is_visible_in_tree(),
+				Engine.time_scale,
+			]
+		)
+		return {}
+	return {
+		"film_source": IntroCinematicScript.FILM_PATH,
+		"film_position_seconds": position,
+		"film_chapter_index": expected_index,
+		"film_chapter_id": expected_id,
+		"film_capture_semantics": "normal_playback_timeline",
+		"historical_filename_retained": true,
+	}
+
+
+func _saved_capture_hash(state: String) -> String:
+	for record in _capture_records:
+		if str(record.get("state", "")) == state:
+			return str(record.get("sha256", ""))
+	return ""
 
 
 func _validate_overlay(scene, overlay, expected_page: String) -> bool:
@@ -965,6 +1121,36 @@ func _validate_start_loading(screen) -> bool:
 	return true
 
 
+func _authoritative_status_hud_keys(scene) -> Array[String]:
+	var scene_script = scene.get_script()
+	if scene_script == null or not scene_script.has_method("get_source_code"):
+		push_error("Readability capture could not read the product HUD source.")
+		return []
+	var key_loop := RegEx.new()
+	var compile_error := key_loop.compile("for key in (\\[[^\\]]+\\]):\\s*\\n\\s*row\\.add_child\\(_header_metric_card\\(key\\)\\)")
+	if compile_error != OK:
+		push_error("Readability capture could not compile the product HUD key matcher.")
+		return []
+	var key_match := key_loop.search(str(scene_script.call("get_source_code")))
+	if key_match == null:
+		push_error("Readability capture could not find the product HUD key authority.")
+		return []
+	var parsed_keys = JSON.parse_string(key_match.get_string(1))
+	if not parsed_keys is Array:
+		push_error("Product HUD key authority is not a string array.")
+		return []
+	var keys: Array[String] = []
+	var seen := {}
+	for key_variant in parsed_keys:
+		var key := str(key_variant)
+		if key.is_empty() or seen.has(key):
+			push_error("Product HUD key authority contains an empty or duplicate key: '%s'." % key)
+			return []
+		seen[key] = true
+		keys.append(key)
+	return keys
+
+
 func _validate_main_hud(scene) -> bool:
 	var logical_size := _capture_logical_size()
 	var map_viewport = scene.get("map_viewport")
@@ -1024,19 +1210,42 @@ func _validate_main_hud(scene) -> bool:
 		push_error("Picture-first ActionDock must contain 3 global illustrations; found %d." % action_pictures.size())
 		return false
 	var status_hud: Node = scene.find_child("StatusHud", true, false)
+	if status_hud == null:
+		push_error("Readability capture could not find the visual status HUD.")
+		return false
+	var expected_status_keys := _authoritative_status_hud_keys(scene)
+	if expected_status_keys.is_empty() or not expected_status_keys.has("capacity"):
+		push_error("Product HUD key authority must be non-empty and include capacity: %s." % [expected_status_keys])
+		return false
+	var header_bar_map: Dictionary = scene.get("header_bars")
+	var label_map: Dictionary = scene.get("labels")
+	for key in expected_status_keys:
+		var card := status_hud.find_child("StatusMetric_%s" % key.capitalize(), true, false) as PanelContainer
+		if card == null:
+			push_error("Visual status HUD is missing the authoritative '%s' metric card." % key)
+			return false
+		var key_bars: Array[Node] = card.find_children("*", "ProgressBar", true, false)
+		var key_pictures: Array[Node] = card.find_children("*", "TextureRect", true, false)
+		if key_bars.size() != 1 or header_bar_map.get(key) != key_bars[0]:
+			push_error("Status key '%s' does not map to exactly one registered micro bar." % key)
+			return false
+		if key_pictures.size() != 1 or (key_pictures[0] as TextureRect).texture == null:
+			push_error("Status key '%s' does not map to exactly one populated illustration." % key)
+			return false
+		if not label_map.has(key):
+			push_error("Status key '%s' does not map to a registered value label." % key)
+			return false
 	var header_bars: Array[Node] = []
-	if status_hud != null:
-		header_bars = status_hud.find_children("*", "ProgressBar", true, false)
-	if header_bars.size() != 8:
-		push_error("Visual status HUD must contain 8 micro bars; found %d." % header_bars.size())
+	header_bars = status_hud.find_children("*", "ProgressBar", true, false)
+	if header_bars.size() != expected_status_keys.size():
+		push_error("Visual status HUD must contain one micro bar per authoritative key; keys=%d bars=%d." % [expected_status_keys.size(), header_bars.size()])
 		return false
 	var header_pictures: Array[Node] = []
-	if status_hud != null:
-		header_pictures = status_hud.find_children("*", "TextureRect", true, false)
-	if header_pictures.size() != 8:
-		push_error("Picture-first status HUD must contain 8 illustrations; found %d." % header_pictures.size())
+	header_pictures = status_hud.find_children("*", "TextureRect", true, false)
+	if header_pictures.size() != expected_status_keys.size():
+		push_error("Picture-first status HUD must contain one illustration per authoritative key; keys=%d illustrations=%d." % [expected_status_keys.size(), header_pictures.size()])
 		return false
-	print("Main HUD validation: map=%s dock=%s buttons=%d logical=%s." % [map_viewport.size, dock_rect, hud_buttons.size(), logical_size])
+	print("Main HUD validation: map=%s dock=%s buttons=%d status_keys=%s logical=%s." % [map_viewport.size, dock_rect, hud_buttons.size(), expected_status_keys, logical_size])
 	return true
 
 
@@ -1219,8 +1428,15 @@ func _validate_visual_data(scene, overlay, expected_page: String) -> bool:
 		if quote_card == null or quote_label == null or not quote_label.is_visible_in_tree() or quote_label.text.strip_edges().is_empty():
 			push_error("Blueprint live quote must remain visible beside the current design controls.")
 			return false
-		if not (quote_label.text.contains("總額 $") and quote_label.text.contains("工期") and quote_label.text.contains("占地")):
-			push_error("Blueprint live quote must expose total, duration, and footprint in the first-view summary: %s" % quote_label.text)
+		if not (
+			quote_label.text.contains("草稿估價｜")
+			and quote_label.text.contains("總額 $")
+			and quote_label.text.contains("工期")
+			and quote_label.text.contains("占地")
+			and quote_label.text.contains("完工後｜")
+			and quote_label.text.contains("每月維護 $")
+		):
+			push_error("Blueprint live quote must expose design cost, duration, footprint, completion effects, and monthly maintenance in the first-view summary: %s" % quote_label.text)
 			return false
 		var quote_clip := quote_card.get_parent()
 		while quote_clip != null and not quote_clip is ScrollContainer:
@@ -1507,10 +1723,15 @@ func _validate_page_scope(page_id: String, visible_labels: Array, visible_button
 		visible_text += "\n%s" % str((label_variant as Label).text)
 	for button_variant in visible_buttons:
 		visible_text += "\n%s" % str((button_variant as Button).text)
+	if page_id == "blueprint":
+		var blueprint_leak := blueprint_scope_leak_term(visible_text)
+		if not blueprint_leak.is_empty():
+			push_error("Municipal page '%s' leaks unrelated content '%s'." % [page_id, blueprint_leak])
+			return false
+		return true
 	var forbidden_by_page := {
 		"buildings": ["居民請求", "民怨", "市政信任", "法院審判", "監察質詢", "委員名單", "強制執行", "儲存", "讀取"],
 		"governance": ["三權分治", "行政權", "立法權", "司法權", "制衡軌跡", "居民請求", "民怨", "市政信任", "委員名單", "委員席次", "司法調查", "監察調查", "設計藍圖", "維修至", "拆除選取", "儲存", "讀取"],
-		"blueprint": ["民怨", "滿意", "信任", "居民請求", "維護", "耐久", "司法", "監察", "委員", "強制執行", "儲存", "讀取"],
 		# The courtroom may name the three judges assigned to the visible bench.
 		# It must still avoid leaking the full committee roster or internal records.
 		"judicial": ["委員名單", "委員席次", "任期", " personality_tags", "資料庫"],
@@ -1524,6 +1745,13 @@ func _validate_page_scope(page_id: String, visible_labels: Array, visible_button
 			push_error("Municipal page '%s' leaks unrelated content '%s'." % [page_id, term])
 			return false
 	return true
+
+
+static func blueprint_scope_leak_term(visible_text: String) -> String:
+	for term in BLUEPRINT_SCOPE_FORBIDDEN_TERMS:
+		if visible_text.contains(term):
+			return term
+	return ""
 
 
 func _validate_exit_confirmation(exit_confirmation) -> bool:
@@ -1677,7 +1905,7 @@ func _native_state_for_filename(filename: String) -> String:
 	return ""
 
 
-func _save_native_capture(filename: String, landmark: Control) -> bool:
+func _save_native_capture(filename: String, landmark: Control, metadata: Dictionary = {}) -> bool:
 	var state := _native_state_for_filename(filename)
 	if state.is_empty():
 		push_error("Native UI capture filename is not part of the five-state contract: %s" % filename)
@@ -1751,7 +1979,7 @@ func _save_native_capture(filename: String, landmark: Control) -> bool:
 	if byte_count <= 0 or sha256.length() != 64 or _native_captured_hashes.has(sha256):
 		push_error("Native UI capture evidence is incomplete or duplicated for %s: bytes=%d sha256=%s" % [path, byte_count, sha256])
 		return false
-	_native_capture_records.append({
+	var capture_record := {
 		"state": state,
 		"filename": filename,
 		"width": image_size.x,
@@ -1760,7 +1988,10 @@ func _save_native_capture(filename: String, landmark: Control) -> bool:
 		"sha256": sha256,
 		"landmark": str(NATIVE_LANDMARKS[state]),
 		"landmark_rect": [landmark_rect.position.x, landmark_rect.position.y, landmark_rect.size.x, landmark_rect.size.y],
-	})
+	}
+	for key in metadata:
+		capture_record[key] = metadata[key]
+	_native_capture_records.append(capture_record)
 	_native_captured_states[state] = true
 	_native_captured_hashes[sha256] = state
 	print("Saved native root UI %s at physical=%s logical=%s sha256=%s." % [path, image_size, logical_size, sha256])
@@ -1831,6 +2062,7 @@ func _publish_native_capture_result() -> bool:
 		"current_screen_size": [_native_screen_size.x, _native_screen_size.y],
 		"required_capture_count": NATIVE_OUTPUTS.size(),
 		"capture_count": _native_capture_records.size(),
+		"native_intro_evidence": _native_intro_evidence,
 		"captures": _native_capture_records,
 	}
 	var result_file := FileAccess.open(partial_path, FileAccess.WRITE)
@@ -1848,7 +2080,7 @@ func _publish_native_capture_result() -> bool:
 	return true
 
 
-func _save_capture(filename: String) -> bool:
+func _save_capture(filename: String, metadata: Dictionary = {}) -> bool:
 	var state := _state_for_filename(filename)
 	if state.is_empty():
 		push_error("UI capture filename is not part of the 33-state contract: %s" % filename)
@@ -1901,14 +2133,17 @@ func _save_capture(filename: String) -> bool:
 	if byte_count <= 0 or sha256.length() != 64:
 		push_error("UI capture evidence is incomplete for %s: bytes=%d sha256=%s" % [path, byte_count, sha256])
 		return false
-	_capture_records.append({
+	var capture_record := {
 		"state": state,
 		"filename": filename,
 		"width": image_size.x,
 		"height": image_size.y,
 		"bytes": byte_count,
 		"sha256": sha256,
-	})
+	}
+	for key in metadata:
+		capture_record[key] = metadata[key]
+	_capture_records.append(capture_record)
 	_captured_states[state] = true
 	print("Saved %s at physical=%s logical=%s sha256=%s." % [path, image_size, logical_size, sha256])
 	return true

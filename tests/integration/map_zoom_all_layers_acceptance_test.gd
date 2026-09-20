@@ -98,12 +98,14 @@ func _run() -> void:
 	await _validate_zoom_snapshot(main, target_button, building_button, representative_npc, centers, transport_snapshot, target_tile, 1.00, "100%")
 	await _drive_zoom(main, main.MAP_ZOOM_MAX, MOUSE_BUTTON_WHEEL_UP, "wheel up to 175%")
 	await _validate_zoom_snapshot(main, target_button, building_button, representative_npc, centers, transport_snapshot, target_tile, 1.75, "175%")
-	await _drive_zoom(main, main.MAP_ZOOM_MIN, MOUSE_BUTTON_WHEEL_DOWN, "wheel down to 65%")
-	await _validate_zoom_snapshot(main, target_button, building_button, representative_npc, centers, transport_snapshot, target_tile, 0.65, "65%")
+	await _drive_zoom(main, main.MAP_ZOOM_MIN, MOUSE_BUTTON_WHEEL_DOWN, "wheel down to 80%")
+	await _validate_zoom_snapshot(main, target_button, building_button, representative_npc, centers, transport_snapshot, target_tile, 0.80, "80%")
+	_verify_edge_tile_reachability(main)
 	await _verify_left_drag_and_reset_contract(main, target_button, target_tile)
 	await _verify_tile_release_cancellation(main)
 	await _verify_left_drag_lifecycle_cleanup(main, target_button, target_tile)
 	await _verify_npc_dialogue_recovers_after_cancelled_release(main)
+	await _verify_onboarding_map_drag(main)
 
 	await _finish([main])
 
@@ -126,13 +128,13 @@ func _validate_zoom_snapshot(
 	main.transport_vehicle_controller.set_runtime_snapshot(transport_snapshot, centers)
 	_check(is_equal_approx(main.map_zoom, expected_zoom), "%s reaches the exact map zoom contract" % phase)
 	_check(_viewport_is_covered_by_terrain_background(main), "%s map_viewport is fully covered by terrain background visual" % phase)
-	var expected_stage_scale := float(main.call("_base_map_scale")) * expected_zoom
-	_check(is_equal_approx(main.map_stage.scale.x, expected_stage_scale), "%s map_stage applies base scale times map zoom" % phase)
+	var expected_stage_scale := float(main.call("_map_scale_for_zoom", expected_zoom))
+	_check(is_equal_approx(main.map_stage.scale.x, expected_stage_scale), "%s map_stage applies the cover-safe map zoom scale" % phase)
 	_check(is_equal_approx(main.map_stage.scale.x, main.map_stage.scale.y), "%s map_stage scale remains uniform" % phase)
 	if is_equal_approx(expected_zoom, 1.0):
 		_check(
-			is_equal_approx(float(main.call("_base_map_scale")), _legacy_base_map_scale(main)),
-			"100% preserves the established content base scale"
+			is_equal_approx(float(main.call("_base_map_scale")), _configured_base_map_scale(main)),
+			"100% uses exactly 125% of viewport cover"
 		)
 
 	var local_probe := Vector2(centers.get(str(target_tile), Vector2.INF))
@@ -209,16 +211,14 @@ func _validate_zoom_snapshot(
 func _viewport_is_covered_by_terrain_background(main) -> bool:
 	if (
 		main.map_viewport == null
-		or main.map_viewport_background == null
-		or main.map_viewport_background.get_parent() != main.map_viewport
-		or main.map_viewport_background.texture == null
-		or main.map_viewport_background.mouse_filter != Control.MOUSE_FILTER_IGNORE
-		or main.map_viewport_background.z_index != main.map_stage.z_index
-		or main.map_viewport_background.get_index() >= main.map_stage.get_index()
+		or main.map_stage == null
+		or main.city_backdrop == null
+		or main.city_backdrop.get_parent() != main.map_stage
+		or main.map_viewport.get_node_or_null("ViewportTerrainBackground") != null
 	):
 		return false
 	var viewport_rect: Rect2 = main.map_viewport.get_global_rect()
-	var background_rect: Rect2 = main.map_viewport_background.get_global_rect().grow(MAP_COVERAGE_EPSILON)
+	var background_rect: Rect2 = main.city_backdrop.get_global_rect().grow(MAP_COVERAGE_EPSILON)
 	var viewport_corners: Array[Vector2] = [
 		viewport_rect.position,
 		Vector2(viewport_rect.end.x, viewport_rect.position.y),
@@ -231,13 +231,39 @@ func _viewport_is_covered_by_terrain_background(main) -> bool:
 	return true
 
 
-func _legacy_base_map_scale(main) -> float:
+func _configured_base_map_scale(main) -> float:
 	if main.map_viewport == null or main.map_viewport.size.x <= 0.0 or main.map_viewport.size.y <= 0.0:
 		return 1.0
 	var viewport_size: Vector2 = main.map_viewport.size
 	var fill_scale: float = maxf(viewport_size.x / main.MAP_STAGE_SIZE.x, viewport_size.y / main.MAP_STAGE_SIZE.y)
-	var fit_scale: float = minf(viewport_size.x / main.MAP_STAGE_SIZE.x, viewport_size.y / main.MAP_STAGE_SIZE.y)
-	return maxf(0.72, minf(2.55, maxf(fill_scale * 1.04, fit_scale)))
+	return fill_scale * 1.25
+
+
+func _verify_edge_tile_reachability(main) -> void:
+	var previous_zoom: float = main.map_zoom
+	var previous_pan: Vector2 = main.map_pan_offset
+	main.call("_reset_map_camera")
+	var target_scale := float(main.call("_map_scale_for_zoom", 1.0))
+	var centered_position: Vector2 = (main.map_viewport.size - main.MAP_STAGE_SIZE * target_scale) * 0.5
+	var viewport_rect: Rect2 = main.map_viewport.get_global_rect()
+	var safe_global := viewport_rect.get_center()
+	if main.status_hud != null:
+		safe_global.y = maxf(safe_global.y, main.status_hud.get_global_rect().end.y + 72.0)
+	var safe_viewport_local: Vector2 = main.map_viewport.get_global_transform_with_canvas().affine_inverse() * safe_global
+	for tile_id: int in [0, 9, 90, 99]:
+		var button := main.grid_buttons[tile_id] as Button
+		_check(button != null, "edge tile %d has a concrete map control" % tile_id)
+		if button == null:
+			continue
+		var local_center := button.position + button.size * 0.5
+		main.map_pan_offset = safe_viewport_local - local_center * target_scale - centered_position
+		main.call("_layout_map_stage")
+		var reached_center := button.get_global_rect().get_center()
+		_check(viewport_rect.has_point(reached_center), "edge tile %d can be panned into the viewport" % tile_id)
+		_check(main.call("_is_tile_inside_hud_safe_area", tile_id), "edge tile %d can be panned below the HUD safe boundary" % tile_id)
+	main.map_zoom = previous_zoom
+	main.map_pan_offset = previous_pan
+	main.call("_layout_map_stage")
 
 
 func _drive_zoom(main, target_zoom: float, wheel_button: int, phase: String) -> void:
@@ -267,7 +293,7 @@ func _verify_left_drag_and_reset_contract(main, target_button: Button, target_ti
 	var cursor: Vector2 = main.map_viewport.get_global_rect().get_center()
 	# Establish an arbitrary, non-default wheel state before testing a direct
 	# right-click reset. This is intentionally independent from the min/max test.
-	await _drive_zoom(main, 1.15, MOUSE_BUTTON_WHEEL_UP, "wheel from minimum into enlarged left-drag contract")
+	await _drive_zoom(main, 1.20, MOUSE_BUTTON_WHEEL_UP, "wheel from minimum into enlarged left-drag contract")
 	_check(main.map_zoom > 1.0, "left-drag contract starts from an enlarged map")
 
 	var pan_before_click: Vector2 = main.map_pan_offset
@@ -521,6 +547,8 @@ func _release_left_outside_viewport(position: Vector2) -> void:
 func _verify_npc_dialogue_recovers_after_cancelled_release(main) -> void:
 	main.call("_hide_npc_dialogue")
 	main.call("_sync_map_interaction_for_ui")
+	main.call("_reset_map_camera")
+	await _drive_zoom(main, 1.20, MOUSE_BUTTON_WHEEL_UP, "wheel up before NPC-source drag cancellation")
 	await process_frame
 	var clickable_actor: Button = null
 	for actor: Button in main.get_visible_npc_actors():
@@ -539,6 +567,20 @@ func _verify_npc_dialogue_recovers_after_cancelled_release(main) -> void:
 		return
 	_check(not clickable_actor.disabled, "NPC actor is re-enabled after cancelled release dispatch")
 	var position := clickable_actor.get_global_rect().get_center()
+	var pan_before: Vector2 = main.map_pan_offset
+	await _start_left_drag(main, position, true)
+	_check(main._map_pan_drag_active and not main.map_pan_offset.is_equal_approx(pan_before), "left drag can begin from an NPC after the 8-pixel threshold")
+	_check(clickable_actor.disabled, "NPC-source drag cancels its captured button until release")
+	var cancelled_release := InputEventMouseButton.new()
+	cancelled_release.button_index = MOUSE_BUTTON_LEFT
+	cancelled_release.pressed = false
+	cancelled_release.position = position + Vector2(32.0, -20.0)
+	cancelled_release.global_position = cancelled_release.position
+	root.push_input(cancelled_release, true)
+	await _settle(3)
+	_check(main.npc_dialogue_card == null or not main.npc_dialogue_card.visible, "NPC-source drag release cannot open dialogue")
+	_check(not clickable_actor.disabled and _map_drag_state_is_clear(main), "NPC-source drag release restores the actor and clears capture")
+	position = clickable_actor.get_global_rect().get_center()
 	var left_down := InputEventMouseButton.new()
 	left_down.button_index = MOUSE_BUTTON_LEFT
 	left_down.button_mask = MOUSE_BUTTON_MASK_LEFT
@@ -560,6 +602,111 @@ func _verify_npc_dialogue_recovers_after_cancelled_release(main) -> void:
 	_check(main.npc_dialogue_card != null and main.npc_dialogue_card.visible, "active NPC dialogue remains visible during ordinary map interaction sync")
 	main.call("_hide_npc_dialogue")
 	await process_frame
+
+
+func _verify_onboarding_map_drag(main) -> void:
+	main.call("_hide_npc_dialogue")
+	main.onboarding_progress.reset_for_new_game()
+	main.onboarding_progress.begin_guide()
+	main.placement_mode_active = true
+	main.placement_building_name = "住宅"
+	main.call("_reset_map_camera")
+	await _drive_zoom(main, 1.20, MOUSE_BUTTON_WHEEL_UP, "wheel up before onboarding map drag")
+	main.call("_refresh_onboarding_guide")
+	await _settle(3)
+	var target := main.onboarding_guide.target_control() as Button
+	var target_index: int = main.grid_buttons.find(target)
+	_check(target != null and target_index >= 0, "active build onboarding binds a real map tile before drag")
+	if target == null or target_index < 0:
+		return
+	var origin := target.get_global_rect().get_center()
+	var arrow := main.onboarding_guide.get_node("OnboardingArrow") as Label
+	var arrow_before: Vector2 = arrow.position
+	var pan_before: Vector2 = main.map_pan_offset
+	var intent_before := _map_intent_snapshot(main)
+	_tile_press_count = 0
+	_last_tile_pressed = -1
+	await _start_left_drag(main, origin, true)
+	_check(main._map_pan_drag_active and not main.map_pan_offset.is_equal_approx(pan_before), "product onboarding permits enlarged-map left drag after 8 pixels")
+	_check(target.disabled, "threshold crossing cancels the guided tile BaseButton capture until release")
+	await _settle(2)
+	_check(not arrow.position.is_equal_approx(arrow_before), "onboarding arrow follows the camera-shifted target")
+	var release := InputEventMouseButton.new()
+	release.button_index = MOUSE_BUTTON_LEFT
+	release.pressed = false
+	release.position = origin + Vector2(32.0, -20.0)
+	release.global_position = release.position
+	root.push_input(release, true)
+	await _settle(3)
+	_check(_tile_press_count == 0 and _last_tile_pressed == -1, "onboarding map drag cannot click or place through its source tile")
+	_check(main.onboarding_progress.current_target() == "build" and main.onboarding_progress.receipts().is_empty(), "onboarding map drag cannot advance or fabricate a receipt")
+	_check(_map_intent_snapshot(main) == intent_before, "onboarding map drag changes only camera state")
+	_check(not target.disabled and _map_drag_state_is_clear(main), "onboarding map drag release restores the target and clears capture")
+
+	var blocked_mask: Control = null
+	var blocked_origin := Vector2.ZERO
+	var map_rect: Rect2 = main.map_viewport.get_global_rect()
+	for index in 4:
+		var mask := main.onboarding_guide.get_child(index) as Control
+		var overlap := mask.get_global_rect().intersection(map_rect)
+		if overlap.size.x >= 24.0 and overlap.size.y >= 24.0:
+			blocked_mask = mask
+			blocked_origin = overlap.get_center()
+			break
+	_check(blocked_mask != null, "product onboarding exposes a masked non-target map area")
+	if blocked_mask != null:
+		var blocked_pan_before: Vector2 = main.map_pan_offset
+		await _start_left_drag(main, blocked_origin, true)
+		_check(root.gui_get_hovered_control() == blocked_mask, "non-target map position remains owned by the onboarding mask")
+		_check(_map_drag_state_is_clear(main) and main.map_pan_offset.is_equal_approx(blocked_pan_before), "onboarding mask outside the target hole cannot become a map drag")
+		var blocked_release := InputEventMouseButton.new()
+		blocked_release.button_index = MOUSE_BUTTON_LEFT
+		blocked_release.pressed = false
+		blocked_release.position = blocked_origin + Vector2(32.0, -20.0)
+		blocked_release.global_position = blocked_release.position
+		root.push_input(blocked_release, true)
+		await _settle(2)
+
+		var middle_down := InputEventMouseButton.new()
+		middle_down.button_index = MOUSE_BUTTON_MIDDLE
+		middle_down.pressed = true
+		middle_down.position = blocked_origin
+		middle_down.global_position = blocked_origin
+		root.push_input(middle_down, true)
+		await process_frame
+		_check(_map_drag_state_is_clear(main), "product onboarding keeps middle-button pan blocked outside the target hole")
+		var middle_up := InputEventMouseButton.new()
+		middle_up.button_index = MOUSE_BUTTON_MIDDLE
+		middle_up.pressed = false
+		middle_up.position = blocked_origin
+		middle_up.global_position = blocked_origin
+		root.push_input(middle_up, true)
+		await process_frame
+
+		var zoom_before_blocked_wheel: float = main.map_zoom
+		var wheel := InputEventMouseButton.new()
+		wheel.button_index = MOUSE_BUTTON_WHEEL_UP
+		wheel.pressed = true
+		wheel.position = blocked_origin
+		wheel.global_position = blocked_origin
+		root.push_input(wheel, true)
+		await process_frame
+		_check(is_equal_approx(main.map_zoom, zoom_before_blocked_wheel), "product onboarding keeps wheel zoom blocked outside the target hole")
+
+		var zoom_before_blocked_reset: float = main.map_zoom
+		var pan_before_blocked_reset: Vector2 = main.map_pan_offset
+		var right_down := InputEventMouseButton.new()
+		right_down.button_index = MOUSE_BUTTON_RIGHT
+		right_down.pressed = true
+		right_down.position = blocked_origin
+		right_down.global_position = blocked_origin
+		root.push_input(right_down, true)
+		await process_frame
+		_check(
+			is_equal_approx(main.map_zoom, zoom_before_blocked_reset)
+			and main.map_pan_offset.is_equal_approx(pan_before_blocked_reset),
+			"product onboarding keeps right-button camera reset blocked outside the target hole"
+		)
 
 
 func _map_drag_state_is_clear(main) -> bool:

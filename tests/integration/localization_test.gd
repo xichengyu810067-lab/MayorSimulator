@@ -10,6 +10,41 @@ const TRADITIONAL_ONLY_CHARACTERS := "體與為這會個來開關學數據處實
 const GEOMETRY_EPSILON := 1.5
 const MUNICIPAL_LAYOUT_RESOLUTION := Vector2i(1440, 900)
 const INFORMATIONAL_PAGE_IDS := ["city_data", "report"]
+const ONBOARDING_LOCALIZATION_SOURCES := [
+	"現在：%s\n原因：比較城市指標，才能看出政策與建設是否真的改善生活。\n結果：切換到另一個資料分頁後，系統會記錄你已完成一次真實比較。\n代價／風險：只讀資料不扣款；城市時間照常前進，請留意指標可能隨時間改變。",
+	"現在：%s\n原因：法案必須經議會程序，市長的回應會改變表決與後續制衡。\n結果：完成議會流程並在真實否決後強制施行，會建立法律、司法與監察案件。\n代價／風險：送審本身不立即扣款；法案會按遊戲日審議，強制施行有司法與彈劾風險。",
+	"現在：%s\n原因：司法答辯會進入已連結的真實案件，不能用別的案件代替。\n結果：提交後案件會保存你的答辯，裁決完成時再顯示實際結果。\n代價／風險：答辯不立即扣款；審理需要遊戲時間，可能導致罰款、停止命令或監禁。",
+	"現在：%s\n原因：監察答辯針對強制施行所產生的同一件調查。\n結果：提交後調查會保存你的答辯，結案時顯示是否彈劾。\n代價／風險：答辯不立即扣款；調查需要遊戲時間，最重大風險是彈劾成立。",
+	"現在：%s\n原因：這是目前可操作的教學目標。\n結果：完成真實操作後才會推進教學。\n代價／風險：此操作不會因教學箭頭而自動扣款或快轉時間。",
+	"現在：%s\n原因：住宅提供居民可入住的城市空間，也是後續民意與稅收的基礎。\n結果：確認後會建立一筆真實施工工作，完工才成為可用建築。\n代價／風險：本次權威估價 $%d、預計 %d 個遊戲日、占用 %d 名工人；確認時才扣款。",
+	"現在：%s\n原因：住宅提供居民可入住的城市空間，也是後續民意與稅收的基礎。\n結果：依序選擇住宅、核准藍圖與地圖位置後，才會建立施工工作。\n代價／風險：瀏覽與選擇不扣款；最後確認前會顯示由真實施工估價計算的金額、工期與人力。",
+	"現在：%s\n原因：可營運路線需要真實站點、連續道路與營運設定，只有圖示不算完成。\n結果：完成套案會建立施工工作；全部完工並驗證後才啟用服務。\n代價／風險：規劃本身不扣款；最後繼續前會用真實站點、路線、設施與工人需求計算總工程費。",
+	"現在：%s\n原因：可營運路線需要真實站點、連續道路與營運設定，只有圖示不算完成。\n結果：完成套案會建立施工工作；全部完工並驗證後才啟用服務。\n代價／風險：目前套案總工程費 $%d、每月維護 $%d、需要 %d 名工人；按下最後繼續時才一次扣款。",
+	"所得稅草稿目前為 %d%%，正式值仍是 %d%%；只有預覽後執行才會寫入正式設定。",
+	"現在：%s\n原因：稅率會改變每月收入，也會提高或降低居民負擔與民意壓力。\n結果：%s\n代價／風險：草稿預估月淨額 $%d，安全緩衝 $%d；調高稅率可能增加收入，也可能降低滿意度。城市時間照常前進。",
+	"現在：%s\n原因：「%s」來自目前城市狀態；接受代表市府承諾追蹤它的真實完成條件。\n結果：接受後陳情會從待處理改為已接受，達成條件時再記入人物事件。\n代價／風險：接受本身不立即扣款；後續建設或服務可能花費資金與遊戲時間，拒絕則會留下決策紀錄。",
+	"司法案件 %s 已進入合議，答辯收件已結束。可正常遊玩，待裁決完成後將顯示真實結果；也可延後教學。",
+	"%s %s 已結案。結果：%s；結案日期：%s。案件已結案，無法再提交答辯；請閱讀結果後繼續教學。",
+	"拖曳所得稅滑桿，或先聚焦後用左右方向鍵調整至少 1%",
+	"在箭頭指向的可用地圖格按一下；若要移動視角，放大後拖過 8 像素",
+	"在箭頭指向的分頁列切換到另一個資料分頁",
+	"按下「%s」",
+	"操作箭頭指向的控制項",
+	"按下「預覽變更」核對剛才真實調整的所得稅草稿",
+	"按下「執行變更」套用已預覽且仍相符的草稿",
+	"目前居民陳情",
+	"司法案件",
+	"監察案件",
+	"裁處罰款",
+	"發布停止命令",
+	"判處監禁",
+	"司法裁決完成",
+	"彈劾成立",
+	"調查後不予彈劾",
+	"監察調查完成",
+	"將目前教學延後 3 個遊戲天",
+	"確認已閱讀真實案件結果並繼續教學",
+]
 const PAGE_TITLES := {
 	"buildings": "選擇建築",
 	"governance": "政策與法案",
@@ -105,6 +140,7 @@ func _run() -> void:
 				"%s catalog source is a UI/data literal, not extracted code: %s" % [locale, source]
 			)
 	_test_fresh_preference_save()
+	await _assert_onboarding_guide_initial_localization()
 
 	_l10n.set_locale("zh_TW", false)
 	var main := (load("res://scenes/Main.tscn") as PackedScene).instantiate()
@@ -336,12 +372,64 @@ func _run() -> void:
 		_audit_tree(main, locale, "exit confirmation", true)
 		main.exit_confirmation.call("close")
 
+	await _assert_onboarding_localization(main)
+
 	_l10n.set_locale("zh_TW", false)
 	_cleanup_save()
 	var exit_code := 1 if _failed else 0
 	if not _failed:
 		print("Five-language localization integration test passed. Catalogs=%s" % _l10n.catalog_coverage())
 	await TestCleanup.finish(self, [main], exit_code)
+
+
+func _assert_onboarding_localization(main: Node) -> void:
+	if main.onboarding_progress.is_story_pending():
+		_check(main.onboarding_progress.begin_guide(), "localization fixture begins the authoritative onboarding guide")
+	var progress_before: Dictionary = main.onboarding_progress.snapshot()
+	var receipt_before: Array = main.onboarding_progress.receipts()
+	var guide: OnboardingGuide = main.onboarding_guide as OnboardingGuide
+	_check(guide != null, "city scene provides an onboarding guide for live localization")
+	for locale in LOCALES:
+		_l10n.clear_missing_sources()
+		_l10n.set_locale(locale, false)
+		for source in ONBOARDING_LOCALIZATION_SOURCES:
+			var localized := str(_l10n.text(source))
+			_check(not localized.is_empty(), "%s onboarding source has non-empty localized copy" % locale)
+			if locale in ["en", "ko"]:
+				_check(not _contains_han(localized), "%s onboarding source contains no untranslated Han text: %s" % [locale, localized])
+			if locale == "zh_CN":
+				_check(not _contains_any(localized, TRADITIONAL_ONLY_CHARACTERS), "zh_CN onboarding source has no Traditional-only text: %s" % localized)
+		if guide != null:
+			guide.refresh_localization()
+			_check(
+				guide.get_node("OnboardingDeferButton").text == _l10n.text("延後教學")
+				and guide.get_node("OnboardingResultReviewButton").text == _l10n.text("已閱讀結果，繼續"),
+				"%s guide action labels refresh in place" % locale
+			)
+		_check(_l10n.missing_sources.is_empty(), "%s onboarding copy has no runtime translation misses: %s" % [locale, _l10n.missing_sources.keys()])
+	_check(main.onboarding_progress.snapshot() == progress_before and main.onboarding_progress.receipts() == receipt_before, "guide locale changes preserve onboarding progress and receipts")
+	if guide != null:
+		guide.invalidate_target()
+
+
+func _assert_onboarding_guide_initial_localization() -> void:
+	for locale in LOCALES:
+		_l10n.set_locale(locale, false)
+		var guide := OnboardingGuide.new()
+		root.add_child(guide)
+		await process_frame
+		_check(
+			guide.get_node("OnboardingDeferButton").text == _l10n.text("延後教學")
+			and guide.get_node("OnboardingResultReviewButton").text == _l10n.text("已閱讀結果，繼續"),
+			"%s guide initializes action labels after joining the scene tree" % locale
+		)
+		_check(
+			guide.get_node("OnboardingDeferButton").tooltip_text == _l10n.text("將目前教學延後 3 個遊戲天")
+			and guide.get_node("OnboardingResultReviewButton").tooltip_text == _l10n.text("確認已閱讀真實案件結果並繼續教學"),
+			"%s guide initializes action tooltips after joining the scene tree" % locale
+		)
+		guide.queue_free()
+		await process_frame
 
 
 func _audit_tree(node: Node, locale: String, context: String, visible_only: bool = false) -> void:

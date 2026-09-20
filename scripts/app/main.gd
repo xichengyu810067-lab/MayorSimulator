@@ -9,6 +9,8 @@ const CityBackdrop = preload("res://scripts/world/city_backdrop.gd")
 const CityTileButton = preload("res://scripts/world/city_tile_button.gd")
 const SquareGridLayoutScript = preload("res://scripts/world/square_grid_layout.gd")
 const NpcMapControllerScript = preload("res://scripts/app/npc_map_controller.gd")
+const CityStateScript = preload("res://scripts/core/city_state.gd")
+const SimulationClockScript = preload("res://scripts/core/simulation_clock.gd")
 const VerticalSliceCoordinatorScript = preload("res://scripts/app/vertical_slice_coordinator.gd")
 const CitySimulationServiceScript = preload("res://scripts/app/city_simulation_service.gd")
 const CityReportHistoryServiceScript = preload("res://scripts/app/city_report_history_service.gd")
@@ -31,6 +33,7 @@ const OnboardingGuideScript = preload("res://ui/tutorial/onboarding_guide.gd")
 const AudioDirectorScript = preload("res://scripts/audio/audio_director.gd")
 const UserSettingsServiceScript = preload("res://scripts/app/user_settings_service.gd")
 const CityTerrainMapScript = preload("res://scripts/world/city_terrain_map.gd")
+const BuildingTerrainLabelsScript = preload("res://data/catalogs/building_terrain_labels.gd")
 const CityDataDashboardScript = preload("res://ui/shell/city_data_dashboard.gd")
 const TransportPlanningPanelScript = preload("res://ui/shell/transport_planning_panel.gd")
 const TransportNetworkLayerScript = preload("res://scripts/world/transport_network_layer.gd")
@@ -60,7 +63,7 @@ const ISO_TILE_STEP := GRID_CELL_SIZE
 const ISO_MAP_ORIGIN := SquareGridLayoutScript.GRID_ORIGIN
 const MAP_STAGE_SIZE := SquareGridLayoutScript.STAGE_SIZE
 const MAP_BACKGROUND_PATH := "res://assets/images/world/backgrounds/city-map-background.png"
-const MAP_ZOOM_MIN := 0.65
+const MAP_ZOOM_MIN := 0.80
 const MAP_ZOOM_MAX := 1.75
 const MAP_ZOOM_STEP := 0.10
 const MAP_LEFT_DRAG_THRESHOLD := 8.0
@@ -172,7 +175,7 @@ const COLOR_CAUTION := Color(0.82, 0.55, 0.05)
 const COLOR_INFO := Color(0.05, 0.43, 0.70)
 const COLOR_GOLD := Color(0.95, 0.72, 0.16)
 const DATA_ICONS := {
-	"month": "◷", "funds": "$", "population": "人", "satisfaction": "♥",
+	"month": "◷", "funds": "$", "population": "人", "capacity": "業", "satisfaction": "♥",
 	"grievance": "!", "trust": "◆", "score": "★", "rating": "◈",
 	"治安": "安", "環境": "環", "交通": "交", "教育": "教", "醫療": "醫",
 	"security": "安", "environment": "環", "traffic": "交", "education": "教", "healthcare": "醫",
@@ -187,7 +190,7 @@ const DATA_ICONS := {
 const UI_MIN_FONT_SIZE := 19
 const UI_CONTROL_FONT_SIZE := 21
 const UI_HUD_BUTTON_SIZE := 72
-const UI_STATUS_HEIGHT := 72
+const UI_STATUS_HEIGHT := 104
 const UI_HUD_EDGE_INSET := 12.0
 const UI_HUD_GAP := 12
 const UI_HUD_PANEL_PADDING := 12
@@ -279,7 +282,6 @@ var bill_status_label: Label
 var map_viewport: Control
 var map_stage: Control
 var city_backdrop: Control
-var map_viewport_background: TextureRect
 var tile_layer: Control
 var npc_layer: Control
 var transport_network_layer
@@ -313,12 +315,14 @@ var audio_director
 var construction_confirmation
 var action_dock: Control
 var status_hud: Control
+var status_brand: Label
 var feedback_toast: Control
 var placement_banner: Control
 var placement_label: Label
 var placement_cancel_button: Button
 var placement_level_button: Button
 var placement_confirm_button: Button
+var placement_rotate_button: Button
 var _hint_tween: Tween
 var quit_application_on_confirm := true
 var _quit_shutdown_in_progress := false
@@ -350,10 +354,12 @@ var _autosave_count := 0
 var _last_autosave_reason := ""
 var placement_mode_active := false
 var placement_building_name := ""
+var placement_rotation_quarter_turns_ccw := 0
 var _placement_preview_anchor := -1
 var _placement_preview: Dictionary = {}
 var _pending_construction_tile := -1
 var _pending_construction_workers := 5
+var _pending_construction_rotation_quarter_turns_ccw := 0
 var _pending_terrain_tile := -1
 var map_action_mode := "inspect"
 var transport_plan_kind := ""
@@ -376,6 +382,7 @@ var _map_pan_drag_last_position := Vector2.ZERO
 var _npc_dialogue_remaining_seconds := 0.0
 var _active_npc_dialogue_index := -1
 var _npc_proxy_refresh_pending := false
+var _onboarding_reserved_tile_ids: Array[int] = []
 
 var month := 1
 var day := 1
@@ -457,6 +464,15 @@ var announcements: Array[String] = []
 var last_population_reason := "人口維持穩定。"
 var selected_cell_index := -1
 var building_customizations: Dictionary = {}
+var _applied_building_metric_effects: Dictionary = {}
+var _building_metric_baselines: Dictionary = {
+	"security": 70,
+	"environment": 70,
+	"traffic": 70,
+	"education": 70,
+	"healthcare": 70,
+	"satisfaction": 70,
+}
 var healthcare_applied_bonus := 0
 var _healthcare_legacy_migration_applied := true
 var ambient_time := 0.0
@@ -482,10 +498,113 @@ func _authoritative_metric_value(metric_name: String, fallback: int) -> int:
 
 
 func _set_authoritative_metric_value(metric_name: String, value: int) -> void:
+	if metric_name in OnboardingProgressScript.BUILDING_METRIC_BASELINE_KEYS:
+		_building_metric_baselines[metric_name] = _clamp_score(value)
+		_recompute_building_derived_metrics([metric_name])
+		return
+	_write_authoritative_metric_value(metric_name, value)
+
+
+func _write_authoritative_metric_value(metric_name: String, value: int) -> void:
 	var city_state = _authoritative_city_state()
 	if city_state == null:
 		return
 	city_state.set_metric_value(metric_name, _clamp_score(value))
+
+
+func _default_building_metric_baselines() -> Dictionary:
+	var defaults: Dictionary = {}
+	for metric_name: String in OnboardingProgressScript.BUILDING_METRIC_BASELINE_KEYS:
+		defaults[metric_name] = 70
+	return defaults
+
+
+func _healthcare_service_target_bonus() -> int:
+	if vertical_slice == null or vertical_slice.session == null:
+		return 0
+	return maxi(0, int(_healthcare_service_result().get("metric_bonus", 0)))
+
+
+func _building_metric_contribution(
+	metric_name: String,
+	building_totals: Dictionary = {},
+	healthcare_target_bonus: int = -1
+) -> int:
+	var totals := building_totals if not building_totals.is_empty() else _applied_building_metric_effects
+	var contribution := int(totals.get(metric_name, 0))
+	if metric_name == "healthcare":
+		var target_bonus := healthcare_target_bonus
+		if target_bonus < 0:
+			target_bonus = _healthcare_service_target_bonus()
+		contribution += target_bonus
+	return contribution
+
+
+func _visible_metric_from_baseline(
+	metric_name: String,
+	baselines: Dictionary,
+	building_totals: Dictionary,
+	healthcare_target_bonus: int
+) -> int:
+	return _clamp_score(
+		int(baselines.get(metric_name, 70))
+		+ _building_metric_contribution(metric_name, building_totals, healthcare_target_bonus)
+	)
+
+
+func _recompute_building_derived_metrics(metric_names: Array = []) -> void:
+	if _authoritative_city_state() == null:
+		return
+	var names: Array = metric_names
+	if names.is_empty():
+		names = OnboardingProgressScript.BUILDING_METRIC_BASELINE_KEYS
+	var healthcare_target_bonus := _healthcare_service_target_bonus()
+	for metric_name_variant: Variant in names:
+		var metric_name := str(metric_name_variant)
+		if metric_name not in OnboardingProgressScript.BUILDING_METRIC_BASELINE_KEYS:
+			continue
+		var visible_value := _visible_metric_from_baseline(
+			metric_name,
+			_building_metric_baselines,
+			_applied_building_metric_effects,
+			healthcare_target_bonus
+		)
+		_write_authoritative_metric_value(metric_name, visible_value)
+		if metric_name == "healthcare":
+			var service_less_visible := _clamp_score(
+				int(_building_metric_baselines.get("healthcare", 70))
+				+ int(_applied_building_metric_effects.get("healthcare", 0))
+			)
+			healthcare_applied_bonus = visible_value - service_less_visible
+
+
+func _set_city_metric_visible_target(metric_name: String, value: int) -> void:
+	if metric_name not in OnboardingProgressScript.BUILDING_METRIC_BASELINE_KEYS:
+		_write_authoritative_metric_value(metric_name, value)
+		return
+	var target := _clamp_score(value)
+	if target == _authoritative_metric_value(metric_name, target):
+		return
+	var healthcare_target_bonus := _healthcare_service_target_bonus()
+	var contribution := _building_metric_contribution(
+		metric_name, _applied_building_metric_effects, healthcare_target_bonus
+	)
+	_building_metric_baselines[metric_name] = _clamp_score(target - contribution)
+	_recompute_building_derived_metrics([metric_name])
+
+
+func _apply_city_metric_delta(delta_patch: Dictionary) -> void:
+	var changed: Array = []
+	for metric_name_variant: Variant in delta_patch.keys():
+		var metric_name := str(metric_name_variant)
+		if metric_name not in OnboardingProgressScript.BUILDING_METRIC_BASELINE_KEYS:
+			continue
+		_building_metric_baselines[metric_name] = _clamp_score(
+			int(_building_metric_baselines.get(metric_name, 70))
+			+ int(delta_patch[metric_name_variant])
+		)
+		changed.append(metric_name)
+	_recompute_building_derived_metrics(changed)
 
 
 func _city_metrics_snapshot() -> Dictionary:
@@ -500,6 +619,68 @@ func _city_metrics_snapshot() -> Dictionary:
 	}
 
 
+func _authoritative_building_records() -> Dictionary:
+	var city_state = _authoritative_city_state()
+	return city_state.buildings if city_state != null else {}
+
+
+func _building_capacity_snapshot() -> Dictionary:
+	if vertical_slice != null and vertical_slice.has_method("building_capacity_snapshot"):
+		return Dictionary(vertical_slice.call("building_capacity_snapshot")).duplicate(true)
+	return {
+		"housing_capacity": 0,
+		"housing_available": 0,
+		"housing_over_capacity": population,
+		"job_capacity": 0,
+		"population": population,
+		"employed": 0,
+		"unemployed": population,
+	}
+
+
+func _building_metric_effect_totals() -> Dictionary:
+	var totals: Dictionary = {}
+	for metric_name: String in CitySimulationServiceScript.METRIC_EFFECT_KEYS:
+		totals[metric_name] = 0
+	for record: Dictionary in CitySimulationServiceScript.active_building_records(_authoritative_building_records()):
+		var definition_value: Variant = buildings.get(str(record.get("building_name", "")), {})
+		if not definition_value is Dictionary:
+			continue
+		var effects := _direct_building_effects(definition_value as Dictionary)
+		for metric_name: String in CitySimulationServiceScript.METRIC_EFFECT_KEYS:
+			totals[metric_name] = int(totals[metric_name]) + int(effects.get(metric_name, 0))
+	return totals
+
+
+func _reconcile_building_metric_effects(apply_delta: bool = true) -> void:
+	var next_totals := _building_metric_effect_totals()
+	_applied_building_metric_effects = next_totals
+	if apply_delta:
+		_recompute_building_derived_metrics()
+
+
+func _prepare_building_metrics_for_save() -> void:
+	var next_totals := _building_metric_effect_totals()
+	var healthcare_target_bonus := _healthcare_service_target_bonus()
+	for metric_name: String in OnboardingProgressScript.BUILDING_METRIC_BASELINE_KEYS:
+		var actual := _authoritative_metric_value(metric_name, 70)
+		var projected := _visible_metric_from_baseline(
+			metric_name,
+			_building_metric_baselines,
+			next_totals,
+			healthcare_target_bonus
+		)
+		if projected == actual:
+			continue
+		_building_metric_baselines[metric_name] = _clamp_score(
+			actual - _building_metric_contribution(
+				metric_name, next_totals, healthcare_target_bonus
+			)
+		)
+	_applied_building_metric_effects = next_totals
+	_recompute_building_derived_metrics()
+
+
 func _city_report_metric_snapshot() -> Dictionary:
 	var snapshot := _city_metrics_snapshot()
 	snapshot["score"] = ranking_score
@@ -507,18 +688,25 @@ func _city_report_metric_snapshot() -> Dictionary:
 
 
 func _apply_city_metric_patch(patch: Dictionary) -> void:
-	var city_state = _authoritative_city_state()
-	if city_state == null:
-		return
-	var normalized: Dictionary = {}
+	var changed: Array = []
+	var healthcare_target_bonus := _healthcare_service_target_bonus()
 	for metric_name_variant: Variant in patch.keys():
 		var metric_name := str(metric_name_variant)
-		if metric_name in ["satisfaction", "security", "environment", "traffic", "education", "healthcare"]:
-			normalized[metric_name] = _clamp_score(int(patch[metric_name_variant]))
-	city_state.set_metric_values(normalized)
+		if metric_name not in OnboardingProgressScript.BUILDING_METRIC_BASELINE_KEYS:
+			continue
+		var target := _clamp_score(int(patch[metric_name_variant]))
+		if target == _authoritative_metric_value(metric_name, target):
+			continue
+		var contribution := _building_metric_contribution(
+			metric_name, _applied_building_metric_effects, healthcare_target_bonus
+		)
+		_building_metric_baselines[metric_name] = _clamp_score(target - contribution)
+		changed.append(metric_name)
+	_recompute_building_derived_metrics(changed)
 
 
 func _initialize_city_metric_defaults() -> void:
+	_building_metric_baselines = _default_building_metric_baselines()
 	_apply_city_metric_patch({
 		"satisfaction": 70,
 		"security": 70,
@@ -568,17 +756,45 @@ func _process(delta: float) -> void:
 	if npc_map_controller != null:
 		npc_map_controller.step(delta)
 	if vertical_slice != null:
-		var previous_game_day: int = vertical_slice.game_day()
-		var events: Array[Dictionary] = vertical_slice.process_frame(delta, _vertical_city_context(), false)
-		var day_changed: bool = vertical_slice.game_day() != previous_game_day
-		if day_changed or not events.is_empty():
-			_consume_vertical_events(events)
-			_sync_vertical_state()
-			_update_ui()
-			if day_changed and events.is_empty():
-				_autosave("event:day_advanced")
+		_process_continuous_clock(delta)
 	_update_autosave_timer(delta)
 	_process_release_smoke_frame()
+
+
+func _process_continuous_clock(delta: float) -> void:
+	if vertical_slice == null or vertical_slice.is_time_paused():
+		_refresh_time_hud()
+		return
+	if delta <= 0.0 or is_nan(delta) or is_inf(delta):
+		_refresh_time_hud()
+		return
+	var remaining_seconds := minf(delta, SimulationClockScript.MAX_FRAME_DELTA_SECONDS)
+	while remaining_seconds > 0.0 and not _vertical_slice_has_terminal_failure():
+		var seconds_to_day_boundary := float(vertical_slice.seconds_until_next_game_day())
+		# A restored legacy clock can be exactly on the boundary. Consume a real,
+		# minimal portion of this frame so that state cannot spin forever at zero.
+		if seconds_to_day_boundary <= 0.0:
+			seconds_to_day_boundary = minf(remaining_seconds, 0.000001)
+		var slice_seconds := minf(remaining_seconds, seconds_to_day_boundary)
+		if slice_seconds <= 0.0:
+			break
+		var previous_game_day: int = vertical_slice.game_day()
+		var events: Array[Dictionary] = vertical_slice.process_frame(slice_seconds, _vertical_city_context(), false)
+		remaining_seconds -= slice_seconds
+		var day_changed: bool = vertical_slice.game_day() != previous_game_day
+		if not day_changed and events.is_empty():
+			continue
+		# Consume each completed day before the next one. A month_started event must
+		# settle against its own boundary-date city state, never a later day in a
+		# throttled/minimized frame.
+		_consume_vertical_events(events)
+		_sync_vertical_state()
+		_update_ui()
+		if day_changed:
+			_refresh_onboarding_guide()
+		if day_changed and events.is_empty():
+			_autosave("event:day_advanced")
+	_refresh_time_hud()
 
 func _build_ui() -> void:
 	var background := ColorRect.new()
@@ -638,10 +854,15 @@ func _build_ui() -> void:
 	tutorial_overlay = IntroCinematicScript.new()
 	tutorial_overlay.completed.connect(Callable(self, "_on_tutorial_completed"))
 	tutorial_overlay.audio_cue.connect(Callable(self, "_on_tutorial_audio_cue"))
+	tutorial_overlay.playback_started.connect(Callable(self, "_on_tutorial_playback_started"))
+	tutorial_overlay.playback_stopped.connect(Callable(self, "_on_tutorial_playback_stopped"))
+	tutorial_overlay.load_failed.connect(Callable(self, "_on_tutorial_load_failed"))
 	add_child(tutorial_overlay)
 	onboarding_guide = OnboardingGuideScript.new()
 	onboarding_guide.set_dark_mode(is_dark_mode)
 	onboarding_guide.advanced.connect(Callable(self, "_on_onboarding_advanced"))
+	onboarding_guide.defer_requested.connect(Callable(self, "_on_onboarding_defer_requested"))
+	onboarding_guide.result_review_confirmed.connect(Callable(self, "_on_onboarding_result_review_confirmed"))
 	add_child(onboarding_guide)
 	call_deferred("_refresh_onboarding_guide")
 	for blocking_surface in [municipal_overlay, settings_overlay, construction_confirmation, exit_confirmation, tutorial_overlay, onboarding_guide]:
@@ -661,8 +882,6 @@ func _notification(what: int) -> void:
 		_npc_keyboard_dismiss_waiting_for_cancel_release = false
 		_begin_map_button_release_cancellation()
 		_clear_map_pan_drag_state()
-		if vertical_slice != null:
-			vertical_slice.set_time_paused(true)
 	elif what == NOTIFICATION_APPLICATION_FOCUS_IN and vertical_slice != null:
 		_sync_time_pause_for_ui()
 
@@ -670,17 +889,7 @@ func _notification(what: int) -> void:
 func _sync_time_pause_for_ui(skip_terminal_failure_sync: bool = false) -> void:
 	if vertical_slice == null:
 		return
-	var should_pause := not _game_started
-	should_pause = should_pause or (municipal_overlay != null and municipal_overlay.is_open())
-	should_pause = should_pause or (settings_overlay != null and settings_overlay.is_open())
-	should_pause = should_pause or (construction_confirmation != null and construction_confirmation.is_open())
-	should_pause = should_pause or (exit_confirmation != null and exit_confirmation.visible)
-	should_pause = should_pause or (tutorial_overlay != null and tutorial_overlay.is_open())
-	should_pause = should_pause or (
-		onboarding_guide != null
-		and onboarding_guide.is_open()
-		and not onboarding_guide.is_product_mode()
-	)
+	var should_pause: bool = not _game_started or _vertical_slice_has_terminal_failure()
 	# A lazily added municipal overlay can emit visibility_changed while it is
 	# merely being attached.  Keep that presentation-only transition from using
 	# the coordinator's terminal-failure sealing method, which writes CityState.
@@ -689,6 +898,12 @@ func _sync_time_pause_for_ui(skip_terminal_failure_sync: bool = false) -> void:
 	else:
 		vertical_slice.set_time_paused(should_pause)
 	_refresh_time_hud()
+
+
+func _vertical_slice_has_terminal_failure() -> bool:
+	if vertical_slice == null or not vertical_slice.has_method("get_view_model"):
+		return false
+	return not str(Dictionary(vertical_slice.get_view_model()).get("failure", "")).is_empty()
 
 
 func _input(event: InputEvent) -> void:
@@ -774,18 +989,26 @@ func _input(event: InputEvent) -> void:
 			return
 	if event is InputEventMouseMotion and (_map_pan_drag_active or _map_pan_drag_pending):
 		var pan_event := event as InputEventMouseMotion
-		if not _can_zoom_map_at(pan_event.position):
+		var can_continue_pan := _can_zoom_map_at(pan_event.position)
+		if _map_pan_drag_uses_left_button:
+			can_continue_pan = _can_left_drag_capture_continue_at(pan_event.position)
+		if not can_continue_pan:
+			_begin_map_button_release_cancellation()
 			_clear_map_pan_drag_state()
 			return
 		if _map_pan_drag_pending:
 			if pan_event.position.distance_to(_map_pan_drag_origin) < MAP_LEFT_DRAG_THRESHOLD:
 				return
+			# Crossing the threshold irrevocably turns this pointer sequence into a
+			# camera gesture. Cancel any tile/NPC BaseButton capture before the
+			# eventual release can place, select, or advance onboarding.
+			_begin_map_button_release_cancellation()
 			_map_pan_drag_pending = false
 			_map_pan_drag_active = true
 		var pan_delta := pan_event.position - _map_pan_drag_last_position
 		_map_pan_drag_last_position = pan_event.position
 		map_pan_offset += pan_delta
-		_clamp_map_pan(_base_map_scale() * map_zoom)
+		_clamp_map_pan(_map_scale_for_zoom(map_zoom))
 		_layout_map_stage()
 		get_viewport().set_input_as_handled()
 		return
@@ -812,18 +1035,28 @@ func _input(event: InputEvent) -> void:
 
 
 func _can_zoom_map_at(global_position: Vector2) -> bool:
+	return _can_map_camera_at(global_position, false)
+
+
+func _can_map_camera_at(global_position: Vector2, allow_product_onboarding: bool) -> bool:
 	if map_viewport == null or map_stage == null or not map_viewport.get_global_rect().has_point(global_position):
 		return false
 	if not _game_started:
 		return false
-	for blocking_surface in [municipal_overlay, settings_overlay, construction_confirmation, exit_confirmation, tutorial_overlay, onboarding_guide]:
+	for blocking_surface in [municipal_overlay, settings_overlay, construction_confirmation, exit_confirmation, tutorial_overlay]:
 		if blocking_surface != null and blocking_surface.visible:
 			return false
+	if (
+		onboarding_guide != null
+		and onboarding_guide.is_open()
+		and (not allow_product_onboarding or not onboarding_guide.is_product_mode())
+	):
+		return false
 	return true
 
 
 func _can_left_drag_map_at(global_position: Vector2) -> bool:
-	if map_zoom <= 1.0 or not _can_zoom_map_at(global_position):
+	if map_zoom <= 1.0 or not _can_map_camera_at(global_position, true):
 		return false
 	# HUD and ordinary controls are outside map_viewport's child tree. Keeping
 	# them out of the drag candidate boundary prevents a left UI click becoming a
@@ -832,6 +1065,10 @@ func _can_left_drag_map_at(global_position: Vector2) -> bool:
 	if hovered_control == null:
 		return true
 	return hovered_control == map_viewport or map_viewport.is_ancestor_of(hovered_control)
+
+
+func _can_left_drag_capture_continue_at(global_position: Vector2) -> bool:
+	return _can_map_camera_at(global_position, true)
 
 
 func _can_reset_map_at(global_position: Vector2) -> bool:
@@ -866,7 +1103,7 @@ func _zoom_map_at(global_position: Vector2, zoom_delta: float) -> void:
 	var viewport_local := map_viewport.get_global_transform_with_canvas().affine_inverse() * global_position
 	var previous_scale := maxf(0.001, map_stage.scale.x)
 	var stage_anchor := (viewport_local - map_stage.position) / previous_scale
-	var next_scale := _base_map_scale() * map_zoom
+	var next_scale := _map_scale_for_zoom(map_zoom)
 	var centered_position := (map_viewport.size - MAP_STAGE_SIZE * next_scale) * 0.5
 	map_pan_offset = viewport_local - stage_anchor * next_scale - centered_position
 	_clamp_map_pan(next_scale)
@@ -937,6 +1174,7 @@ func _initialize_fresh_game() -> void:
 	for _index in CELL_COUNT:
 		city_grid.append("")
 	building_customizations.clear()
+	_applied_building_metric_effects.clear()
 	healthcare_applied_bonus = 0
 	_healthcare_legacy_migration_applied = true
 	selected_cell_index = -1
@@ -989,6 +1227,7 @@ func _initialize_fresh_game() -> void:
 	_autosave_elapsed_seconds = 0.0
 	_last_autosave_reason = ""
 	_sync_vertical_state()
+	_reconcile_building_metric_effects(false)
 	month_start_population = population
 	vertical_slice.initialize_requests_without_history(_vertical_city_context())
 	refresh_visible_npc_proxies()
@@ -997,6 +1236,7 @@ func _initialize_fresh_game() -> void:
 
 
 func _capture_player_shell_state() -> Dictionary:
+	_prepare_building_metrics_for_save()
 	_reconcile_healthcare_service()
 	_sync_city_metrics_to_core()
 	var serialized_customizations: Dictionary = {}
@@ -1024,7 +1264,11 @@ func _capture_player_shell_state() -> Dictionary:
 		"selected_cell_index": selected_cell_index,
 		"building_customizations": serialized_customizations,
 		"healthcare_applied_bonus": healthcare_applied_bonus,
-		"healthcare_service_base": clampi(healthcare - healthcare_applied_bonus, 0, 100),
+		"healthcare_service_base": _clamp_score(
+			int(_building_metric_baselines.get("healthcare", 70))
+			+ int(_applied_building_metric_effects.get("healthcare", 0))
+		),
+		"building_metric_baselines": _building_metric_baselines.duplicate(true),
 		"security": security,
 		"environment": environment,
 		"traffic": traffic,
@@ -1056,6 +1300,50 @@ func _restore_player_shell_state(state: Dictionary) -> bool:
 	if state.is_empty():
 		tutorial_completed = not onboarding_progress.is_story_pending()
 		return true
+	var shell_schema := int(state.get("schema_version", 0))
+	_applied_building_metric_effects = _building_metric_effect_totals()
+	var metric_source: Dictionary = state
+	var metric_key_satisfaction := "total_satisfaction"
+	if shell_schema >= 5 and vertical_slice != null and vertical_slice.session != null:
+		metric_source = vertical_slice.session.state.metrics
+		metric_key_satisfaction = "satisfaction"
+	var restored_metrics := {
+		"security": clampi(int(metric_source.get("security", state.get("security", security))), 0, 100),
+		"environment": clampi(int(metric_source.get("environment", state.get("environment", environment))), 0, 100),
+		"traffic": clampi(int(metric_source.get("traffic", state.get("traffic", traffic))), 0, 100),
+		"education": clampi(int(metric_source.get("education", state.get("education", education))), 0, 100),
+		"healthcare": clampi(int(metric_source.get("healthcare", state.get("healthcare", healthcare))), 0, 100),
+		"satisfaction": clampi(int(metric_source.get(metric_key_satisfaction, state.get("total_satisfaction", total_satisfaction))), 0, 100),
+	}
+	var healthcare_target_bonus := _healthcare_service_target_bonus()
+	var candidate_baselines: Dictionary = {}
+	if shell_schema >= 10:
+		var baseline_validation := onboarding_progress.validate_building_metric_baselines(state)
+		if not bool(baseline_validation.get("ok", false)):
+			return false
+		candidate_baselines = Dictionary(baseline_validation["baselines"]).duplicate(true)
+		for metric_name: String in OnboardingProgressScript.BUILDING_METRIC_BASELINE_KEYS:
+			if _visible_metric_from_baseline(
+				metric_name,
+				candidate_baselines,
+				_applied_building_metric_effects,
+				healthcare_target_bonus
+			) != int(restored_metrics[metric_name]):
+				return false
+	else:
+		for metric_name: String in OnboardingProgressScript.BUILDING_METRIC_BASELINE_KEYS:
+			var contribution := _building_metric_contribution(
+				metric_name, _applied_building_metric_effects, healthcare_target_bonus
+			)
+			if metric_name == "healthcare" and shell_schema >= 8 and state.has("healthcare_service_base"):
+				candidate_baselines[metric_name] = _clamp_score(
+					int(state.get("healthcare_service_base", restored_metrics[metric_name]))
+					- int(_applied_building_metric_effects.get("healthcare", 0))
+				)
+			else:
+				candidate_baselines[metric_name] = _clamp_score(
+					int(restored_metrics[metric_name]) - contribution
+				)
 	_fiscal_draft_active = false
 	var saved_tax: Dictionary = state.get("tax_rates", {})
 	for key in tax_rates.keys():
@@ -1103,19 +1391,15 @@ func _restore_player_shell_state(state: Dictionary) -> bool:
 		var tile_index := int(str(tile_key))
 		if tile_index >= 0 and tile_index < CELL_COUNT and city_grid[tile_index] != "":
 			building_customizations[tile_index] = Dictionary(saved_customizations[tile_key]).duplicate(true)
-	# Schema 5 makes CityState.metrics authoritative. Older saves used only the
-	# player shell, so they intentionally migrate from the legacy fields once.
-	var metric_source: Dictionary = state
-	var metric_key_satisfaction := "total_satisfaction"
-	if int(state.get("schema_version", 0)) >= 5 and vertical_slice != null and vertical_slice.session != null:
-		metric_source = vertical_slice.session.state.metrics
-		metric_key_satisfaction = "satisfaction"
-	security = clampi(int(metric_source.get("security", state.get("security", security))), 0, 100)
-	environment = clampi(int(metric_source.get("environment", state.get("environment", environment))), 0, 100)
-	traffic = clampi(int(metric_source.get("traffic", state.get("traffic", traffic))), 0, 100)
-	education = clampi(int(metric_source.get("education", state.get("education", education))), 0, 100)
-	healthcare = clampi(int(metric_source.get("healthcare", state.get("healthcare", healthcare))), 0, 100)
-	total_satisfaction = clampi(int(metric_source.get(metric_key_satisfaction, state.get("total_satisfaction", total_satisfaction))), 0, 100)
+	# Schema 10 persists the non-building component. Schema 9 and older preserve
+	# their visible values and derive the only deterministic baseline available;
+	# a previously saturated, never-persisted component cannot be reconstructed.
+	_building_metric_baselines = candidate_baselines
+	if shell_schema >= 10:
+		_recompute_building_derived_metrics()
+	else:
+		for metric_name: String in OnboardingProgressScript.BUILDING_METRIC_BASELINE_KEYS:
+			_write_authoritative_metric_value(metric_name, int(restored_metrics[metric_name]))
 	month_start_population = maxi(1, int(state.get("month_start_population", population)))
 	var saved_groups: Dictionary = state.get("group_satisfaction", {})
 	for group_name in group_satisfaction.keys():
@@ -1135,8 +1419,9 @@ func _restore_player_shell_state(state: Dictionary) -> bool:
 	for announcement in state.get("announcements", []):
 		announcements.append(str(announcement))
 	last_population_reason = str(state.get("last_population_reason", last_population_reason))
-	var shell_schema := int(state.get("schema_version", 0))
-	if shell_schema >= 8:
+	if shell_schema >= 10:
+		_reconcile_healthcare_service()
+	elif shell_schema >= 8:
 		var expected_bonus := maxi(0, int(_healthcare_service_result().get("metric_bonus", 0)))
 		var maximum_bonus := _healthcare_max_metric_bonus()
 		var saved_base := clampi(int(state.get("healthcare_service_base", healthcare - expected_bonus)), 0, 100)
@@ -1211,12 +1496,17 @@ func _build_compact_status_hud() -> PanelContainer:
 
 	var title := _label("城諾之音", 20, Color("fff4d7") if is_dark_mode else Color("35291f"))
 	title.name = "StatusBrand"
-	title.custom_minimum_size = Vector2(150, 0)
+	title.custom_minimum_size = Vector2(116, 0)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.tooltip_text = L10n.text("療癒城市治理模擬")
+	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	title.max_lines_visible = 2
+	title.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	title.tooltip_text = "療癒城市治理模擬"
+	status_brand = title
 	row.add_child(title)
 
-	for key in ["month", "funds", "population", "satisfaction", "grievance", "trust", "score", "rating"]:
+	for key in ["month", "funds", "population", "capacity", "satisfaction", "grievance", "trust", "score", "rating"]:
 		row.add_child(_header_metric_card(key))
 	return panel
 
@@ -1247,9 +1537,9 @@ func _build_feedback_toast() -> PanelContainer:
 	panel.anchor_right = 0.5
 	panel.anchor_bottom = 0.0
 	panel.offset_left = -330.0
-	panel.offset_top = 78.0
+	panel.offset_top = UI_STATUS_HEIGHT + 6.0
 	panel.offset_right = 330.0
-	panel.offset_bottom = 130.0
+	panel.offset_bottom = UI_STATUS_HEIGHT + 58.0
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	panel.visible = false
 	hint_label = _label("", 16, Color.WHITE)
@@ -1291,11 +1581,19 @@ func _build_placement_banner() -> PanelContainer:
 	placement_label.max_lines_visible = 2
 	placement_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(placement_label)
+	placement_rotate_button = _button("逆時針旋轉 90°", "secondary")
+	placement_rotate_button.name = "RotateBuildingButton"
+	placement_rotate_button.custom_minimum_size = Vector2(190, 44)
+	placement_rotate_button.add_theme_font_size_override("font_size", 18)
+	placement_rotate_button.tooltip_text = "每按一次將建築占格逆時針旋轉 90 度"
+	placement_rotate_button.visible = false
+	placement_rotate_button.pressed.connect(Callable(self, "_rotate_building_placement_ccw"))
+	row.add_child(placement_rotate_button)
 	placement_level_button = _button("整平地形", "primary")
 	placement_level_button.name = "FlattenTerrainButton"
 	placement_level_button.custom_minimum_size = Vector2(190, 44)
 	placement_level_button.add_theme_font_size_override("font_size", 18)
-	placement_level_button.tooltip_text = "移除樹木、山丘、河流、道路或軌道，使地格恢復可興建"
+	placement_level_button.tooltip_text = L10n.text("整平自然地形供道路、軌道等交通路廊施工；費用與工期依目前估價，不能解除人審禁建。")
 	placement_level_button.visible = false
 	placement_level_button.pressed.connect(Callable(self, "_flatten_pending_terrain"))
 	row.add_child(placement_level_button)
@@ -1427,6 +1725,7 @@ func _confirm_application_quit() -> void:
 			if exit_confirmation != null:
 				exit_confirmation.show_save_error(int(save_error))
 			_set_hint("儲存失敗（錯誤 %d）" % int(save_error), true)
+			_sync_time_pause_for_ui()
 			return
 	if exit_confirmation != null:
 		exit_confirmation.close()
@@ -1516,6 +1815,11 @@ func _ensure_municipal_overlay() -> Control:
 	municipal_overlay.visibility_changed.connect(Callable(self, "_sync_time_pause_for_ui").bind(true))
 	municipal_overlay.visibility_changed.connect(Callable(self, "_sync_map_interaction_for_ui"))
 	add_child(municipal_overlay)
+	# The overlay is allocated only on first presentation. A general UI refresh
+	# before that point cannot bind its blueprint controls, including after a
+	# theme rebuild; quote the newly created draft from current authority now.
+	if vertical_slice != null:
+		_update_scoped_municipal_pages(vertical_slice.get_view_model(selected_cell_index))
 	_wire_ui_sounds()
 	return municipal_overlay
 
@@ -1681,12 +1985,13 @@ func _sync_map_interaction_for_ui() -> void:
 	# controls separate prevents a moving resident from stealing a route/track
 	# tile while preserving ordinary map interaction.
 	_set_map_tile_tooltips_enabled(true)
-	_set_map_npc_tooltips_enabled(not _transport_planning_owns_map_input())
+	_set_map_npc_tooltips_enabled(
+		not _transport_planning_owns_map_input()
+		and _onboarding_reserved_tile_ids.is_empty()
+	)
 
 
 func _on_municipal_overlay_closed() -> void:
-	if _fiscal_draft_active:
-		_discard_fiscal_draft(false, false)
 	_sync_map_interaction_for_ui()
 	call_deferred("_refresh_onboarding_guide")
 
@@ -1697,8 +2002,6 @@ func _on_municipal_page_opened(page_id: String) -> void:
 	if page_id == "finance":
 		_begin_fiscal_draft()
 		return
-	if _fiscal_draft_active:
-		_discard_fiscal_draft(false, true)
 	if page_id == "city_data":
 		var fiscal_tax_values: Dictionary = _fiscal_draft_tax_rates if _fiscal_draft_active else tax_rates
 		var fiscal_utility_values: Dictionary = _fiscal_draft_utility_fees if _fiscal_draft_active else utility_fees
@@ -1733,20 +2036,57 @@ func _refresh_onboarding_guide() -> void:
 	if onboarding_guide == null or not is_instance_valid(onboarding_guide):
 		return
 	if not _game_started or not onboarding_progress.is_active() or not onboarding_action_router.supports_current_target():
+		_set_onboarding_npc_reservation([])
 		onboarding_guide.invalidate_target()
+		_sync_time_pause_for_ui()
+		_sync_map_interaction_for_ui()
+		return
+	var current_game_day: int = int(vertical_slice.game_day()) if vertical_slice != null else 0
+	if onboarding_progress.is_waiting(current_game_day):
+		_set_onboarding_npc_reservation([])
+		onboarding_guide.show_waiting(
+			onboarding_progress,
+			_onboarding_waiting_message(onboarding_progress.due_game_day()),
+			false
+		)
+		_sync_time_pause_for_ui()
+		_sync_map_interaction_for_ui()
+		return
+	var route_waiting_message := _route_onboarding_unavailable_message()
+	if not route_waiting_message.is_empty():
+		_set_onboarding_npc_reservation([])
+		onboarding_guide.show_waiting(onboarding_progress, route_waiting_message)
+		_sync_time_pause_for_ui()
+		_sync_map_interaction_for_ui()
+		return
+	var case_presentation := _onboarding_case_non_target_presentation()
+	if not case_presentation.is_empty():
+		_set_onboarding_npc_reservation([])
+		if str(case_presentation.get("mode", "")) == "result_review":
+			onboarding_guide.show_result_review(onboarding_progress, str(case_presentation.get("message", "")))
+		else:
+			onboarding_guide.show_waiting(onboarding_progress, str(case_presentation.get("message", "")))
+		_sync_time_pause_for_ui()
 		_sync_map_interaction_for_ui()
 		return
 	var target := _resolve_onboarding_target()
 	if target == null or not is_instance_valid(target) or not target.is_visible_in_tree():
+		_set_onboarding_npc_reservation([])
 		onboarding_guide.invalidate_target()
+		_sync_time_pause_for_ui()
 		_sync_map_interaction_for_ui()
 		return
 	_ensure_onboarding_target_visible(target)
 	if target is BaseButton and (target as BaseButton).disabled:
+		_set_onboarding_npc_reservation([])
 		onboarding_guide.invalidate_target()
+		_sync_time_pause_for_ui()
 		_sync_map_interaction_for_ui()
 		return
+	_sync_onboarding_npc_reservation(target)
 	if onboarding_guide.is_product_mode() and onboarding_guide.target_control() == target:
+		onboarding_guide.update_product_message(_onboarding_target_message(target))
+		_sync_map_interaction_for_ui()
 		return
 	onboarding_guide.open_product_target(
 		onboarding_progress,
@@ -1757,6 +2097,41 @@ func _refresh_onboarding_guide() -> void:
 	)
 	_sync_time_pause_for_ui()
 	_sync_map_interaction_for_ui()
+
+
+func _sync_onboarding_npc_reservation(target: Control) -> void:
+	var tile_ids: Array[int] = []
+	if (
+		onboarding_progress.is_active()
+		and onboarding_progress.current_target() == "build"
+		and placement_mode_active
+		and target != null
+		and vertical_slice != null
+	):
+		var target_index := grid_buttons.find(target)
+		if target_index >= 0:
+			var workers := int(vertical_slice_panel.selected_worker_count()) if vertical_slice_panel != null else 5
+			var quote: Dictionary = vertical_slice.placement_footprint_quote(
+				placement_building_name,
+				target_index,
+				workers,
+				placement_rotation_quarter_turns_ccw
+			)
+			if bool(quote.get("ok", false)) and str(quote.get("status", "")) == "approved":
+				for tile_variant: Variant in quote.get("occupied_tile_ids", []):
+					var tile_id := int(tile_variant)
+					if tile_id >= 0 and tile_id < CELL_COUNT and tile_id not in tile_ids:
+						tile_ids.append(tile_id)
+	_set_onboarding_npc_reservation(tile_ids)
+
+
+func _set_onboarding_npc_reservation(tile_ids: Array[int]) -> void:
+	if tile_ids == _onboarding_reserved_tile_ids:
+		return
+	_onboarding_reserved_tile_ids = tile_ids.duplicate()
+	_hide_npc_dialogue()
+	if npc_map_controller != null:
+		npc_map_controller.set_tutorial_reserved_tiles(_onboarding_reserved_tile_ids)
 
 
 func _resolve_onboarding_target() -> Control:
@@ -1843,6 +2218,8 @@ func _resolve_route_onboarding_target() -> Control:
 		return _first_onboarding_grid_target()
 	if state not in ["inactive", "closed"]:
 		if municipal_overlay == null or not municipal_overlay.is_open():
+			if not _route_package_resource_wait_quote(session).is_empty():
+				return null
 			return municipal_button
 		var back_target := _visible_municipal_back_target()
 		if municipal_overlay.current_page() == "hub":
@@ -1854,7 +2231,11 @@ func _resolve_route_onboarding_target() -> Control:
 			return infrastructure_target if infrastructure_target != null else back_target
 		if state == "route_edit" and _transport_session_is_route_package(session):
 			var package_continue_target := _visible_enabled_control_named("TransportPlanningSessionContinue")
-			return package_continue_target if package_continue_target != null else _visible_enabled_control_named("CloseButton")
+			if package_continue_target != null:
+				return package_continue_target
+			if not _route_package_resource_wait_quote(session).is_empty():
+				return _visible_enabled_control_named("CloseButton")
+			return null
 		if state == "route_edit" and Dictionary(session.get("route_draft", {})).get("station_tile_ids", []).is_empty():
 			var route_target := _visible_control_named("PlanRoute_bus")
 			return route_target if route_target != null else back_target
@@ -1873,6 +2254,65 @@ func _resolve_route_onboarding_target() -> Control:
 	return _visible_municipal_back_target()
 
 
+func _route_package_resource_wait_quote(session: Dictionary) -> Dictionary:
+	if (
+		str(session.get("state", "")) != "route_edit"
+		or not _transport_session_is_route_package(session)
+		or vertical_slice == null
+		or not vertical_slice.has_method("transport_session_package_quote")
+	):
+		return {}
+	var quote: Dictionary = vertical_slice.call("transport_session_package_quote", city_grid)
+	if not bool(quote.get("ok", false)) or bool(quote.get("can_start", false)):
+		return {}
+	var available_workers := int(quote.get("available_workers", -1))
+	var requested_workers := int(quote.get("requested_workers", -1))
+	var insufficient_workers := requested_workers > 0 and available_workers < requested_workers
+	var insufficient_funds := not bool(quote.get("can_afford", false))
+	return quote if insufficient_workers or insufficient_funds else {}
+
+
+func _route_onboarding_unavailable_message() -> String:
+	if onboarding_progress.current_target() != "route":
+		return ""
+	var session := _transport_session_snapshot()
+	if (
+		str(session.get("state", "")) != "route_edit"
+		or not _transport_session_is_route_package(session)
+		or vertical_slice == null
+		or not vertical_slice.has_method("transport_session_package_quote")
+	):
+		return ""
+	var quote: Dictionary = vertical_slice.call("transport_session_package_quote", city_grid)
+	if not bool(quote.get("ok", false)):
+		var repair_context := (
+			"請在目前交通規劃中檢查站點、道路與營運設定"
+			if municipal_overlay != null and municipal_overlay.is_open()
+			else "請重新開啟市政中心，在交通規劃中檢查站點、道路與營運設定"
+		)
+		return "交通套案資料尚未完整（%s）。%s；也可延後教學。" % [
+			_vertical_error_text(str(quote.get("error", "transport_route_invalid"))),
+			repair_context,
+		]
+	quote = _route_package_resource_wait_quote(session)
+	if quote.is_empty():
+		return ""
+	var available_workers := int(quote.get("available_workers", 0))
+	var requested_workers := int(quote.get("requested_workers", 0))
+	var insufficient_workers := requested_workers > 0 and available_workers < requested_workers
+	var insufficient_funds := not bool(quote.get("can_afford", false))
+	if insufficient_funds and insufficient_workers:
+		return "交通套案目前資金與人力不足（總工程費 $%d；人力 %d/%d）。可先處理城市財政與工程，再繼續；也可延後教學。" % [
+			int(quote.get("total_cost", 0)), available_workers, requested_workers,
+		]
+	if insufficient_funds:
+		return "交通套案目前資金不足（總工程費 $%d）。可先處理城市財政，再繼續；也可延後教學。" % int(quote.get("total_cost", 0))
+	return "交通套案目前人力不足（%d/%d）。可先處理城市與工程，準備完成後再繼續；也可延後教學。" % [
+		available_workers,
+		requested_workers,
+	]
+
+
 func _resolve_fiscal_onboarding_target() -> Control:
 	if municipal_overlay == null or not municipal_overlay.is_open():
 		return municipal_button
@@ -1883,7 +2323,15 @@ func _resolve_fiscal_onboarding_target() -> Control:
 	if _fiscal_flow_step == "preview":
 		return fiscal_apply_button
 	if _fiscal_dirty_count() > 0:
-		return fiscal_preview_button
+		if fiscal_preview_button != null and fiscal_preview_button.is_visible_in_tree():
+			return fiscal_preview_button
+		return _visible_control_named("FiscalBackToCategories")
+	if _selected_fiscal_category.is_empty():
+		return _visible_control_named("FiscalCategoryCard_resident_tax")
+	if _selected_fiscal_category != "resident_tax":
+		return _visible_control_named("FiscalBackToCategories")
+	if _selected_fiscal_plan != "custom":
+		return _visible_control_named("FiscalPlanCard_custom")
 	return _visible_control_named("FiscalSlider_tax_income")
 
 
@@ -2058,7 +2506,12 @@ func _first_build_onboarding_grid_target() -> Control:
 			continue
 		if not _is_tile_inside_hud_safe_area(index):
 			continue
-		var quote: Dictionary = vertical_slice.placement_footprint_quote(placement_building_name, index, workers)
+		var quote: Dictionary = vertical_slice.placement_footprint_quote(
+			placement_building_name,
+			index,
+			workers,
+			placement_rotation_quarter_turns_ccw
+		)
 		if not bool(quote.get("ok", false)) or str(quote.get("status", "")) != "approved" or not bool(quote.get("can_afford", false)):
 			continue
 		var occupied_tile_ids: Array = quote.get("occupied_tile_ids", [])
@@ -2190,6 +2643,12 @@ func _route_package_station_candidate(
 	var occupied_tile_ids := _route_onboarding_int_array(quote.get("occupied_tile_ids", []))
 	if occupied_tile_ids.is_empty() or not occupied_tile_ids.has(anchor_tile_id):
 		return {}
+	var terrain = _terrain_map()
+	if terrain == null:
+		return {}
+	for occupied_tile_id: int in occupied_tile_ids:
+		if not terrain.is_buildable(occupied_tile_id):
+			return {}
 	if not _route_onboarding_grid_footprint_is_safe(occupied_tile_ids):
 		return {}
 	for existing: Dictionary in excluded:
@@ -2427,13 +2886,181 @@ func _route_onboarding_int_array(value: Variant) -> Array[int]:
 func _onboarding_target_message(target: Control) -> String:
 	if target == null:
 		return ""
+	var target_id := onboarding_progress.current_target()
+	var action := _onboarding_action_label(target)
+	match target_id:
+		"build":
+			return _onboarding_build_message(target, action)
+		"blueprint":
+			return _onboarding_blueprint_message(action)
+		"route":
+			return _onboarding_route_message(action)
+		"fiscal":
+			return _onboarding_fiscal_message(target, action)
+		"city_data":
+			return _onboarding_template("現在：%s\n原因：比較城市指標，才能看出政策與建設是否真的改善生活。\n結果：切換到另一個資料分頁後，系統會記錄你已完成一次真實比較。\n代價／風險：只讀資料不扣款；城市時間照常前進，請留意指標可能隨時間改變。", [action])
+		"public_affairs":
+			return _onboarding_public_affairs_message(target, action)
+		"governance":
+			return _onboarding_template("現在：%s\n原因：法案必須經議會程序，市長的回應會改變表決與後續制衡。\n結果：完成議會流程並在真實否決後強制施行，會建立法律、司法與監察案件。\n代價／風險：送審本身不立即扣款；法案會按遊戲日審議，強制施行有司法與彈劾風險。", [action])
+		"judicial":
+			return _onboarding_template("現在：%s\n原因：司法答辯會進入已連結的真實案件，不能用別的案件代替。\n結果：提交後案件會保存你的答辯，裁決完成時再顯示實際結果。\n代價／風險：答辯不立即扣款；審理需要遊戲時間，可能導致罰款、停止命令或監禁。", [action])
+		"oversight":
+			return _onboarding_template("現在：%s\n原因：監察答辯針對強制施行所產生的同一件調查。\n結果：提交後調查會保存你的答辯，結案時顯示是否彈劾。\n代價／風險：答辯不立即扣款；調查需要遊戲時間，最重大風險是彈劾成立。", [action])
+	return _onboarding_template("現在：%s\n原因：這是目前可操作的教學目標。\n結果：完成真實操作後才會推進教學。\n代價／風險：此操作不會因教學箭頭而自動扣款或快轉時間。", [action])
+
+
+func _onboarding_template(source: String, values: Array = []) -> String:
+	var template := L10n.text(source)
+	return template if values.is_empty() else template % values
+
+
+func _onboarding_action_label(target: Control) -> String:
+	if target is HSlider:
+		return L10n.text("拖曳所得稅滑桿，或先聚焦後用左右方向鍵調整至少 1%")
+	var tile_index := grid_buttons.find(target as Button) if target is Button else -1
+	if tile_index >= 0:
+		return L10n.text("在箭頭指向的可用地圖格按一下；若要移動視角，放大後拖過 8 像素")
+	if target is TabBar:
+		return L10n.text("在箭頭指向的分頁列切換到另一個資料分頁")
 	if not target.tooltip_text.is_empty():
-		return target.tooltip_text
+		return target.tooltip_text.replace("\n", "；")
 	if target.has_meta("semantic_label"):
 		return str(target.get_meta("semantic_label"))
-	if target is BaseButton:
-		return (target as BaseButton).text
-	return ""
+	if target is BaseButton and not (target as BaseButton).text.is_empty():
+		return _onboarding_template("按下「%s」", [(target as BaseButton).text.replace("\n", " ")])
+	return L10n.text("操作箭頭指向的控制項")
+
+
+func _onboarding_build_message(target: Control, action: String) -> String:
+	var tile_index := grid_buttons.find(target as Button) if target is Button else -1
+	if construction_confirmation != null and construction_confirmation.is_open():
+		tile_index = _pending_construction_tile
+	if tile_index >= 0 and vertical_slice != null and not placement_building_name.is_empty():
+		var workers := int(vertical_slice_panel.selected_worker_count()) if vertical_slice_panel != null else 5
+		var quote: Dictionary = vertical_slice.placement_footprint_quote(
+			placement_building_name,
+			tile_index,
+			workers,
+			placement_rotation_quarter_turns_ccw
+		)
+		if bool(quote.get("ok", false)):
+			return _onboarding_template("現在：%s\n原因：住宅提供居民可入住的城市空間，也是後續民意與稅收的基礎。\n結果：確認後會建立一筆真實施工工作，完工才成為可用建築。\n代價／風險：本次權威估價 $%d、預計 %d 個遊戲日、占用 %d 名工人；確認時才扣款。", [action, int(quote.get("total_cost", 0)), int(quote.get("duration_days", 0)), int(quote.get("worker_count", workers))])
+	return _onboarding_template("現在：%s\n原因：住宅提供居民可入住的城市空間，也是後續民意與稅收的基礎。\n結果：依序選擇住宅、核准藍圖與地圖位置後，才會建立施工工作。\n代價／風險：瀏覽與選擇不扣款；最後確認前會顯示由真實施工估價計算的金額、工期與人力。", [action])
+
+
+func _onboarding_blueprint_message(action: String) -> String:
+	var cost_text := L10n.text("調整設計和送審此刻不扣款；之後開工才按當時估價扣款並占用工人。")
+	if vertical_slice != null and vertical_slice_panel != null and selected_building == "公園":
+		var quote: Dictionary = vertical_slice.draft_placement_quote(selected_building, vertical_slice_panel.current_design_payload())
+		if bool(quote.get("ok", false)):
+			cost_text = L10n.text("目前公園施工估價 $%d、約 %d 個遊戲日、需 %d 名工人；送審此刻不扣款，核准後開工才扣款。") % [int(quote.get("total_cost", 0)), int(quote.get("duration_days", 0)), int(quote.get("worker_count", 0))]
+	return _onboarding_template("現在：%s；本步請選公園自訂藍圖。\n原因：改變至少一項材質、規模或人力，會影響公園之後的施工估價。\n結果：送審成功只建立待審藍圖；審核結果需等待遊戲日，不是立即核准。\n代價／風險：%s", [action, cost_text])
+
+
+func _onboarding_route_message(action: String) -> String:
+	var source := "現在：%s\n原因：可營運路線需要真實站點、連續道路與營運設定，只有圖示不算完成。\n結果：完成套案會建立施工工作；全部完工並驗證後才啟用服務。\n代價／風險：規劃本身不扣款；最後繼續前會用真實站點、路線、設施與工人需求計算總工程費。"
+	var values: Array = [action]
+	if vertical_slice != null and vertical_slice.has_method("transport_session_package_quote"):
+		var quote: Dictionary = vertical_slice.call("transport_session_package_quote", city_grid)
+		if bool(quote.get("ok", false)):
+			source = "現在：%s\n原因：可營運路線需要真實站點、連續道路與營運設定，只有圖示不算完成。\n結果：完成套案會建立施工工作；全部完工並驗證後才啟用服務。\n代價／風險：目前套案總工程費 $%d、每月維護 $%d、需要 %d 名工人；按下最後繼續時才一次扣款。"
+			values = [action, int(quote.get("total_cost", 0)), int(quote.get("total_monthly_maintenance", quote.get("route_monthly_maintenance", 0))), int(quote.get("requested_workers", 0))]
+	return _onboarding_template(source, values)
+
+
+func _onboarding_fiscal_message(target: Control, action: String) -> String:
+	var projection := _fiscal_projection_snapshot(true)
+	var authoritative_rate := int(tax_rates.get("income", 0))
+	var draft_rate := int(_fiscal_draft_tax_rates.get("income", authoritative_rate)) if _fiscal_draft_active else authoritative_rate
+	var result := _onboarding_template("所得稅草稿目前為 %d%%，正式值仍是 %d%%；只有預覽後執行才會寫入正式設定。", [draft_rate, authoritative_rate])
+	if target == fiscal_preview_button:
+		action = L10n.text("按下「預覽變更」核對剛才真實調整的所得稅草稿")
+	elif target == fiscal_apply_button:
+		action = L10n.text("按下「執行變更」套用已預覽且仍相符的草稿")
+	return _onboarding_template("現在：%s\n原因：稅率會改變每月收入，也會提高或降低居民負擔與民意壓力。\n結果：%s\n代價／風險：草稿預估月淨額 $%d，安全緩衝 $%d；調高稅率可能增加收入，也可能降低滿意度。城市時間照常前進。", [action, result, int(projection.get("net", 0)), int(projection.get("safety_buffer", 0))])
+
+
+func _onboarding_public_affairs_message(target: Control, action: String) -> String:
+	var request_id := ""
+	if target != null and str(target.name).begins_with("AcceptRequest_"):
+		request_id = str(target.name).trim_prefix("AcceptRequest_")
+	var request := _resident_request_snapshot(request_id)
+	var title := L10n.text(str(request.get("title", "目前居民陳情")))
+	return _onboarding_template("現在：%s\n原因：「%s」來自目前城市狀態；接受代表市府承諾追蹤它的真實完成條件。\n結果：接受後陳情會從待處理改為已接受，達成條件時再記入人物事件。\n代價／風險：接受本身不立即扣款；後續建設或服務可能花費資金與遊戲時間，拒絕則會留下決策紀錄。", [action, title])
+
+
+func _onboarding_waiting_message(due_game_day: int) -> String:
+	return L10n.text("教學預定於%s繼續；等待期間可正常遊玩。") % _onboarding_date_label(due_game_day)
+
+
+func _onboarding_date_label(game_day: int) -> String:
+	var bounded_day := maxi(0, game_day)
+	var days_per_year := CityStateScript.DAYS_PER_MONTH * CityStateScript.MONTHS_PER_YEAR
+	var year := int(bounded_day / days_per_year) + 1
+	var year_day := bounded_day % days_per_year
+	var month := int(year_day / CityStateScript.DAYS_PER_MONTH) + 1
+	var day := year_day % CityStateScript.DAYS_PER_MONTH + 1
+	return L10n.text("第 %d 年 %d 月 %d 日") % [year, month, day]
+
+
+func _onboarding_case_non_target_presentation() -> Dictionary:
+	var mode := onboarding_progress.current_target()
+	if mode not in ["judicial", "oversight"] or vertical_slice == null:
+		return {}
+	var event_book: Array = vertical_slice.session.state.event_book
+	var case_id := onboarding_action_router.linked_case_id(mode, event_book)
+	if case_id.is_empty():
+		return {}
+	var cases: Dictionary = (
+		vertical_slice.governance.judiciary_cases
+		if mode == "judicial"
+		else vertical_slice.governance.oversight_cases
+	)
+	if not cases.has(case_id) or not (cases[case_id] is Dictionary):
+		return {}
+	var case_payload: Dictionary = Dictionary(cases[case_id])
+	if str(case_payload.get("status", "")) == "resolved":
+		return {
+			"mode": "result_review",
+			"message": _onboarding_case_result_message(mode, case_payload),
+		}
+	if (
+		mode == "judicial"
+		and str(case_payload.get("status", "")) == "investigating"
+		and str(case_payload.get("procedural_stage", "")) in ["deliberation", "judgment"]
+	):
+		return {
+			"mode": "waiting",
+			"message": _onboarding_template("司法案件 %s 已進入合議，答辯收件已結束。可正常遊玩，待裁決完成後將顯示真實結果；也可延後教學。", [case_id]),
+		}
+	return {}
+
+
+func _onboarding_case_result_message(mode: String, case_payload: Dictionary) -> String:
+	var case_id := str(case_payload.get("id", ""))
+	var result_label := _onboarding_case_result_label(mode, str(case_payload.get("outcome", "")))
+	var resolved_date := _onboarding_date_label(int(case_payload.get("resolved_day", 0)))
+	var case_kind := L10n.text("司法案件") if mode == "judicial" else L10n.text("監察案件")
+	return _onboarding_template("%s %s 已結案。結果：%s；結案日期：%s。案件已結案，無法再提交答辯；請閱讀結果後繼續教學。", [
+		case_kind,
+		case_id,
+		result_label,
+		resolved_date,
+	])
+
+
+func _onboarding_case_result_label(mode: String, outcome: String) -> String:
+	if mode == "judicial":
+		return {
+			"fine": L10n.text("裁處罰款"),
+			"stop_order": L10n.text("發布停止命令"),
+			"prison": L10n.text("判處監禁"),
+		}.get(outcome, L10n.text("司法裁決完成"))
+	return {
+		"impeached": L10n.text("彈劾成立"),
+		"cleared": L10n.text("調查後不予彈劾"),
+	}.get(outcome, L10n.text("監察調查完成"))
 
 
 func _on_city_data_tab_changed(tab_index: int) -> void:
@@ -2569,14 +3196,15 @@ func _header_metric_card(key: String) -> PanelContainer:
 	card.name = "StatusMetric_%s" % key.capitalize()
 	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var minimum_widths := {
-		"month": 126.0,
-		"funds": 116.0,
-		"population": 108.0,
-		"satisfaction": 108.0,
-		"grievance": 108.0,
-		"trust": 100.0,
-		"score": 96.0,
-		"rating": 122.0,
+		"month": 118.0,
+		"funds": 148.0,
+		"population": 102.0,
+		"capacity": 160.0,
+		"satisfaction": 102.0,
+		"grievance": 110.0,
+		"trust": 96.0,
+		"score": 90.0,
+		"rating": 110.0,
 	}
 	card.custom_minimum_size = Vector2(float(minimum_widths.get(key, 100.0)), 0)
 	if key == "rating":
@@ -2601,10 +3229,14 @@ func _header_metric_card(key: String) -> PanelContainer:
 	var item := _label("", 14, Color("fff4d7") if is_dark_mode else Color("35291f"))
 	item.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	item.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	item.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	item.max_lines_visible = 2
-	item.clip_text = false
-	item.custom_minimum_size = Vector2(0, 40)
+	item.autowrap_mode = TextServer.AUTOWRAP_OFF if key == "funds" else TextServer.AUTOWRAP_WORD_SMART
+	if key == "capacity":
+		# Main rebuilds this runtime-owned text and tooltip from authoritative
+		# capacity values; a later generic tree pass must not translate it again.
+		item.set_meta("l10n_skip", true)
+	item.max_lines_visible = 1 if key == "funds" else (4 if key == "capacity" else 3)
+	item.clip_text = key == "funds"
+	item.custom_minimum_size = Vector2(0, 40 if key == "funds" else (72 if key == "capacity" else 56))
 	item.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	labels[key] = item
 	visual_row.add_child(item)
@@ -2723,9 +3355,9 @@ func _build_building_tab() -> ScrollContainer:
 				button.icon = _building_texture(building_name)
 				button.add_theme_constant_override("icon_max_width", 76)
 				button.expand_icon = true
-				button.custom_minimum_size = Vector2(300, 120)
+				button.custom_minimum_size = Vector2(300, 156)
 				button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-				button.tooltip_text = "%s\n%s\n%s" % [L10n.text(building_name), L10n.text(str(data.get("description", ""))), _visual_effects(data, 8)]
+				button.tooltip_text = "%s\n%s\n%s" % [L10n.text(building_name), L10n.text(str(data.get("description", ""))), _visual_effects(data)]
 				button.pressed.connect(Callable(self, "_select_building_from_catalog").bind(building_name))
 				building_buttons[building_name] = button
 				category_grid.call("add_choice", button)
@@ -3250,25 +3882,6 @@ func _build_map_panel() -> Control:
 	map_viewport.set_anchors_preset(Control.PRESET_FULL_RECT)
 	map_viewport.resized.connect(Callable(self, "_layout_map_stage"))
 	panel.add_child(map_viewport)
-	# Keep a non-interactive viewport-sized copy of the existing terrain art
-	# behind map_stage. At zooms below one it fills only the newly exposed edges;
-	# buildings, tiles, vehicles, and residents retain their shared stage
-	# transform and hit targets.
-	map_viewport_background = TextureRect.new()
-	map_viewport_background.name = "ViewportTerrainBackground"
-	map_viewport_background.texture = load(MAP_BACKGROUND_PATH) as Texture2D
-	map_viewport_background.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	map_viewport_background.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	map_viewport_background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	map_viewport_background.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	# Keep the cover art in the viewport's normal canvas layer. A negative
-	# z-index places this descendant behind the root theme background as well,
-	# so the exposed area at zooms below 100% is still rendered white. Child
-	# order already keeps this node behind map_stage without crossing that
-	# sibling boundary.
-	map_viewport_background.z_index = 0
-	map_viewport.add_child(map_viewport_background)
-
 	map_stage = Control.new()
 	map_stage.custom_minimum_size = MAP_STAGE_SIZE
 	map_stage.size = MAP_STAGE_SIZE
@@ -3582,10 +4195,15 @@ func _npc_map_snapshot() -> Dictionary:
 	for tile_index in mini(CELL_COUNT, city_grid.size()):
 		var center := _iso_tile_center(tile_index)
 		tile_centers.append(center)
-		if terrain != null and not terrain.is_walkable(tile_index):
+		var human_reviewed_blocked := BuildingTerrainLabelsScript.is_blocked(tile_index)
+		if human_reviewed_blocked or (terrain != null and not terrain.is_walkable(tile_index)):
 			terrain_blockers[tile_index] = {
 				"center": center,
-				"kind": terrain.effective_kind(tile_index),
+				"kind": (
+					"human_reviewed_blocked"
+					if human_reviewed_blocked
+					else terrain.effective_kind(tile_index)
+				),
 			}
 			blocked_tiles[tile_index] = true
 		elif terrain != null and terrain.is_flattened(tile_index):
@@ -3625,7 +4243,7 @@ func _layout_map_stage() -> void:
 	var viewport_size := map_viewport.size
 	if viewport_size.x <= 0.0 or viewport_size.y <= 0.0:
 		return
-	var target_scale := _base_map_scale() * map_zoom
+	var target_scale := _map_scale_for_zoom(map_zoom)
 	_clamp_map_pan(target_scale)
 	map_stage.scale = Vector2(target_scale, target_scale)
 	map_stage.position = (viewport_size - MAP_STAGE_SIZE * target_scale) * 0.5 + map_pan_offset
@@ -3636,8 +4254,17 @@ func _base_map_scale() -> float:
 		return 1.0
 	var viewport_size := map_viewport.size
 	var fill_scale: float = maxf(viewport_size.x / MAP_STAGE_SIZE.x, viewport_size.y / MAP_STAGE_SIZE.y)
-	var fit_scale: float = minf(viewport_size.x / MAP_STAGE_SIZE.x, viewport_size.y / MAP_STAGE_SIZE.y)
-	return maxf(0.72, minf(2.55, maxf(fill_scale * 1.04, fit_scale)))
+	return fill_scale * 1.25
+
+
+func _map_scale_for_zoom(zoom_value: float) -> float:
+	if map_viewport == null or map_viewport.size.x <= 0.0 or map_viewport.size.y <= 0.0:
+		return _base_map_scale() * zoom_value
+	var fill_scale := maxf(
+		map_viewport.size.x / MAP_STAGE_SIZE.x,
+		map_viewport.size.y / MAP_STAGE_SIZE.y
+	)
+	return maxf(fill_scale, _base_map_scale() * zoom_value)
 
 
 func _clamp_map_pan(target_scale: float) -> void:
@@ -3647,7 +4274,7 @@ func _clamp_map_pan(target_scale: float) -> void:
 		maxf(0.0, MAP_STAGE_SIZE.x * target_scale - map_viewport.size.x),
 		maxf(0.0, MAP_STAGE_SIZE.y * target_scale - map_viewport.size.y)
 	)
-	var limit := overflow * 0.5 + map_viewport.size * 0.18
+	var limit := overflow * 0.5
 	map_pan_offset.x = clampf(map_pan_offset.x, -limit.x, limit.x)
 	map_pan_offset.y = clampf(map_pan_offset.y, -limit.y, limit.y)
 
@@ -3864,7 +4491,7 @@ func format_npc_display_name(npc: Dictionary) -> String:
 
 
 func _show_npc_dialogue(npc_index: int) -> void:
-	if _transport_planning_owns_map_input():
+	if _transport_planning_owns_map_input() or not _onboarding_reserved_tile_ids.is_empty():
 		return
 	var npc: Dictionary = get_visible_npc_snapshot(npc_index)
 	if npc.is_empty():
@@ -3879,7 +4506,9 @@ func _show_npc_dialogue(npc_index: int) -> void:
 		portrait_texture = actor.get("actor_texture") as Texture2D
 	var dialogue_text := L10n.text(_npc_dialogue(npc_type))
 	if vertical_slice != null and not npc_id.is_empty() and not npc_id.begins_with("legacy_"):
-		vertical_slice.select_npc(npc_id, _vertical_city_context())
+		var npc_city_context := _vertical_city_context()
+		npc_city_context[VerticalSliceCoordinatorScript.CONTEXT_SUPPRESS_NEW_RESIDENT_FEEDBACK] = true
+		vertical_slice.select_npc(npc_id, npc_city_context)
 		var view_model: Dictionary = vertical_slice.get_view_model(selected_cell_index)
 		if npc_dialogue_card != null:
 			var has_request := bool(view_model.get("can_accept_request", false))
@@ -4309,6 +4938,7 @@ func _refresh_city_data_dashboard(finance_snapshot: Dictionary) -> void:
 		"current_period_index": current_period_index,
 		"population": population,
 		"month_start_population": month_start_population,
+		"building_capacity": _building_capacity_snapshot(),
 		"satisfaction": total_satisfaction,
 		"score": ranking_score,
 		"rating": city_rating,
@@ -4742,6 +5372,7 @@ func _show_fiscal_categories() -> void:
 		if page != null:
 			page.hide()
 	_refresh_fiscal_draft_actions()
+	call_deferred("_refresh_onboarding_guide")
 
 
 func _return_to_fiscal_edit() -> void:
@@ -4808,6 +5439,7 @@ func _select_fiscal_category(category_id: String) -> void:
 		if page != null:
 			page.hide()
 	_refresh_fiscal_draft_actions()
+	call_deferred("_refresh_onboarding_guide")
 
 
 func _select_fiscal_plan(plan_id: String) -> void:
@@ -4827,6 +5459,7 @@ func _select_fiscal_plan(plan_id: String) -> void:
 			page.visible = show_custom and category_id == _selected_fiscal_category
 	if show_custom:
 		_refresh_fiscal_draft_actions()
+		call_deferred("_refresh_onboarding_guide")
 		return
 	for item: Dictionary in spec["items"]:
 		var kind := str(item["kind"])
@@ -4837,6 +5470,7 @@ func _select_fiscal_plan(plan_id: String) -> void:
 		_set_fiscal_draft_value(kind, key, value, false)
 	_refresh_fiscal_draft_actions()
 	_update_ui()
+	call_deferred("_refresh_onboarding_guide")
 
 
 func _fiscal_preview_value(kind: String, key: String, value: int) -> String:
@@ -4879,7 +5513,8 @@ func _begin_fiscal_draft() -> void:
 	# its finance controls. Materializing the page later must attach those controls
 	# to that draft, not silently replace the pending values with authoritative
 	# state.
-	if not _fiscal_draft_active:
+	var restoring_existing := _fiscal_draft_active
+	if not restoring_existing:
 		_fiscal_draft_active = true
 		_fiscal_draft_base_tax_rates = tax_rates.duplicate(true)
 		_fiscal_draft_base_utility_fees = utility_fees.duplicate(true)
@@ -4891,11 +5526,31 @@ func _begin_fiscal_draft() -> void:
 		_fiscal_draft_revision = 0
 		_fiscal_preview_revision = -1
 	_sync_fiscal_controls_from_draft()
-	_show_fiscal_categories()
+	if restoring_existing:
+		_restore_fiscal_draft_surface()
+	else:
+		_show_fiscal_categories()
 	_update_ui()
 	if fiscal_page_scroll != null:
 		_layout_fiscal_surface(fiscal_page_scroll)
 		call_deferred("_layout_fiscal_surface", fiscal_page_scroll)
+
+
+func _restore_fiscal_draft_surface() -> void:
+	if fiscal_category_surface != null:
+		fiscal_category_surface.visible = _fiscal_flow_step == "edit" and _selected_fiscal_category.is_empty()
+	if fiscal_plan_surface != null:
+		fiscal_plan_surface.visible = _fiscal_flow_step == "edit" and not _selected_fiscal_category.is_empty()
+	if fiscal_custom_editor != null:
+		fiscal_custom_editor.visible = _fiscal_flow_step == "edit" and _selected_fiscal_plan == "custom"
+	for category_id_variant in fiscal_custom_pages.keys():
+		var category_id := str(category_id_variant)
+		var page := fiscal_custom_pages[category_id] as Control
+		if page != null:
+			page.visible = _fiscal_flow_step == "edit" and _selected_fiscal_plan == "custom" and category_id == _selected_fiscal_category
+	if fiscal_draft_preview != null:
+		fiscal_draft_preview.visible = _fiscal_flow_step == "preview"
+	_refresh_fiscal_draft_actions()
 
 
 func _fiscal_draft_dictionary(kind: String) -> Dictionary:
@@ -5311,23 +5966,40 @@ func _apply_fee_slider_visual(slider: HSlider, state: String) -> void:
 
 func _effect_token(effect_key: String, raw_value: Variant) -> String:
 	var labels_map := {
-		"population": "人口", "satisfaction": "滿意", "security": "治安", "environment": "環境",
+		"housing_capacity": "住房", "job_capacity": "職缺", "satisfaction": "滿意", "security": "治安", "environment": "環境",
 		"traffic": "交通", "education": "教育", "healthcare": "醫療", "commercial_income": "商收",
 		"industrial_income": "工收", "monthly_expense": "月支", "maintenance": "維護",
 		"score_bonus": "評分", "job_attraction": "就業", "business_bonus": "商業", "industrial_bonus": "工業"
 	}
+	if effect_key == "public_service" and raw_value is Dictionary:
+		var service: Dictionary = raw_value
+		if str(service.get("id", "")) == "healthcare":
+			return L10n.text("醫療容量 +%d 人") % maxi(0, int(service.get("capacity_per_facility", 0)))
+		return ""
+	if effect_key == "utility_efficiency" and raw_value is Dictionary:
+		var efficiency: Dictionary = raw_value
+		var gas_percent := roundi(float(efficiency.get("gas", 0.0)) * 100.0)
+		return L10n.text("瓦斯收入效率 %+d%%") % gas_percent if gas_percent != 0 else ""
 	if not labels_map.has(effect_key):
 		return ""
 	var value := float(raw_value)
+	if effect_key == "housing_capacity":
+		return L10n.text("住房 +%d 人") % maxi(0, roundi(value))
+	if effect_key == "job_capacity" or effect_key == "job_attraction":
+		return L10n.text("職缺 +%d") % maxi(0, roundi(value))
+	if effect_key == "commercial_income":
+		return L10n.text("月商業產值 +$%d") % maxi(0, roundi(value))
+	if effect_key == "industrial_income":
+		return L10n.text("月工業產值 +$%d") % maxi(0, roundi(value))
 	var is_cost := effect_key in ["monthly_expense", "maintenance"]
 	var arrow := "▼" if is_cost or value < 0.0 else "▲"
 	var shown := absi(roundi(value * 100.0)) if effect_key in ["business_bonus", "industrial_bonus"] else absi(roundi(value))
 	var suffix := "%" if effect_key in ["business_bonus", "industrial_bonus"] else ""
 	return "%s %s%d%s" % [arrow, L10n.text(labels_map[effect_key]), shown, suffix]
 
-func _visual_effects(source: Dictionary, limit: int = 3) -> String:
+func _visual_effects(source: Dictionary, limit: int = 99) -> String:
 	var tokens: Array[String] = []
-	var order := ["population", "satisfaction", "security", "environment", "traffic", "education", "healthcare", "commercial_income", "industrial_income", "business_bonus", "industrial_bonus", "job_attraction", "score_bonus", "monthly_expense", "maintenance"]
+	var order := ["housing_capacity", "job_capacity", "satisfaction", "security", "environment", "traffic", "education", "healthcare", "commercial_income", "industrial_income", "utility_efficiency", "public_service", "business_bonus", "industrial_bonus", "score_bonus", "monthly_expense", "maintenance"]
 	for effect_key: String in order:
 		if not source.has(effect_key):
 			continue
@@ -5342,12 +6014,12 @@ func _building_visual_text(building_name: String, data: Dictionary) -> String:
 	var effect_source := data.duplicate()
 	effect_source.erase("maintenance")
 	effect_source.erase("monthly_expense")
-	var effects := _visual_effects(effect_source, 2)
+	var effects := _visual_effects(effect_source)
 	var desc := L10n.text(str(data.get("description", "")))
-	return L10n.text("%s　基礎造價 $%d\n%s\n%s $%d/%s") % [
+	return L10n.text("%s　基礎造價 $%d\n%s\n每月維護 $%d｜實際總價依藍圖即時估算") % [
 		L10n.text(building_name), int(data.get("cost", 0)),
 		effects if not effects.is_empty() else desc,
-		L10n.text("修"), int(data.get("maintenance", 0)), L10n.text("月")
+		int(data.get("maintenance", 0))
 	]
 
 
@@ -6322,29 +6994,13 @@ func _on_grid_pressed(index: int) -> void:
 			_refresh_transport_planning_panel()
 			_set_hint("已移除這座站點草案；確認總包前仍未扣款。", false)
 		return
-	var terrain = _terrain_map()
-	if terrain != null and not terrain.is_buildable(index):
-		selected_cell_index = index
-		_pending_terrain_tile = index
-		_pending_construction_tile = -1
-		_hide_npc_dialogue()
-		_sync_placement_banner()
-		_update_tile_visual(index, city_grid[index])
-		var terrain_state: Dictionary = terrain.tile_state(index)
-		var terrain_label := str(TERRAIN_LABELS.get(str(terrain_state.get("effective_kind", "")), "非平坦地形"))
-		var flatten_quote: Dictionary = vertical_slice.terrain_flatten_quote(index)
-		_set_hint("%s不可興建；整地工程預估 $%d、%d 個遊戲日。" % [
-			terrain_label,
-			int(flatten_quote.get("total_cost", flatten_quote.get("cost", 0))),
-			int(flatten_quote.get("duration_days", 0)),
-		], true)
-		return
 	_pending_terrain_tile = -1
 	var workers: int = int(vertical_slice_panel.selected_worker_count()) if vertical_slice_panel else 5
 	var quote: Dictionary = vertical_slice.placement_footprint_quote(
 		placement_building_name,
 		index,
-		workers
+		workers,
+		placement_rotation_quarter_turns_ccw
 	)
 	if not bool(quote.get("ok", false)):
 		var placement_error := str(quote.get("error", "unknown"))
@@ -6352,6 +7008,9 @@ func _on_grid_pressed(index: int) -> void:
 			_set_hint("目前沒有可放置的核准藍圖。", true)
 			_cancel_building_placement(false)
 			_update_ui()
+			return
+		if placement_error == "terrain_not_flat" and str(quote.get("building_terrain_label", "")) == "non_buildable":
+			_set_hint("建築占格包含不可興建地格；請更換位置或按「逆時針旋轉 90°」後再試。", true)
 			return
 		_set_hint("此處無法完整放置「%s」：%s" % [
 			placement_building_name,
@@ -6386,6 +7045,7 @@ func _on_grid_pressed(index: int) -> void:
 		return
 	_pending_construction_tile = index
 	_pending_construction_workers = workers
+	_pending_construction_rotation_quarter_turns_ccw = placement_rotation_quarter_turns_ccw
 	_hide_npc_dialogue()
 	if construction_confirmation != null:
 		_set_map_interaction_enabled(false)
@@ -6405,6 +7065,7 @@ func _enter_building_placement(building_name: String) -> void:
 		return
 	placement_mode_active = true
 	placement_building_name = building_name
+	placement_rotation_quarter_turns_ccw = 0
 	_placement_preview_anchor = -1
 	_placement_preview.clear()
 	_pending_construction_tile = -1
@@ -6444,9 +7105,11 @@ func _cancel_building_placement(show_feedback: bool) -> void:
 func _clear_building_placement_ui() -> void:
 	placement_mode_active = false
 	placement_building_name = ""
+	placement_rotation_quarter_turns_ccw = 0
 	_placement_preview_anchor = -1
 	_placement_preview.clear()
 	_pending_construction_tile = -1
+	_pending_construction_rotation_quarter_turns_ccw = 0
 	_pending_terrain_tile = -1
 	if construction_confirmation != null and construction_confirmation.is_open():
 		construction_confirmation.close()
@@ -6466,7 +7129,8 @@ func _refresh_placement_preview(index: int) -> void:
 	var preview: Dictionary = vertical_slice.placement_footprint_preview(
 		placement_building_name,
 		index,
-		workers
+		workers,
+		placement_rotation_quarter_turns_ccw
 	)
 	var all_inside_hud_safe_area := true
 	for tile_variant: Variant in preview.get("occupied_tile_ids", []):
@@ -6499,6 +7163,9 @@ func _sync_placement_banner() -> void:
 	placement_banner.visible = placement_mode_active or transport_active
 	if placement_level_button != null:
 		placement_level_button.visible = false
+	if placement_rotate_button != null:
+		placement_rotate_button.visible = placement_mode_active and not compact_transport_layout
+		placement_rotate_button.disabled = placement_building_name.is_empty()
 	if placement_confirm_button != null:
 		placement_confirm_button.visible = false
 		placement_confirm_button.disabled = true
@@ -6571,7 +7238,24 @@ func _sync_placement_banner() -> void:
 			placement_confirm_button.text = L10n.text("下一步：規劃路網")
 			placement_confirm_button.disabled = station_count < minimum_stops
 		return
-	placement_label.text = L10n.text("放置 %s｜點擊空地查看總價｜Esc／右鍵取消") % L10n.text(placement_building_name)
+	placement_label.text = L10n.text("放置 %s｜方向 %d°｜點擊空地查看總價｜Esc／右鍵取消") % [
+		L10n.text(placement_building_name),
+		placement_rotation_quarter_turns_ccw * 90,
+	]
+
+
+func _rotate_building_placement_ccw() -> void:
+	if not placement_mode_active or _is_transport_station_session_placement():
+		return
+	placement_rotation_quarter_turns_ccw = posmod(placement_rotation_quarter_turns_ccw + 1, 4)
+	_pending_construction_tile = -1
+	_pending_construction_rotation_quarter_turns_ccw = 0
+	if construction_confirmation != null and construction_confirmation.is_open():
+		construction_confirmation.close()
+		_sync_map_interaction_for_ui()
+	if _placement_preview_anchor >= 0:
+		_refresh_placement_preview(_placement_preview_anchor)
+	_sync_placement_banner()
 
 
 func _transport_visible_plan_cost(quote: Dictionary, tile_count: int, session: Dictionary = {}) -> int:
@@ -6617,7 +7301,12 @@ func _confirm_pending_construction(tile_index: int) -> void:
 	var result: Dictionary = (
 		vertical_slice.call("place_transport_session_station", tile_index, _pending_construction_workers)
 		if session_placement
-		else vertical_slice.start_approved_building(building_name, tile_index, _pending_construction_workers)
+		else vertical_slice.start_approved_building(
+			building_name,
+			tile_index,
+			_pending_construction_workers,
+			_pending_construction_rotation_quarter_turns_ccw
+		)
 	)
 	if not bool(result.get("ok", false)):
 		_set_hint("無法開工「%s」：%s" % [building_name, _vertical_error_text(str(result.get("error", "unknown")))], true)
@@ -6628,9 +7317,11 @@ func _confirm_pending_construction(tile_index: int) -> void:
 	_placement_preview_anchor = -1
 	_placement_preview.clear()
 	_pending_construction_tile = -1
+	_pending_construction_rotation_quarter_turns_ccw = 0
 	if not session_placement:
 		placement_mode_active = false
 		placement_building_name = ""
+		placement_rotation_quarter_turns_ccw = 0
 	_sync_placement_banner()
 	if session_placement:
 		var station_count := _transport_session_station_count(result.get("session", {}))
@@ -6880,12 +7571,19 @@ func _reconcile_healthcare_service() -> Dictionary:
 	if vertical_slice == null or vertical_slice.session == null:
 		return result
 	var target_bonus := maxi(0, int(result.get("metric_bonus", 0)))
-	var base_healthcare := clampi(healthcare - healthcare_applied_bonus, 0, 100)
-	var next_healthcare := clampi(base_healthcare + target_bonus, 0, 100)
-	var effective_bonus := next_healthcare - base_healthcare
+	var service_less_healthcare := _clamp_score(
+		int(_building_metric_baselines.get("healthcare", 70))
+		+ int(_applied_building_metric_effects.get("healthcare", 0))
+	)
+	var next_healthcare := _clamp_score(
+		int(_building_metric_baselines.get("healthcare", 70))
+		+ int(_applied_building_metric_effects.get("healthcare", 0))
+		+ target_bonus
+	)
+	var effective_bonus := next_healthcare - service_less_healthcare
 	if next_healthcare == healthcare and effective_bonus == healthcare_applied_bonus:
 		return result
-	healthcare = next_healthcare
+	_write_authoritative_metric_value("healthcare", next_healthcare)
 	healthcare_applied_bonus = effective_bonus
 	_recalculate_satisfaction()
 	_recalculate_score()
@@ -7101,11 +7799,25 @@ func _vertical_city_context() -> Dictionary:
 		"security": security,
 		"environment": environment,
 		"traffic": traffic,
-		"housing_pressure": clampf(float(population - _building_count("住宅") * 28 - _building_count("社會住宅") * 48), 0.0, 100.0),
+		"housing_pressure": clampf(float(_building_capacity_snapshot().get("housing_over_capacity", 0)), 0.0, 100.0),
 		"mayor_argument_bonus": 2.0,
 		"regional_support": {},
-		"policy_effectiveness": {}
+		"policy_effectiveness": {},
+		VerticalSliceCoordinatorScript.CONTEXT_SUPPRESS_NEW_RESIDENT_FEEDBACK: _operation_window_suppresses_new_feedback(),
 	}
+
+
+func _operation_window_suppresses_new_feedback() -> bool:
+	return (
+		(municipal_overlay != null and municipal_overlay.is_open())
+		or (settings_overlay != null and settings_overlay.is_open())
+		or (construction_confirmation != null and construction_confirmation.is_open())
+		or (exit_confirmation != null and exit_confirmation.visible)
+		or (tutorial_overlay != null and tutorial_overlay.is_open())
+		or (onboarding_guide != null and onboarding_guide.is_open())
+		or (building_context_panel != null and building_context_panel.visible)
+		or (is_instance_valid(npc_dialogue_card) and npc_dialogue_card.visible)
+	)
 
 func _sync_vertical_state() -> void:
 	if vertical_slice == null:
@@ -7198,6 +7910,7 @@ func _consume_vertical_events(events: Array[Dictionary], autosave_events: bool =
 			"building_completed":
 				navigation_changed = true
 				request_context_changed = true
+				_reconcile_building_metric_effects()
 				if audio_director != null:
 					audio_director.play_construction_complete()
 				var tile_index := int(payload.get("tile_index", -1))
@@ -7207,7 +7920,6 @@ func _consume_vertical_events(events: Array[Dictionary], autosave_events: bool =
 					city_grid[tile_index] = building_name
 					var blueprint: Dictionary = payload.get("blueprint", {})
 					building_customizations[tile_index] = _customization_from_blueprint(blueprint)
-					_apply_building_effect(buildings[building_name])
 					_recalculate_satisfaction()
 					_recalculate_score()
 					_animate_building_placement(tile_index)
@@ -7221,13 +7933,12 @@ func _consume_vertical_events(events: Array[Dictionary], autosave_events: bool =
 				_add_announcement("拆除工程已開始；完成前建築仍占用原地格。")
 			"demolition_completed":
 				navigation_changed = true
+				_reconcile_building_metric_effects()
 				var tile_index := int(payload.get("tile_index", -1))
 				var building_name := str(payload.get("building_name", ""))
 				_record_major_event("building_demolished", building_name, "", "building_demolished:%s" % str(payload.get("building_id", tile_index)), event_game_time)
 				if tile_index >= 0 and tile_index < city_grid.size() and city_grid[tile_index] == building_name:
 					var customization: Dictionary = building_customizations.get(tile_index, {})
-					if buildings.has(building_name) and not bool(customization.get("effects_inactive", false)):
-						_remove_building_effect(buildings[building_name])
 					city_grid[tile_index] = ""
 					building_customizations.erase(tile_index)
 					if selected_cell_index == tile_index:
@@ -7237,13 +7948,14 @@ func _consume_vertical_events(events: Array[Dictionary], autosave_events: bool =
 					_recalculate_score()
 					_add_announcement("「%s」已拆除，地格恢復可建造狀態。" % building_name)
 			"building_repaired":
+				_reconcile_building_metric_effects()
 				_add_announcement("選取建築已維修至 100 耐久。")
 			"building_scrapped":
+				_reconcile_building_metric_effects()
 				var scrapped_tile := int(payload.get("tile_index", -1))
 				if scrapped_tile >= 0 and scrapped_tile < city_grid.size() and city_grid[scrapped_tile] != "":
 					var customization: Dictionary = building_customizations.get(scrapped_tile, {})
 					if not bool(customization.get("effects_inactive", false)):
-						_remove_building_effect(buildings[city_grid[scrapped_tile]])
 						customization["effects_inactive"] = true
 						building_customizations[scrapped_tile] = customization
 				_add_announcement("%s 耐久低於 40，已報廢；請安排拆除。" % payload.get("building_name", "建築"))
@@ -7478,6 +8190,7 @@ func _rebuild_city_from_core() -> void:
 		if str(record.get("status", "active")) == "scrapped":
 			customization["effects_inactive"] = true
 		building_customizations[tile_index] = customization
+	_reconcile_building_metric_effects(false)
 	debug_sync_npc_navigation_obstacles()
 	if npc_map_controller != null:
 		npc_map_controller.repath_all()
@@ -7555,11 +8268,9 @@ func _vertical_error_text(error_code: String) -> String:
 	return str(messages.get(error_code, error_code.replace("_", " ")))
 
 func _apply_monthly_policy_effects() -> void:
-	_apply_city_metric_patch(
-		CitySimulationServiceScript.monthly_policy_metric_patch(
-			_city_metrics_snapshot(),
-			policies,
-			active_policies
+	_apply_city_metric_delta(
+		CitySimulationServiceScript.monthly_policy_metric_deltas(
+			policies, active_policies
 		)
 	)
 
@@ -7567,9 +8278,7 @@ func _apply_active_law_effects() -> void:
 	var effects: Dictionary = {}
 	for metric_name: String in CitySimulationServiceScript.METRIC_EFFECT_KEYS:
 		effects[metric_name] = _active_law_value(metric_name)
-	_apply_city_metric_patch(
-		CitySimulationServiceScript.metric_effect_patch(_city_metrics_snapshot(), effects, 1)
-	)
+	_apply_city_metric_delta(effects)
 
 
 func _apply_active_law_population_effect() -> void:
@@ -7584,7 +8293,9 @@ func _apply_active_law_population_effect() -> void:
 	)
 	var actual_delta := int(result.get("actual_delta", 0))
 	if actual_delta > 0:
-		last_population_reason = "人口增加，居民滿意度上升。"
+		last_population_reason = "住房仍有空餘，居民依城市發展逐步遷入。"
+	elif bool(result.get("capacity_limited", false)):
+		last_population_reason = "住房容量已滿；既有居民保留，暫停新增遷入。"
 	elif actual_delta == 0:
 		last_population_reason = "人口維持穩定。"
 
@@ -7595,11 +8306,9 @@ func _add_announcement(message: String) -> void:
 
 
 func _apply_city_pressure() -> void:
-	_apply_city_metric_patch(
-		CitySimulationServiceScript.city_pressure_metric_patch(
-			_city_metrics_snapshot(),
-			population,
-			city_grid
+	_apply_city_metric_delta(
+		CitySimulationServiceScript.city_pressure_metric_deltas(
+			population, _authoritative_building_records()
 		)
 	)
 
@@ -7612,13 +8321,13 @@ func _recalculate_satisfaction() -> void:
 		UTILITY_DEFS,
 		service_fees,
 		SERVICE_DEFS,
-		city_grid,
+		_authoritative_building_records(),
 		policies,
 		active_policies,
 		_active_law_value("utility_relief")
 	)
 	group_satisfaction = (result.get("group_satisfaction", {}) as Dictionary).duplicate(true)
-	_set_authoritative_metric_value("satisfaction", int(result.get("satisfaction", total_satisfaction)))
+	_set_city_metric_visible_target("satisfaction", int(result.get("satisfaction", total_satisfaction)))
 
 func _recalculate_score() -> void:
 	var result: Dictionary = CitySimulationServiceScript.score_result(
@@ -7666,7 +8375,7 @@ func _match_available_jobs() -> Array[Dictionary]:
 	if vertical_slice == null or vertical_slice.population == null:
 		return []
 	var open_jobs: Array[Dictionary] = MunicipalEconomyServiceScript.build_open_jobs(
-		city_grid,
+		_authoritative_building_records(),
 		buildings,
 		CELL_COUNT,
 		_active_law_value("job_attraction")
@@ -7678,10 +8387,10 @@ func _job_sector_for_building(building_name: String) -> String:
 	return MunicipalEconomyServiceScript.job_sector_for_building(building_name, buildings)
 
 func _commercial_base_income() -> int:
-	return CitySimulationServiceScript.base_income(city_grid, buildings, "commercial_income")
+	return CitySimulationServiceScript.base_income(_authoritative_building_records(), buildings, "commercial_income")
 
 func _industrial_base_income() -> int:
-	return CitySimulationServiceScript.base_income(city_grid, buildings, "industrial_income")
+	return CitySimulationServiceScript.base_income(_authoritative_building_records(), buildings, "industrial_income")
 
 func _business_income() -> int:
 	return _business_income_for(tax_rates)
@@ -7720,13 +8429,13 @@ func _utility_income() -> int:
 func _utility_income_for(projection_utility: Dictionary) -> int:
 	var raw_total := 0.0
 	for revenue: Variant in CitySimulationServiceScript.utility_revenues(
-		population, city_grid, buildings, projection_utility, UTILITY_DEFS
+		population, _authoritative_building_records(), buildings, projection_utility, UTILITY_DEFS
 	).values():
 		raw_total += float(revenue)
 	return int(round(raw_total))
 
 func _utility_base_units(fee_key: String) -> float:
-	return CitySimulationServiceScript.utility_base_units(fee_key, population, city_grid)
+	return CitySimulationServiceScript.utility_base_units(fee_key, population, _authoritative_building_records())
 
 func _service_income() -> int:
 	return _service_income_for(service_fees)
@@ -7740,7 +8449,7 @@ func _service_revenues() -> Dictionary:
 func _service_revenues_for(projection_service: Dictionary) -> Dictionary:
 	var revenues := CitySimulationServiceScript.service_revenues(
 		population,
-		city_grid,
+		_authoritative_building_records(),
 		projection_service,
 		SERVICE_DEFS
 	)
@@ -7775,17 +8484,17 @@ func _utility_fee_income(fee_key: String, base_units: float, projection_utility:
 	return CitySimulationServiceScript.utility_fee_income(
 		fee_key,
 		base_units,
-		city_grid,
+		_authoritative_building_records(),
 		buildings,
 		values,
 		UTILITY_DEFS
 	)
 
 func _utility_efficiency_bonus(fee_key: String) -> float:
-	return CitySimulationServiceScript.utility_efficiency_bonus(fee_key, city_grid, buildings)
+	return CitySimulationServiceScript.utility_efficiency_bonus(fee_key, _authoritative_building_records(), buildings)
 
 func _maintenance_cost() -> int:
-	var total := CitySimulationServiceScript.maintenance_cost(city_grid, buildings)
+	var total := CitySimulationServiceScript.maintenance_cost(_authoritative_building_records(), buildings)
 	if vertical_slice != null and vertical_slice.has_method("transport_incremental_monthly_maintenance"):
 		total += int(vertical_slice.call("transport_incremental_monthly_maintenance"))
 	elif vertical_slice != null and vertical_slice.has_method("transport_monthly_maintenance"):
@@ -7799,10 +8508,10 @@ func _active_law_expense() -> int:
 	return int(_active_law_value("monthly_expense"))
 
 func _building_count(building_name: String) -> int:
-	return CitySimulationServiceScript.building_count(city_grid, building_name)
+	return CitySimulationServiceScript.building_count(_authoritative_building_records(), building_name)
 
 func _building_score_bonus() -> int:
-	return CitySimulationServiceScript.building_score_bonus(city_grid, buildings)
+	return CitySimulationServiceScript.building_score_bonus(_authoritative_building_records(), buildings)
 
 
 
@@ -7831,7 +8540,7 @@ func _utility_satisfaction_penalty() -> int:
 	return CitySimulationServiceScript.utility_satisfaction_penalty(
 		utility_fees,
 		UTILITY_DEFS,
-		city_grid
+		_authoritative_building_records()
 	)
 
 func _service_satisfaction_penalty() -> int:
@@ -7847,7 +8556,7 @@ func _infrastructure_warnings() -> Array[String]:
 	return CitySimulationServiceScript.infrastructure_warnings(
 		utility_fees,
 		UTILITY_DEFS,
-		city_grid
+		_authoritative_building_records()
 	)
 
 func _active_law_value(effect_key: String) -> float:
@@ -7928,10 +8637,27 @@ func _update_ui() -> void:
 	if city_backdrop != null and terrain != null:
 		city_backdrop.call("set_terrain_snapshot", terrain.to_dict())
 	_refresh_time_hud()
-	labels["funds"].text = _format_currency(funds)
-	labels["funds"].tooltip_text = L10n.text("城市公庫：$%d") % funds
+	if status_brand != null:
+		status_brand.text = L10n.text("城諾之音")
+		status_brand.tooltip_text = "療癒城市治理模擬"
+	labels["funds"].text = _funds_hud_currency(funds)
+	labels["funds"].tooltip_text = L10n.text("城市公庫：%s") % _funds_full_currency(funds)
 	labels["population"].text = "%s %d" % [L10n.text("人口"), population]
-	labels["population"].tooltip_text = L10n.text("城市人口：%d 人") % population
+	var capacity := _building_capacity_snapshot()
+	var housing_capacity := int(capacity.get("housing_capacity", 0))
+	var housing_available := int(capacity.get("housing_available", 0))
+	var housing_over_capacity := int(capacity.get("housing_over_capacity", 0))
+	var job_capacity := int(capacity.get("job_capacity", 0))
+	var employed := int(capacity.get("employed", 0))
+	labels["population"].tooltip_text = L10n.text("城市實際人口：%d 人；住房容量：%d 人。") % [population, housing_capacity]
+	labels["capacity"].text = L10n.text("住房 %d\n就業 %d・職缺 %d") % [
+		housing_capacity, employed, job_capacity,
+	]
+	labels["capacity"].tooltip_text = (
+		L10n.text("尚有 %d 人住房空間；現有建築提供 %d 個職缺。") % [housing_available, job_capacity]
+		if housing_over_capacity <= 0
+		else L10n.text("現有居民比住房容量多 %d 人；不會驅逐居民，但新遷入會暫停。") % housing_over_capacity
+	)
 	labels["satisfaction"].text = "%s %d" % [L10n.text("滿意"), total_satisfaction]
 	labels["satisfaction"].tooltip_text = L10n.text("整體居民滿意度：%d") % total_satisfaction
 	var grievance := int(vertical_slice.governance.grievance) if vertical_slice != null else 0
@@ -7955,6 +8681,8 @@ func _update_ui() -> void:
 	labels["rating"].tooltip_text = L10n.text("目前城市評級：%s") % L10n.text(city_rating)
 	_set_bar_visual(header_bars["funds"], minf(100.0, maxf(0.0, float(funds) / 500000.0 * 100.0)), COLOR_SUCCESS if funds >= 0 else COLOR_WARNING)
 	_set_bar_visual(header_bars["population"], minf(100.0, float(population) / 1000.0 * 100.0), COLOR_INFO)
+	var housing_use := 100.0 if housing_capacity <= 0 and population > 0 else float(population) / maxf(1.0, float(housing_capacity)) * 100.0
+	_set_bar_visual(header_bars["capacity"], minf(100.0, housing_use), COLOR_WARNING if housing_over_capacity > 0 else COLOR_SUCCESS)
 	_set_bar_visual(header_bars["satisfaction"], float(total_satisfaction), _score_color(total_satisfaction))
 	# The bar and number now encode the same raw grievance direction. Color still
 	# communicates that a short/low bar is healthy, and the down-arrow plus
@@ -7995,11 +8723,7 @@ func _update_ui() -> void:
 				_apply_fee_slider_visual(service_slider, str(service_forecast["state"]))
 				service_slider.tooltip_text = str(service_forecast["summary"])
 	if selected_label != null:
-		selected_label.text = L10n.text("%s　基礎造價 $%d\n%s") % [
-			L10n.text(selected_building),
-			buildings[selected_building]["cost"],
-			_visual_effects(buildings[selected_building], 3)
-		]
+		selected_label.text = _building_visual_text(selected_building, buildings[selected_building])
 	if report_label != null:
 		report_label.text = _current_month_major_event_summary()
 	if report_details_label != null:
@@ -8089,7 +8813,7 @@ func _update_ui() -> void:
 		var button: Button = building_buttons[building_name]
 		var data: Dictionary = buildings[building_name]
 		button.text = _building_visual_text(building_name, data)
-		button.tooltip_text = "%s\n%s\n%s" % [L10n.text(building_name), L10n.text(str(data.get("description", ""))), _visual_effects(data, 8)]
+		button.tooltip_text = "%s\n%s\n%s" % [L10n.text(building_name), L10n.text(str(data.get("description", ""))), _visual_effects(data)]
 		button.disabled = false
 		_apply_building_button_style(button, building_name, building_name == selected_building)
 
@@ -8220,6 +8944,22 @@ func _on_tutorial_audio_cue(cue: String) -> void:
 		audio_director.play_cue(cue)
 
 
+func _on_tutorial_playback_started() -> void:
+	if audio_director != null:
+		audio_director.begin_cinematic_music()
+
+
+func _on_tutorial_playback_stopped(_reason: String) -> void:
+	if audio_director != null:
+		audio_director.end_cinematic_music()
+
+
+func _on_tutorial_load_failed(message: String) -> void:
+	_set_hint(message, true)
+	_sync_time_pause_for_ui()
+	_sync_map_interaction_for_ui()
+
+
 func _on_tutorial_completed(skipped: bool) -> void:
 	var replay_only := _tutorial_replay_active
 	_tutorial_replay_active = false
@@ -8240,6 +8980,47 @@ func _on_onboarding_advanced(_target_id: String, _receipt: Dictionary) -> void:
 	_autosave("onboarding:step_completed")
 
 
+func _on_onboarding_defer_requested() -> void:
+	if vertical_slice == null:
+		return
+	if onboarding_progress.is_waiting(vertical_slice.game_day()):
+		return
+	if not onboarding_progress.defer_current_target(vertical_slice.game_day()):
+		return
+	_refresh_onboarding_guide()
+	_autosave("onboarding:deferred")
+
+
+func _on_onboarding_result_review_confirmed() -> void:
+	if vertical_slice == null or not onboarding_progress.is_active():
+		return
+	var mode := onboarding_progress.current_target()
+	if mode not in ["judicial", "oversight"] or onboarding_progress.is_waiting(vertical_slice.game_day()):
+		return
+	var event_book: Array = vertical_slice.session.state.event_book
+	var case_id := onboarding_action_router.linked_case_id(mode, event_book)
+	var cases: Dictionary = (
+		vertical_slice.governance.judiciary_cases
+		if mode == "judicial"
+		else vertical_slice.governance.oversight_cases
+	)
+	if case_id.is_empty() or not cases.has(case_id) or not (cases[case_id] is Dictionary):
+		return
+	if not onboarding_action_router.record_case_result_review_success(
+		mode,
+		Dictionary(cases[case_id]).duplicate(true),
+		vertical_slice.governance,
+		event_book,
+		vertical_slice.game_day()
+	):
+		return
+	if onboarding_progress.is_completed():
+		tutorial_completed = true
+	_set_hint("已閱讀%s結案結果。" % ("司法案件" if mode == "judicial" else "監察案件"), false)
+	_autosave("onboarding:%s_result_reviewed" % mode)
+	_refresh_onboarding_guide()
+
+
 func _wire_ui_sounds() -> void:
 	if audio_director == null:
 		return
@@ -8254,6 +9035,7 @@ func _wire_ui_sounds() -> void:
 			button.pressed.connect(click_callable)
 
 func _rebuild_ui() -> void:
+	_set_onboarding_npc_reservation([])
 	if npc_map_controller != null:
 		npc_map_controller.unmount()
 	onboarding_action_router.reset_transient_evidence()
@@ -8328,6 +9110,7 @@ func _rebuild_ui() -> void:
 	tile_layer = null
 	npc_layer = null
 	npc_map_controller = null
+	_onboarding_reserved_tile_ids.clear()
 	weather_visual_layer = null
 	npc_dialogue_card = null
 	npc_dialogue_label = null
@@ -8347,6 +9130,7 @@ func _rebuild_ui() -> void:
 	start_screen = null
 	action_dock = null
 	status_hud = null
+	status_brand = null
 	feedback_toast = null
 	placement_banner = null
 	placement_label = null
@@ -8461,6 +9245,47 @@ func _format_currency(value: int) -> String:
 	return "$%s" % _format_grouped_int(value)
 
 
+func _funds_full_currency(value: int) -> String:
+	var formatted := _format_currency(value)
+	return formatted.replace("$-", "-$") if value < 0 else formatted
+
+
+func _funds_hud_currency(value: int) -> String:
+	var full := _funds_full_currency(value)
+	var label := labels.get("funds") as Label
+	if label == null:
+		return full
+	var font := label.get_theme_font("font")
+	var font_size := label.get_theme_font_size("font_size")
+	var available_width := label.size.x if label.size.x > 0.0 else 109.0
+	if font.get_string_size(full, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x <= available_width - 2.0:
+		return full
+	var magnitude := absf(float(value))
+	if magnitude < 1000.0:
+		return full
+	var suffixes: Array[String] = ["K", "M", "B", "T", "P", "E"]
+	var unit_index := 0
+	var divisor := 1000.0
+	while unit_index + 1 < suffixes.size() and magnitude >= divisor * 1000.0:
+		unit_index += 1
+		divisor *= 1000.0
+	var prefix := "≈-$" if value < 0 else "≈$"
+	var fallback := full
+	for precision in [2, 1, 0]:
+		var factor := pow(10.0, float(precision))
+		var rounded := roundf(magnitude / divisor * factor) / factor
+		if rounded >= 1000.0 and unit_index + 1 < suffixes.size():
+			unit_index += 1
+			divisor *= 1000.0
+			rounded = roundf(magnitude / divisor * factor) / factor
+		var number := "%.2f" % rounded if precision == 2 else ("%.1f" % rounded if precision == 1 else "%.0f" % rounded)
+		var compact := "%s%s%s" % [prefix, number, suffixes[unit_index]]
+		fallback = compact
+		if font.get_string_size(compact, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x <= available_width - 2.0:
+			return compact
+	return fallback
+
+
 func _format_signed_currency(value: int) -> String:
 	return "%s$%s" % ["+" if value >= 0 else "-", _format_grouped_int(absi(value))]
 
@@ -8469,13 +9294,11 @@ func _refresh_time_hud() -> void:
 	if vertical_slice == null or not labels.has("month"):
 		return
 	var paused: bool = bool(vertical_slice.is_time_paused())
-	var status_text := L10n.text("暫停") if paused else L10n.text("自動")
-	labels["month"].text = "%d/%d · %s" % [month, day, status_text]
-	labels["month"].tooltip_text = L10n.text(
-		"管理或教學畫面開啟時會自動暫停，日期區不需點擊。"
-		if paused
-		else "遊戲時間每 120 秒自動推進一天，日期區不需點擊。"
-	)
+	var game_minutes := int(vertical_slice.game_minutes_into_day())
+	var game_hour := game_minutes / 60
+	var game_minute := game_minutes % 60
+	labels["month"].text = "%d/%d．%02d:%02d" % [month, day, game_hour, game_minute]
+	labels["month"].tooltip_text = L10n.text("遊戲時間每 120 秒自動推進一天，日期區不需點擊。")
 	if header_bars.has("month"):
 		_set_bar_visual(header_bars["month"], (float((month - 1) * 30 + day) / 360.0) * 100.0, COLOR_CAUTION if paused else COLOR_INFO)
 
@@ -8680,6 +9503,9 @@ func _update_tile_visual(index: int, building_name: String) -> void:
 			footprint_role = "anchor"
 		var terrain_state: Dictionary = vertical_slice.terrain_state_for_tile(index) if vertical_slice != null else {}
 		var terrain_buildable := bool(terrain_state.get("buildable", true))
+		var building_placement_buildable := terrain_buildable
+		if placement_mode_active and vertical_slice != null:
+			building_placement_buildable = vertical_slice.is_building_tile_buildable(index)
 		var preview := {}
 		if placement_mode_active and index == _placement_preview_anchor:
 			preview = _placement_preview.duplicate(true)
@@ -8689,7 +9515,7 @@ func _update_tile_visual(index: int, building_name: String) -> void:
 			"building_color": _building_color(visual_building_name),
 			"terrain_kind": _terrain_kind_for_cell(index, visual_building_name),
 			"terrain_type": str(terrain_state.get("effective_kind", "flat_grass")),
-			"terrain_buildable": terrain_buildable,
+			"terrain_buildable": building_placement_buildable if placement_mode_active else terrain_buildable,
 			"terrain_flattenable": bool(terrain_state.get("flattenable", false)),
 			"terrain_flattened": bool(terrain_state.get("flattened", false)),
 			"visual": BUILDING_VISUALS.get(visual_building_name, {}),
@@ -8697,7 +9523,7 @@ func _update_tile_visual(index: int, building_name: String) -> void:
 			"dark_mode": is_dark_mode,
 			"selected": selected_cell_index == owner_anchor_tile_id,
 			"is_building_mode": placement_mode_active,
-			"placement_allowed": _is_tile_inside_hud_safe_area(index) and terrain_buildable,
+			"placement_allowed": _is_tile_inside_hud_safe_area(index) and building_placement_buildable,
 			"construction": active_construction,
 			"footprint_role": footprint_role,
 			"footprint_index": footprint_index,
@@ -8707,6 +9533,8 @@ func _update_tile_visual(index: int, building_name: String) -> void:
 			"placement_preview": preview,
 			"transport_planning_overlay": _transport_planning_overlay_for_tile(index),
 		})
+		if placement_mode_active and visual_building_name.is_empty() and active_construction.is_empty() and not building_placement_buildable:
+			cell.tooltip_text = L10n.text("此地格經人審禁建；整地不能解除限制。")
 		if not active_construction.is_empty():
 			cell.tooltip_text = _construction_job_player_text(active_construction)
 		elif visual_building_name.is_empty():

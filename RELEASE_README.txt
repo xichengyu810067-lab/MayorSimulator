@@ -1,37 +1,37 @@
-《城諾之音》 / CivicTale: Voice of Promise Alpha 0.1.0-alpha.2 - INTERNAL-ONLY 測試包說明
+《城諾之音》 / CivicTale: Voice of Promise 0.1.0-alpha.3
 
-此 Windows x64 包僅限經授權的內部測試；不得轉傳、公開上傳、販售或宣稱為公開版本。
-公開散布為 NO-GO：專案權利授權、city-map background 的散布權利、train-station 的來源與散布權利均未閉環。
-使用前請閱讀同包的 RELEASE_NOTES、KNOWN_ISSUES、TESTER_README 與 THIRD_PARTY_NOTICES。
-====================================
+內部 Alpha 測試包說明
+====================
 
-版本定位
---------
-本包是 Internal Alpha（內部測試版），不是已完成公開發行驗收的正式版。
-目前 Windows 執行檔與封裝檔均未簽章。
+本包僅限專案擁有者授權的內部測試，不得轉傳、公開上傳、販售或宣稱為正式發布。
+它不是公開版本，也尚未完成公開散布所需的權利與驗收。
 
 啟動方式
 --------
-Windows：解壓縮完整 ZIP 後，執行 MayorSimulator.exe。請勿只複製 EXE；
-MayorSimulator.pck 與本文件、第三方聲明必須保留在同一資料夾。
+完整解壓縮對應平台封裝，保留執行檔、`MayorSimulator.pck` 與所有隨附文件；不要只複製執行檔。
 
-Linux：解壓縮完整 tar.gz 後，在終端機進入該資料夾並執行：
+Windows：執行 `MayorSimulator.exe`。
+
+Linux：在解壓目錄執行：
+
   chmod +x MayorSimulator.x86_64
   ./MayorSimulator.x86_64
 
 存檔與備份
 ----------
-遊戲資料位於 Godot 的 user data 目錄下，專案資料夾名稱為「Mayor Simulator MVP」，
-主要存檔位於其 mayor_simulator 子目錄。Windows 通常位於：
-  %APPDATA%\Godot\app_userdata\Mayor Simulator MVP\mayor_simulator\
-Linux 通常位於：
-  ~/.local/share/godot/app_userdata/Mayor Simulator MVP/mayor_simulator/
+遊戲在 Godot 使用者資料根的 `user://mayor_simulator/` 保存本機進度、設定與備份／暫存檔；
+實際作業系統路徑依應用程式名稱與平台而異。請先完全結束遊戲，再複製整個
+`mayor_simulator` 資料夾作備份。遊戲執行時請勿手動替換、同步或刪除存檔、`.bak`、`.tmp`
+或復原暫存檔。
 
-原子存檔流程會保留 .bak 備份。遊戲執行時請勿手動修改、取代或同步存檔、.bak、
-.tmp 或 .recovery.tmp；需要備份時，請先完全結束遊戲，再複製整個 mayor_simulator 資料夾。
+較舊且受支援的存檔可能在較新版本中遷移；未知或較新的資料會被拒絕。更新前仍應備份，
+且新版本寫出的存檔不保證能由較舊版本讀取。
 
-授權與散布限制
+限制與隨附文件
 --------------
-Godot 與第三方元件聲明位於 THIRD_PARTY_NOTICES.md 與 GODOT_COPYRIGHT.txt。
-目前背景素材的公開散布權利證明，以及專案自身 LICENSE，均尚未閉環。
-因此本包目前不得公開散布、販售或宣稱為正式發行版；僅限授權的內部驗收使用。
+目前執行檔與封裝未簽章。自動化檢查不能取代新局、繼續遊戲、NPC、片頭、多尺寸、
+滑鼠操作與實際裝置的人工驗收。
+
+請一併閱讀 `LICENSE.txt`、`TERMS_OF_USE.md`、`PRIVACY_NOTICE.md`、
+`THIRD_PARTY_NOTICES.md` 與 `GODOT_COPYRIGHT.txt`。這些文件與執行檔、PCK 必須保留在
+同一封裝目錄。遊戲內容與結果是模擬，不是現實政策、財務、法律或其他專業建議。

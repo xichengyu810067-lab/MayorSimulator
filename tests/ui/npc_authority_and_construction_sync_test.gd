@@ -20,12 +20,54 @@ func _run() -> void:
 	_check(main.vertical_slice.population.population_count() == 300, "authoritative population did not start at 300")
 	_check(main.get_visible_npc_count() == 24 and main.get_visible_npc_actors().size() == 24, "initial visible proxy architecture is not 24 actors")
 	await _test_authoritative_proxy_refresh(main)
+	_test_flattened_aperture_geometry_repair(main)
 	_test_immediate_construction_obstacle(main)
 
 	var exit_code := 1 if _failed else 0
 	if not _failed:
 		print("NPC authority/construction sync passed. Population=300 Visible=24 ImmediateObstacle=true CollisionLifecycle=true")
 	await TestCleanup.finish(self, [main], exit_code)
+
+
+func _test_flattened_aperture_geometry_repair(main) -> void:
+	var controller = main.npc_map_controller
+	var navigation = main.get_npc_navigation_grid()
+	var source_snapshot := Dictionary(controller.get("_source_map_snapshot")).duplicate(true)
+	var aperture_snapshot := source_snapshot.duplicate(true)
+	var flattened_centers := Dictionary(
+		aperture_snapshot.get("flattened_terrain_centers", {})
+	).duplicate(true)
+	var aperture_tile_id := 991
+	var authoritative_center := Vector2(640.0, 430.0)
+	flattened_centers[aperture_tile_id] = authoritative_center
+	aperture_snapshot["flattened_terrain_centers"] = flattened_centers
+	controller.sync_map_snapshot(aperture_snapshot)
+	var authority_revision := int(controller.navigation_revision())
+	var authoritative_record := _flattened_aperture_by_tile(
+		navigation, aperture_tile_id
+	)
+	_check(not authoritative_record.is_empty(), "flattened aperture authority fixture was not installed")
+
+	var drifted_centers := flattened_centers.duplicate(true)
+	var drifted_center := authoritative_center + Vector2(81.0, -39.0)
+	drifted_centers[aperture_tile_id] = drifted_center
+	navigation.set_flattened_terrain_apertures(drifted_centers, Vector2(7.0, 9.0))
+	var drifted_record := _flattened_aperture_by_tile(navigation, aperture_tile_id)
+	_check(
+		Vector2(drifted_record.get("center", Vector2.ZERO)).is_equal_approx(drifted_center),
+		"same-id flattened aperture drift fixture did not move its geometry"
+	)
+	controller.sync_map_snapshot(aperture_snapshot)
+	_check(
+		int(controller.navigation_revision()) > authority_revision,
+		"same-id flattened aperture geometry drift did not advance navigation revision"
+	)
+	var repaired_record := _flattened_aperture_by_tile(navigation, aperture_tile_id)
+	_check(
+		_flattened_aperture_geometry_matches(authoritative_record, repaired_record),
+		"same-id flattened aperture did not restore center/extents/points from authority"
+	)
+	controller.sync_map_snapshot(source_snapshot)
 
 
 func _test_immediate_construction_obstacle(main) -> void:
@@ -160,13 +202,18 @@ func _test_authoritative_proxy_refresh(main) -> void:
 		_check(str(main.vertical_slice.selected_npc_id) == expected_id, "refreshed actor selected a stale resident id")
 		main.dismiss_npc_dialogue()
 
+	var population_snapshot: Dictionary = main.vertical_slice.population.to_dict()
 	var population_before_zero: int = int(main.vertical_slice.population.population_count())
 	main.vertical_slice.adjust_population(-population_before_zero, "test.zero_population")
 	main.refresh_visible_npc_proxies()
 	_check(main.vertical_slice.population.population_count() == 0, "test could not reach zero population")
 	_check(main.get_visible_npc_count() == 0 and main.get_visible_npc_actors().is_empty(), "zero population still rendered legacy/fake residents")
 
-	main.vertical_slice.adjust_population(300, "test.restore_population")
+	var restored_population = main.vertical_slice.population.from_dict(population_snapshot)
+	_check(restored_population != null, "authoritative population snapshot could not be restored")
+	if restored_population != null:
+		main.vertical_slice.population = restored_population
+		main.vertical_slice.call("_sync_population_to_core", "test.restore_population_snapshot")
 	main.refresh_visible_npc_proxies()
 	_check(main.vertical_slice.population.population_count() == 300, "authoritative population was not restored to 300")
 	_check(main.get_visible_npc_count() == 24 and main.get_visible_npc_actors().size() == 24, "24 visible proxies were not restored")
@@ -201,6 +248,39 @@ func _blocker_by_id(navigation, blocker_id: String) -> Dictionary:
 	return {}
 
 
+func _flattened_aperture_by_tile(navigation, tile_id: int) -> Dictionary:
+	for aperture_variant: Variant in navigation.get_debug_flattened_terrain_apertures():
+		var aperture: Dictionary = aperture_variant
+		if int(aperture.get("tile_index", -1)) == tile_id:
+			return aperture
+	return {}
+
+
+func _flattened_aperture_geometry_matches(expected: Dictionary, actual: Dictionary) -> bool:
+	if (
+		str(actual.get("id", "")) != str(expected.get("id", ""))
+		or int(actual.get("tile_index", -1)) != int(expected.get("tile_index", -1))
+		or not Vector2(actual.get("center", Vector2.ZERO)).is_equal_approx(
+			Vector2(expected.get("center", Vector2.ZERO))
+		)
+		or not Vector2(actual.get("half_extents", Vector2.ZERO)).is_equal_approx(
+			Vector2(expected.get("half_extents", Vector2.ZERO))
+		)
+		or not Vector2(actual.get("walkable_half_extents", Vector2.ZERO)).is_equal_approx(
+			Vector2(expected.get("walkable_half_extents", Vector2.ZERO))
+		)
+	):
+		return false
+	var expected_points := PackedVector2Array(expected.get("points", PackedVector2Array()))
+	var actual_points := PackedVector2Array(actual.get("points", PackedVector2Array()))
+	if expected_points.size() != actual_points.size():
+		return false
+	for point_index in expected_points.size():
+		if not expected_points[point_index].is_equal_approx(actual_points[point_index]):
+			return false
+	return true
+
+
 func _find_legal_park_tile(main, workers: int) -> int:
 	for candidate_tile: int in range(main.city_grid.size()):
 		var quote: Dictionary = main.vertical_slice.placement_footprint_quote("公園", candidate_tile, workers)
@@ -209,6 +289,9 @@ func _find_legal_park_tile(main, workers: int) -> int:
 			bool(quote.get("ok", false))
 			and str(quote.get("status", "")) == "approved"
 			and occupied_tiles.size() == 1
+			and main.get_npc_navigation_grid().is_position_walkable(
+				main.call("_iso_tile_center", candidate_tile)
+			)
 		):
 			return candidate_tile
 	return -1

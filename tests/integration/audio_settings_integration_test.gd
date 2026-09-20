@@ -55,6 +55,20 @@ func _run() -> void:
 	var sfx_bus := AudioServer.get_bus_index(&"SFX")
 	_check(music_bus >= 0 and is_equal_approx(AudioServer.get_bus_volume_db(music_bus), linear_to_db(0.37)), "restored Music bus gain is incorrect")
 	_check(sfx_bus >= 0 and is_equal_approx(AudioServer.get_bus_volume_db(sfx_bus), linear_to_db(0.62)), "restored SFX bus gain is incorrect")
+	second.audio_director.begin_cinematic_music()
+	second.call("_on_music_selected", true)
+	second.call("_on_music_volume_selected", 0.41)
+	_check(not AudioServer.is_bus_mute(music_bus) and is_equal_approx(AudioServer.get_bus_volume_db(music_bus), linear_to_db(0.41)), "film audio follows the enabled Music bus and current user gain")
+	_check(not second.audio_director.music_player.playing, "enabling music during the film does not overlap city BGM")
+	second.audio_director.end_cinematic_music()
+	await process_frame
+	_check(second.audio_director.music_player.playing, "ending the film resumes enabled city BGM")
+	second.audio_director.begin_cinematic_music()
+	second.call("_on_music_selected", false)
+	second.audio_director.end_cinematic_music()
+	_check(not second.audio_director.music_player.playing and AudioServer.is_bus_mute(music_bus), "ending the film keeps city BGM stopped when the current preference is off")
+	var final_stored := UserSettingsService.load_audio_preferences()
+	_check(not bool(final_stored.get("music_enabled", true)) and is_equal_approx(float(final_stored.get("music_volume", -1.0)), 0.41), "cinematic suppression never rewrites the user's explicit music preference")
 
 	if _failed:
 		await TestCleanup.finish(self, [second], 1)

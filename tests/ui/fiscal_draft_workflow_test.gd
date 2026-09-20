@@ -145,7 +145,11 @@ func _run() -> void:
 	municipal_overlay.open_hub()
 	await process_frame
 	var left_page: Dictionary = main.call("debug_fiscal_draft_state")
-	_check(int(left_page.get("dirty_count", -1)) == 0, "leaving finance discards an unapplied draft")
+	_check(int(left_page.get("dirty_count", -1)) == 1, "leaving finance preserves an unapplied draft")
+	municipal_overlay.open_page("finance")
+	await process_frame
+	var reopened_page: Dictionary = main.call("debug_fiscal_draft_state")
+	_check(int(reopened_page.get("dirty_count", -1)) == 1, "reopening finance restores the same unapplied draft")
 	_check(not main.call("_capture_player_shell_state").has("fiscal_draft"), "fiscal transient state is excluded from saves")
 
 	if failures.is_empty():
