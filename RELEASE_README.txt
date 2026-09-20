@@ -1,4 +1,4 @@
-《城諾之音》 / CivicTale: Voice of Promise 0.1.0-alpha.2
+《城諾之音》 / CivicTale: Voice of Promise 0.1.0-alpha.3
 
 內部 Alpha 測試包說明
 ====================

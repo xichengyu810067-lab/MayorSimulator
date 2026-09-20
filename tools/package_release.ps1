@@ -185,6 +185,23 @@ function Assert-CanonicalReleaseFiles {
     }
 }
 
+function Assert-ReleaseReadmeVersion {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$ExpectedVersion,
+        [Parameter(Mandatory)][string]$Label
+    )
+
+    $lines = [IO.File]::ReadAllLines($Path, [Text.UTF8Encoding]::new($false))
+    if ($lines.Count -lt 1) {
+        throw "$Label RELEASE_README.txt has no heading."
+    }
+    $match = [regex]::Match($lines[0], '(?:^|\s)(?<version>[^\s]+)\s*$')
+    if (-not $match.Success -or $match.Groups['version'].Value -cne $ExpectedVersion) {
+        throw "$Label RELEASE_README.txt heading version does not match package version $ExpectedVersion."
+    }
+}
+
 function Assert-SnapshotUnchanged {
     param(
         [Parameter(Mandatory)][System.Collections.IDictionary]$Before,
@@ -342,6 +359,8 @@ function Get-LinuxTarEntries {
 $windowsSnapshotBefore = Get-StagingSnapshot -StagingPath $windowsStaging -Specs $windowsSpecs
 $linuxSnapshotBefore = Get-StagingSnapshot -StagingPath $linuxStaging -Specs $linuxSpecs
 Assert-CanonicalReleaseFiles -WindowsSnapshot $windowsSnapshotBefore -LinuxSnapshot $linuxSnapshotBefore
+Assert-ReleaseReadmeVersion -Path (Join-Path $windowsStaging 'RELEASE_README.txt') -ExpectedVersion $Version -Label 'Windows staging'
+Assert-ReleaseReadmeVersion -Path (Join-Path $linuxStaging 'RELEASE_README.txt') -ExpectedVersion $Version -Label 'Linux staging'
 
 $windowsArchiveName = "MayorSimulator-Windows-x86_64-$Version.zip"
 $linuxArchiveName = "MayorSimulator-Linux-x86_64-$Version.tar.gz"

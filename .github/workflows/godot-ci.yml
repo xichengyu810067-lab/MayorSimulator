@@ -557,6 +557,29 @@ jobs:
           cp PRIVACY_NOTICE.md builds/windows/
           cp PRIVACY_NOTICE.md builds/linux/
 
+      - name: Verify packed resource inventory
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $godot = Join-Path $PWD '.ci/editor/Godot_v4.7-stable_linux.x86_64'
+          $inventoryRoot = Join-Path $env:RUNNER_TEMP 'pck-inventory'
+          New-Item -ItemType Directory -Path $inventoryRoot -ErrorAction Stop | Out-Null
+          foreach ($item in @(
+              [pscustomobject]@{ Pack = 'builds/windows/MayorSimulator.pck'; Inventory = 'windows.txt' },
+              [pscustomobject]@{ Pack = 'builds/linux/MayorSimulator.pck'; Inventory = 'linux.txt' }
+          )) {
+            $scannerOutput = @(& pwsh -NoProfile -File ./tools/inspect_pck_inventory.ps1 `
+              -GodotExe $godot `
+              -PackPath $item.Pack `
+              -OutputPath (Join-Path $inventoryRoot $item.Inventory) 2>&1)
+            if ($LASTEXITCODE -ne 0) {
+              throw "PCK inventory failed: $($item.Pack)"
+            }
+            if (@($scannerOutput | Where-Object { $_ -match '^PCK_INVENTORY_OK entries=[1-9][0-9]* sha256=[0-9a-f]{64}$' }).Count -ne 1) {
+              throw "PCK inventory success marker is missing or ambiguous: $($item.Pack)"
+            }
+          }
+
       - name: Smoke-test Linux export
         shell: bash
         run: |
