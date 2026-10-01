@@ -84,9 +84,7 @@ function Get-MayorSourceFingerprint {
         'LICENSE.txt',
         'TERMS_OF_USE.md',
         'PRIVACY_NOTICE.md',
-        '.gitignore',
-        '莉拉，柳樹村的花店員.png',
-        '莉拉，柳樹村的花店員.png.import'
+        '.gitignore'
     )
 
     $paths = [System.Collections.Generic.List[string]]::new()
