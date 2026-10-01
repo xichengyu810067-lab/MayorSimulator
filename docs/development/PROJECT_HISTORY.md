@@ -8,7 +8,7 @@
 | 2026-08-01 | 建立 Git 版控：一次匯入既有專案（1,264 個檔案）作為基線 | tag `baseline-2026-08-01` |
 | 2026-08-02 | MVP Alpha `0.1.0-alpha.1`：66 項自動化測試、強制終止存檔測試、Windows／Linux 封裝 | [PR #1](https://github.com/xichengyu810067-lab/MayorSimulator/pull/1)、[Release](https://github.com/xichengyu810067-lab/MayorSimulator/releases/tag/v0.1.0-alpha.1) |
 | 2026-08-03 | 版本號改採 SemVer | [PR #2](https://github.com/xichengyu810067-lab/MayorSimulator/pull/2) |
-| 2026-08-10 | `alpha.2`、`alpha.3` 候選版：存檔單一來源、人口容量量測、Linux CI | tag `archive/linux-ci-alpha3-20260811` |
+| 2026-08-10 | `alpha.2`、`alpha.3` 候選版：存檔單一來源、人口容量量測、Linux CI（未合併；commit 保存在 [PR #6](https://github.com/xichengyu810067-lab/MayorSimulator/pull/6) 的歷史中） | 分支 `codex/linux-ci-alpha3-20260811` |
 | 2026-08-05 ～ 09-10 | 主要在另一個重建工作區開發（原工作區的 Git 損壞），只有部分分支推回本儲存庫 | 見下一節 |
 | 2026-09-12 | 把重建成果整合回本儲存庫：建築占地、交通工程、存檔保護、延後載入的市政介面 | [PR #7](https://github.com/xichengyu810067-lab/MayorSimulator/pull/7) |
 | 2026-09-20 | 開場動畫、教學說明、封裝驗證；CI 全部通過 | [PR #9](https://github.com/xichengyu810067-lab/MayorSimulator/pull/9) |
