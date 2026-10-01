@@ -2,7 +2,7 @@
 
 [CmdletBinding()]
 param(
-    [string]$GodotExe = 'C:\Users\USER\Tools\Godot\Godot_v4.7-stable_win64_console.exe',
+    [string]$GodotExe = $(if ($env:GODOT_EXE) { $env:GODOT_EXE } else { 'Godot_v4.7-stable_win64_console.exe' }),
     [string]$OutputRoot = '',
     [int]$WatchdogSeconds = 600,
     [int]$SampleIntervalMilliseconds = 250,

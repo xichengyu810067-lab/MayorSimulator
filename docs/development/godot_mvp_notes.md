@@ -13,5 +13,5 @@ This Godot version keeps the first playable prototype small:
 Run with:
 
 ```powershell
-& "C:\Users\USER\Tools\Godot\Godot_v4.7-stable_win64_console.exe" --path "C:\Users\USER\遊戲"
+& "C:\path\to\Godot_v4.7-stable_win64_console.exe" --path "C:\path\to\MayorSimulator"
 ```

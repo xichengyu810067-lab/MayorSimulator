@@ -24,7 +24,7 @@ First review the recent root chats with Codex thread tools. Use the inventory to
 
 ```powershell
 & .\sdk\mayor-sdk.ps1 verify `
-  --godot 'C:\Users\USER\Tools\Godot\Godot_v4.7-stable_win64_console.exe'
+  --godot 'C:\path\to\Godot_v4.7-stable_win64_console.exe'
 ```
 
 Inspect the generated `summary.json` and per-case logs. Do not substitute `--check-only` for the assertion matrix.
@@ -98,7 +98,7 @@ Do not reuse either output root. Do not combine a previous matrix, old staging, 
 ```powershell
 python sdk/mayor_sdk.py self-test
 python -m unittest discover -s tests/sdk -p 'test_*.py'
-python C:\Users\USER\.codex\skills\.system\skill-creator\scripts\quick_validate.py skills\mayor-simulator-sdk
+python $env:CODEX_HOME\skills\.system\skill-creator\scripts\quick_validate.py skills\mayor-simulator-sdk
 & .\sdk\mayor-sdk.ps1 install-skill
 & .\sdk\mayor-sdk.ps1 doctor
 ```

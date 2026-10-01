@@ -1,8 +1,8 @@
 # Goal Visible QA T3 — freeze-final acceptance
 
 執行時間：2026-08-02 23:42 至 2026-08-03 00:17（Asia/Taipei）
-權威工作區：`C:\Users\XCJ\遊戲\MayorSimulator_Authoritative_2026-08-02`
-Godot：`C:\Users\XCJ\Desktop\godot\godot_4.7.1.exe`，`4.7.1.stable.official.a13da4feb`
+權威工作區：`<workspace>\MayorSimulator_Authoritative_2026-08-02`
+Godot：`<local Godot 4.7.1 executable>`，`4.7.1.stable.official.a13da4feb`
 最終結論：**PASS**
 
 ## Gate 結果

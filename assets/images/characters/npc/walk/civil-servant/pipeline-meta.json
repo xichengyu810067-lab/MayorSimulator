@@ -3,7 +3,7 @@
   "mode": "npc_walk",
   "prompt": "",
   "role": "civil-servant",
-  "input": "C:\\Users\\USER\\.codex\\generated_images\\019fae81-e793-7043-bbfb-46febdc5a7ef\\exec-81cb9ce3-8005-422b-a17d-3fbfa0790525.png",
+  "input": "<codex-generated-images>/019fae81-e793-7043-bbfb-46febdc5a7ef/exec-81cb9ce3-8005-422b-a17d-3fbfa0790525.png",
   "threshold": 100,
   "edge_threshold": 150,
   "duration": 120,

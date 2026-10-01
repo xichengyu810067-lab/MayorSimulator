@@ -3,7 +3,7 @@
   "mode": "single",
   "prompt": "",
   "role": "",
-  "input": "C:\\Users\\USER\\\u904a\u6232\\assets\\images\\world\\buildings\\storybook_v1\\hospital\\raw-sheet.png",
+  "input": "assets/images/world/buildings/storybook_v1/hospital/raw-sheet.png",
   "threshold": 100,
   "edge_threshold": 150,
   "duration": 200,

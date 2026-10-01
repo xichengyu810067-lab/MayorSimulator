@@ -3,7 +3,7 @@
   "mode": "npc_walk",
   "prompt": "",
   "role": "council-member",
-  "input": "C:\\Users\\USER\\.codex\\generated_images\\019fae81-e793-7043-bbfb-46febdc5a7ef\\exec-c2852070-8cac-458b-a050-d3e4ad28c59a.png",
+  "input": "<codex-generated-images>/019fae81-e793-7043-bbfb-46febdc5a7ef/exec-c2852070-8cac-458b-a050-d3e4ad28c59a.png",
   "threshold": 100,
   "edge_threshold": 150,
   "duration": 120,

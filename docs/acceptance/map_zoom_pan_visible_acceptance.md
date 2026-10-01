@@ -8,7 +8,7 @@ Run it with a fresh child directory of the project root:
 
 ```powershell
 & .\tools\run_map_zoom_pan_visible_acceptance.ps1 `
-  -GodotExe 'C:\Users\USER\Tools\Godot\Godot_v4.7-stable_win64_console.exe' `
+  -GodotExe 'C:\path\to\Godot_v4.7-stable_win64_console.exe' `
   -OutputRoot '.tmp\map-zoom-pan-visible-<timestamp>'
 ```
 

@@ -1,7 +1,7 @@
 #requires -Version 5.1
 [CmdletBinding()]
 param(
-    [ValidateNotNullOrEmpty()][string]$GodotExe = 'C:\Users\USER\Tools\Godot\Godot_v4.7-stable_win64.exe',
+    [ValidateNotNullOrEmpty()][string]$GodotExe = $(if ($env:GODOT_GUI_EXE) { $env:GODOT_GUI_EXE } else { 'Godot_v4.7-stable_win64.exe' }),
     [ValidatePattern('^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9_-])?$')][string]$ProfileName = 'manual-visible',
     [ValidateSet('Mobile', 'Compatibility')][string]$RendererMode = 'Mobile',
     [ValidateRange(0, 600)][int]$MinimumRuntimeSeconds = 3,

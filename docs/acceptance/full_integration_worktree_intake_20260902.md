@@ -113,10 +113,10 @@ antigravity-write-pilot-01
 uiux-release-gaps
 ?? 20 6783FE1948F7B5A7B76EDB83A79767A5EDF78B540918E3435DD7CEA655464044 tests/manual/map_zoom_pan_visible_acceptance.gd.uid
 
-C:\Users\USER\遊戲\sdk (main@619a50a6 / tree 2e19e3a7)
+<workspace>\sdk (main@619a50a6 / tree 2e19e3a7)
  M 27648 FFD03C1D3C70E98B5DCDD152D26E05CD445BB8773816901E24587F9831561722 mayor_sdk.py
 
-C:\Users\USER\遊戲\MayorSimulator_Authoritative_2026-08-02\sdk
+<workspace>\MayorSimulator_Authoritative_2026-08-02\sdk
 detached@956f0414 / tree 61ed3cf0 / clean
 ```
 

@@ -92,7 +92,7 @@ Use the bundled Python runtime with Pillow and the installed ImageGen chroma-rem
   --alpha-dir .tmp/icon-redesign-20260730/alpha `
   --output-dir assets/images/ui/icons/storybook_v2 `
   --evidence-dir artifacts/visual-qa/storybook-v2-icons `
-  --chroma-helper C:/Users/USER/.codex/skills/.system/imagegen/scripts/remove_chroma_key.py
+  --chroma-helper $env:CODEX_HOME/skills/.system/imagegen/scripts/remove_chroma_key.py
 ```
 
 The builder invokes the installed helper with a soft matte and despill for new or changed raw sources, crops by visible alpha, normalizes the maximum subject axis to 224 px, centers the result, verifies magenta removal and edge safety, and writes light/dark plus runtime-size contact sheets. Pass `--force-chroma` when every alpha intermediate must be rebuilt deliberately.
