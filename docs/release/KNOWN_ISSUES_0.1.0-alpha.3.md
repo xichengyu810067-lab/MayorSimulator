@@ -24,6 +24,20 @@ closure material is listed in `PUBLIC_RELEASE_BLOCKERS.md` and
 - **Closure:** Exact-RC native GUI click-through evidence for all five locales,
   with defects resolved or explicitly accepted.
 
+## P1-002 — English HUD labels break mid-word
+
+- **Phenomenon:** With the English locale at the 1280×800 logical layout, the
+  top HUD cards wrap labels in the middle of a word (for example
+  "popul / ation", "Satisfi / ed", "Grieva / nce").
+- **Reproduction:** Settings → interface language → English, then read the top
+  HUD. Observed in the `fullscreen-settings-dark-en.png` capture produced by
+  `tests/ui/capture_ui_readability.gd` on 2026-10-01 (Linux, OpenGL).
+- **Impact:** Readability only; the values stay correct.
+- **Save impact:** None.
+- **Workaround:** Use zh-TW.
+- **Closure:** Shorter English HUD labels or no mid-word wrapping, verified by a
+  native English capture.
+
 ## P2 / P3
 
 - **P2:** Windows executable/package is not code-signed.
