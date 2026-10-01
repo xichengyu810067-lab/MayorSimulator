@@ -30,7 +30,7 @@
 | 職能 | 在這個專案做了什麼 | 證據 |
 | --- | --- | --- |
 | **QA** | 風險導向的測試策略、97 項隔離執行的自動化測試、強制終止存檔測試、P0–P3 缺陷分級 | [測試策略](docs/qa/TEST_STRATEGY.md)・[已知問題](docs/release/KNOWN_ISSUES_0.1.0-alpha.3.md)・[CI 紀錄](https://github.com/xichengyu810067-lab/MayorSimulator/actions) |
-| **PM** | 一頁 PRD、MVP 範圍與刻意不做的事、SemVer 版本治理、發佈說明、品牌撞名稽核 | [PRD](docs/product/PRD.md)・[版本規則](VERSIONING.md)・[發佈說明](docs/release/RELEASE_NOTES_0.1.0-alpha.3.md)・[撞名稽核](docs/marketing/BRAND_NAME_AND_PROMOTION_COLLISION_AUDIT_2026-08-03.md) |
+| **PM** | 一頁 PRD、MVP 範圍與刻意不做的事、P0–P3 待辦清單、SemVer 版本治理、發佈說明、品牌撞名稽核 | [PRD](docs/product/PRD.md)・[待辦清單](https://github.com/xichengyu810067-lab/MayorSimulator/issues)・[版本規則](VERSIONING.md)・[發佈說明](docs/release/RELEASE_NOTES_0.1.0-alpha.3.md)・[撞名稽核](docs/marketing/BRAND_NAME_AND_PROMOTION_COLLISION_AUDIT_2026-08-03.md) |
 | **SA** | 系統脈絡、模組關係、指令與事件流、存檔資料模型與版本遷移 | [系統架構](docs/architecture.md)・[存檔版本表](data/save_schema_authority_registry.json) |
 | **SW** | GDScript 遊戲開發、原子存檔、Windows／Linux CI/CD、重構與技術債管理 | [存檔實作](scripts/core/save_service.gd)・[CI 設定](.github/workflows/godot-ci.yml)・[技術債清單](docs/development/TECH_DEBT.md) |
 
@@ -124,7 +124,7 @@ MayorSimulator/
 
 - 這是**內部 Alpha**，不是公開發行版；部分美術素材的散布權利尚未確認（[公開發佈阻塞](docs/release/PUBLIC_RELEASE_BLOCKERS.md)）。
 - 五種語言尚未完成人工驗收，英文介面在部分欄位會斷字（[已知問題](docs/release/KNOWN_ISSUES_0.1.0-alpha.3.md)）。
-- 執行檔未簽章；程式碼的結構問題與改善計畫列在[技術債清單](docs/development/TECH_DEBT.md)。
+- 執行檔未簽章；程式碼的結構問題與改善計畫列在[技術債清單](docs/development/TECH_DEBT.md)。所有待辦都在 [GitHub Issues](https://github.com/xichengyu810067-lab/MayorSimulator/issues)，以 P0–P3 標籤分級。
 
 ## 授權
 
