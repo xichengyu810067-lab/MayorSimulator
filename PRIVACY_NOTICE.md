@@ -1,4 +1,4 @@
-# 《城諾之音：Civil Tale》內部 Alpha 隱私說明
+# 《城諾之音》CivicTale: Voice of Promise 內部 Alpha 隱私說明
 
 本文件僅說明目前遊戲本身的資料流程，不涵蓋其他服務或使用者自行採用的
 備份、同步與聯絡方式。
