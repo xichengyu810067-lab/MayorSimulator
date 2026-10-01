@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$GodotExe = 'C:\Users\USER\Tools\Godot\Godot_v4.7-stable_win64_console.exe',
+    [string]$GodotExe = $(if ($env:GODOT_EXE) { $env:GODOT_EXE } else { 'Godot_v4.7-stable_win64_console.exe' }),
     [string]$ManifestPath = '',
     [string]$OutputRoot = '',
     [string[]]$TestId = @(),
@@ -211,6 +211,12 @@ $hadAppData = Test-Path Env:APPDATA
 $hadLocalAppData = Test-Path Env:LOCALAPPDATA
 $originalAppData = $env:APPDATA
 $originalLocalAppData = $env:LOCALAPPDATA
+# Godot keeps user:// under APPDATA on Windows and under the XDG base
+# directories on Linux, so isolate both per case.
+$hadXdgDataHome = Test-Path Env:XDG_DATA_HOME
+$hadXdgConfigHome = Test-Path Env:XDG_CONFIG_HOME
+$originalXdgDataHome = $env:XDG_DATA_HOME
+$originalXdgConfigHome = $env:XDG_CONFIG_HOME
 $results = [System.Collections.Generic.List[object]]::new()
 $startedAt = Get-Date
 
@@ -229,6 +235,8 @@ try {
         $godotLogPath = Join-Path $caseRoot 'godot.log'
         $env:APPDATA = $appDataRoot
         $env:LOCALAPPDATA = $localAppDataRoot
+        $env:XDG_DATA_HOME = $appDataRoot
+        $env:XDG_CONFIG_HOME = $localAppDataRoot
 
         $timeoutSeconds = $DefaultTimeoutSeconds
         if ($null -ne $test.PSObject.Properties['timeout_seconds']) {
@@ -361,6 +369,18 @@ finally {
     }
     else {
         Remove-Item Env:LOCALAPPDATA -ErrorAction SilentlyContinue
+    }
+    if ($hadXdgDataHome) {
+        $env:XDG_DATA_HOME = $originalXdgDataHome
+    }
+    else {
+        Remove-Item Env:XDG_DATA_HOME -ErrorAction SilentlyContinue
+    }
+    if ($hadXdgConfigHome) {
+        $env:XDG_CONFIG_HOME = $originalXdgConfigHome
+    }
+    else {
+        Remove-Item Env:XDG_CONFIG_HOME -ErrorAction SilentlyContinue
     }
 }
 

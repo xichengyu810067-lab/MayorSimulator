@@ -158,7 +158,7 @@ func _build_content() -> void:
 	stack.add_child(emblem)
 
 	var title := Label.new()
-	title.text = "Mayor Simulator"
+	title.text = "城諾之音"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 46)
 	title.add_theme_color_override("font_color", Color(0.08, 0.15, 0.20))

@@ -1,10 +1,10 @@
-# Third-party notices — 0.1.0-alpha.2
+# Third-party notices
 
 This file records the third-party runtime component that is verifiably used by
 the current project tree. It is **not** a license for the project's own source
-code, data, writing, or media. No public or open-source project license has
-been selected; the enclosed `LICENSE.txt` governs internal access-controlled
-testing only.
+code, data, writing, or media. No open-source project license has been
+selected; `LICENSE.txt` reserves all rights, keeps the repository public for
+portfolio review only, and limits test builds to authorized internal testers.
 
 ## Godot Engine 4.7
 

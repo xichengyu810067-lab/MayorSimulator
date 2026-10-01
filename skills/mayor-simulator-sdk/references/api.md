@@ -125,8 +125,8 @@ Scan all project-root Codex JSONL sessions without retaining or printing raw cha
 
 ```powershell
 python sdk/chat_inventory.py `
-  --sessions-root 'C:\Users\USER\.codex\sessions' `
-  --project-root 'C:\Users\USER\遊戲' `
+  --sessions-root "$env:CODEX_HOME\sessions" `
+  --project-root 'C:\path\to\MayorSimulator' `
   --format json
 ```
 

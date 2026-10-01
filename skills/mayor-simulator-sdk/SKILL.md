@@ -56,7 +56,7 @@ Run all three checks after changing the SDK, skill, manifest, CI gate, or SDK te
 ```powershell
 python sdk/mayor_sdk.py self-test
 python -m unittest discover -s tests/sdk -p 'test_*.py'
-python C:\Users\USER\.codex\skills\.system\skill-creator\scripts\quick_validate.py skills\mayor-simulator-sdk
+python $env:CODEX_HOME\skills\.system\skill-creator\scripts\quick_validate.py skills\mayor-simulator-sdk
 & .\sdk\mayor-sdk.ps1 install-skill
 & .\sdk\mayor-sdk.ps1 doctor
 ```

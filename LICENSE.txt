@@ -1,5 +1,18 @@
-《城諾之音》 / CivicTale: Voice of Promise Internal Pre-Release License
-------------------------------------------------
-This repository and binary package contain internal pre-release software (Version 0.1.0-alpha.2).
-All rights reserved by the CivicTale: Voice of Promise project team.
-For internal access-controlled testing only. Commercial distribution or public release is strictly prohibited.
+《城諾之音》CivicTale: Voice of Promise（專案代號 Mayor Simulator）
+Copyright (c) 2026 the project owner (GitHub: xichengyu810067-lab). All rights reserved.
+
+本儲存庫公開，是為了讓招募者與審閱者閱讀原始碼、文件與測試紀錄（作品集用途）。
+除 GitHub 服務條款要求的「在 GitHub 上檢視與 fork」之外，本專案的原始碼、資料、
+文字、圖像、音訊與影片，皆未授與任何複製、修改、散布、再授權或商業使用的權利。
+
+遊戲測試封裝僅供專案擁有者授權的內部測試者使用，不得轉傳、公開上傳或販售。
+部分美術素材（例如城市背景圖與火車站圖）的來源與散布權利尚未確認，詳見
+docs/release/PUBLIC_RELEASE_BLOCKERS.md；權利確認前，請勿重新散布遊戲封裝或素材。
+
+Godot Engine 依 MIT 授權使用，相關聲明見 THIRD_PARTY_NOTICES.md 與
+GODOT_COPYRIGHT.txt；該授權只涵蓋 Godot 本身，不涵蓋本專案的內容。
+
+English summary: this repository is public for portfolio review only. Apart from
+viewing and forking on GitHub as required by GitHub's Terms of Service, no rights
+are granted to copy, modify, distribute, sublicense, or commercially use any part
+of this project. Test builds are for authorized internal testers only.

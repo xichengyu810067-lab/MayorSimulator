@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://biiwrj7eop85u"
-path="res://.godot/imported/莉拉，柳樹村的花店員.png-c8b8c1a8722b3df225262ce9ef9317a4.ctex"
+uid="uid://cyduo8xrnnfvf"
+path="res://.godot/imported/npc-resident-florist-lila.png-6b244934ab156331af1a45762a316cfe.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://莉拉，柳樹村的花店員.png"
-dest_files=["res://.godot/imported/莉拉，柳樹村的花店員.png-c8b8c1a8722b3df225262ce9ef9317a4.ctex"]
+source_file="res://assets/images/characters/npc/source/npc-resident-florist-lila.png"
+dest_files=["res://.godot/imported/npc-resident-florist-lila.png-6b244934ab156331af1a45762a316cfe.ctex"]
 
 [params]
 

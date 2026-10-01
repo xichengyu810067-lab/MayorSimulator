@@ -135,6 +135,14 @@ const FISCAL_CATEGORY_SPECS := [
 	{"id": "education_leisure", "title": "教育休閒", "items": [{"kind": "service", "key": "tuition"}, {"kind": "service", "key": "stadium"}]},
 ]
 
+# The tax, utility-fee and service-fee rows differ only in these fields;
+# _build_fiscal_row() builds all three kinds.
+const FISCAL_ROW_LAYOUT := {
+	"tax": {"value_label": "tax_value_%s", "value_width": 82.0},
+	"utility": {"value_label": "utility_%s", "value_width": 72.0},
+	"service": {"value_label": "service_%s", "value_width": 72.0},
+}
+
 const GOVERNANCE_STATUS_ORDER := ["implemented", "review", "unimplemented"]
 const GOVERNANCE_STATUS_TITLES := {
 	"unimplemented": "未實施",
@@ -3492,13 +3500,7 @@ func _build_fiscal_tab() -> ScrollContainer:
 		page.add_theme_constant_override("separation", 10)
 		page.hide()
 		for item: Dictionary in spec["items"]:
-			match str(item["kind"]):
-				"tax":
-					page.add_child(_build_tax_row(str(item["key"])))
-				"utility":
-					page.add_child(_build_utility_fee_row(str(item["key"])))
-				"service":
-					page.add_child(_build_service_fee_row(str(item["key"])))
+			page.add_child(_build_fiscal_row(str(item["kind"]), str(item["key"])))
 		fiscal_custom_pages[str(spec["id"])] = page
 		fiscal_custom_editor.add_child(page)
 
@@ -4677,10 +4679,12 @@ func _npc_dialogue(npc_type: String) -> String:
 			return "今天的城鎮很有精神，路邊花草也很好看。"
 
 
-func _build_utility_fee_row(fee_key: String) -> VBoxContainer:
-	var def: Dictionary = UTILITY_DEFS[fee_key]
+func _build_fiscal_row(kind: String, key: String) -> VBoxContainer:
+	var def := _fiscal_definition(kind, key)
+	var layout: Dictionary = FISCAL_ROW_LAYOUT[kind]
+	var values := _fiscal_values_dictionary(kind)
 	var box := VBoxContainer.new()
-	box.name = "FiscalRow_utility_%s" % fee_key
+	box.name = "FiscalRow_%s_%s" % [kind, key]
 	box.add_theme_constant_override("separation", 4)
 
 	var row := HBoxContainer.new()
@@ -4692,158 +4696,91 @@ func _build_utility_fee_row(fee_key: String) -> VBoxContainer:
 	row.add_child(name_label)
 	var value := _label("", 18, _theme_accent_text())
 	value.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	value.custom_minimum_size = Vector2(72, 0)
-	labels["utility_%s" % fee_key] = value
+	value.custom_minimum_size = Vector2(float(layout["value_width"]), 0)
+	labels[str(layout["value_label"]) % key] = value
 	row.add_child(value)
 	box.add_child(row)
 
 	var control_row := HBoxContainer.new()
 	control_row.add_theme_constant_override("separation", 8)
 	var slider := HSlider.new()
-	slider.name = "FiscalSlider_utility_%s" % fee_key
+	slider.name = "FiscalSlider_%s_%s" % [kind, key]
 	slider.min_value = float(def["min"])
 	slider.max_value = float(def["max"])
 	slider.step = 1
-	slider.value = float(utility_fees[fee_key])
+	slider.value = float(values[key])
 	slider.custom_minimum_size = Vector2(0, 28)
 	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	slider.scrollable = false
-	slider.value_changed.connect(Callable(self, "_on_utility_fee_changed").bind(fee_key))
-	utility_sliders[fee_key] = slider
+	slider.value_changed.connect(_on_fiscal_slider_changed.bind(kind, key))
+	_fiscal_sliders(kind)[key] = slider
 	_apply_fee_slider_visual(slider, "normal")
 	control_row.add_child(slider)
-	var input := _number_input(str(utility_fees[fee_key]))
-	input.text_submitted.connect(Callable(self, "_on_utility_input_submitted").bind(fee_key))
-	input.focus_exited.connect(Callable(self, "_on_utility_input_focus_exited").bind(fee_key))
-	utility_inputs[fee_key] = input
+	var input := _number_input(str(values[key]))
+	input.text_submitted.connect(_on_fiscal_input_submitted.bind(kind, key))
+	input.focus_exited.connect(_on_fiscal_input_focus_exited.bind(kind, key))
+	_fiscal_inputs(kind)[key] = input
 	control_row.add_child(input)
-	var unit_label := _label("/ %s" % def["unit"], 14, _theme_muted())
-	unit_label.custom_minimum_size = Vector2(96, 44)
-	unit_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	unit_label.max_lines_visible = 2
-	control_row.add_child(unit_label)
+	control_row.add_child(_fiscal_unit_label(kind, key, def))
 	box.add_child(control_row)
 
 	var detail := _label("", 15, _theme_muted())
 	detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	labels["utility_detail_%s" % fee_key] = detail
+	labels["%s_detail_%s" % [kind, key]] = detail
 	box.add_child(detail)
 
 	return box
 
-func _build_tax_row(tax_key: String) -> VBoxContainer:
-	var def: Dictionary = TAX_DEFS[tax_key]
-	var box := VBoxContainer.new()
-	box.name = "FiscalRow_tax_%s" % tax_key
-	box.add_theme_constant_override("separation", 4)
 
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 10)
-	var name_label := _label("%s（%s）" % [def["name"], def["basis"]], 16, _theme_text())
-	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	name_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	name_label.max_lines_visible = 2
-	row.add_child(name_label)
-	var value := _label("", 18, _theme_accent_text())
-	value.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	value.custom_minimum_size = Vector2(82, 0)
-	labels["tax_value_%s" % tax_key] = value
-	row.add_child(value)
-	box.add_child(row)
-
-	var control_row := HBoxContainer.new()
-	control_row.add_theme_constant_override("separation", 8)
-	var slider := HSlider.new()
-	slider.name = "FiscalSlider_tax_%s" % tax_key
-	slider.min_value = float(def["min"])
-	slider.max_value = float(def["max"])
-	slider.step = 1
-	slider.value = float(tax_rates[tax_key])
-	slider.custom_minimum_size = Vector2(0, 28)
-	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	slider.scrollable = false
-	slider.value_changed.connect(Callable(self, "_on_tax_changed").bind(tax_key))
-	tax_sliders[tax_key] = slider
-	_apply_fee_slider_visual(slider, "normal")
-	control_row.add_child(slider)
-	var input := _number_input(str(tax_rates[tax_key]))
-	input.text_submitted.connect(Callable(self, "_on_tax_input_submitted").bind(tax_key))
-	input.focus_exited.connect(Callable(self, "_on_tax_input_focus_exited").bind(tax_key))
-	tax_inputs[tax_key] = input
-	control_row.add_child(input)
-	# Keep the Traditional-Chinese source on the node.  This row can be rebuilt
-	# while another locale is active (for example after changing the theme); if
-	# it stores that translation as its source, switching back leaks English tax
-	# units into an otherwise Chinese finance page.
-	var unit_source := str(def["unit"]).replace(" %", "")
-	var unit_label := _label("% / " + unit_source, 14, _theme_muted())
-	unit_label.name = "FiscalTaxUnit_%s" % tax_key
+func _fiscal_unit_label(kind: String, key: String, def: Dictionary) -> Label:
+	var unit_label: Label
+	if kind == "tax":
+		# Keep the Traditional-Chinese source on the node.  This row can be rebuilt
+		# while another locale is active (for example after changing the theme); if
+		# it stores that translation as its source, switching back leaks English tax
+		# units into an otherwise Chinese finance page.
+		var unit_source := str(def["unit"]).replace(" %", "")
+		unit_label = _label("% / " + unit_source, 14, _theme_muted())
+		unit_label.name = "FiscalTaxUnit_%s" % key
+	else:
+		unit_label = _label("/ %s" % def["unit"], 14, _theme_muted())
 	unit_label.custom_minimum_size = Vector2(96, 44)
 	unit_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	unit_label.max_lines_visible = 2
-	control_row.add_child(unit_label)
-	box.add_child(control_row)
+	return unit_label
 
-	var detail := _label("", 15, _theme_muted())
-	detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	labels["tax_detail_%s" % tax_key] = detail
-	box.add_child(detail)
 
-	return box
+func _fiscal_values_dictionary(kind: String) -> Dictionary:
+	match kind:
+		"tax":
+			return tax_rates
+		"utility":
+			return utility_fees
+		"service":
+			return service_fees
+	return {}
 
-func _build_service_fee_row(service_key: String) -> VBoxContainer:
-	var def: Dictionary = SERVICE_DEFS[service_key]
-	var box := VBoxContainer.new()
-	box.name = "FiscalRow_service_%s" % service_key
-	box.add_theme_constant_override("separation", 4)
 
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 10)
-	var name_label := _label("%s（%s）" % [def["name"], def["basis"]], 16, _theme_text())
-	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	name_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	name_label.max_lines_visible = 2
-	row.add_child(name_label)
-	var value := _label("", 18, _theme_accent_text())
-	value.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	value.custom_minimum_size = Vector2(72, 0)
-	labels["service_%s" % service_key] = value
-	row.add_child(value)
-	box.add_child(row)
+func _fiscal_sliders(kind: String) -> Dictionary:
+	match kind:
+		"tax":
+			return tax_sliders
+		"utility":
+			return utility_sliders
+		"service":
+			return service_sliders
+	return {}
 
-	var control_row := HBoxContainer.new()
-	control_row.add_theme_constant_override("separation", 8)
-	var slider := HSlider.new()
-	slider.name = "FiscalSlider_service_%s" % service_key
-	slider.min_value = float(def["min"])
-	slider.max_value = float(def["max"])
-	slider.step = 1
-	slider.value = float(service_fees[service_key])
-	slider.custom_minimum_size = Vector2(0, 28)
-	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	slider.scrollable = false
-	slider.value_changed.connect(Callable(self, "_on_service_fee_changed").bind(service_key))
-	service_sliders[service_key] = slider
-	_apply_fee_slider_visual(slider, "normal")
-	control_row.add_child(slider)
-	var input := _number_input(str(service_fees[service_key]))
-	input.text_submitted.connect(Callable(self, "_on_service_input_submitted").bind(service_key))
-	input.focus_exited.connect(Callable(self, "_on_service_input_focus_exited").bind(service_key))
-	service_inputs[service_key] = input
-	control_row.add_child(input)
-	var unit_label := _label("/ %s" % def["unit"], 14, _theme_muted())
-	unit_label.custom_minimum_size = Vector2(96, 44)
-	unit_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	unit_label.max_lines_visible = 2
-	control_row.add_child(unit_label)
-	box.add_child(control_row)
 
-	var detail := _label("", 15, _theme_muted())
-	detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	labels["service_detail_%s" % service_key] = detail
-	box.add_child(detail)
-
-	return box
+func _fiscal_inputs(kind: String) -> Dictionary:
+	match kind:
+		"tax":
+			return tax_inputs
+		"utility":
+			return utility_inputs
+		"service":
+			return service_inputs
+	return {}
 
 
 func _metric_bar(metric: String) -> VBoxContainer:
@@ -6141,32 +6078,24 @@ func _on_blueprint_library_selection_requested(building_name: String, library_id
 	else:
 		_set_hint("無法載入藍圖：%s" % _vertical_error_text(str(result.get("error", "unknown"))), true)
 
+func _on_fiscal_slider_changed(value: float, kind: String, key: String) -> void:
+	_set_fiscal_draft_value(kind, key, int(value))
+
+func _on_fiscal_input_submitted(text: String, kind: String, key: String) -> void:
+	_commit_number_input(kind, key, text)
+
+func _on_fiscal_input_focus_exited(kind: String, key: String) -> void:
+	_commit_number_input(kind, key, (_fiscal_inputs(kind)[key] as LineEdit).text)
+
+# Per-kind entry points kept for tests and tools that drive the sliders directly.
 func _on_tax_changed(value: float, tax_key: String) -> void:
-	_set_fiscal_draft_value("tax", tax_key, int(value))
+	_on_fiscal_slider_changed(value, "tax", tax_key)
 
 func _on_utility_fee_changed(value: float, fee_key: String) -> void:
-	_set_fiscal_draft_value("utility", fee_key, int(value))
+	_on_fiscal_slider_changed(value, "utility", fee_key)
 
 func _on_service_fee_changed(value: float, service_key: String) -> void:
-	_set_fiscal_draft_value("service", service_key, int(value))
-
-func _on_tax_input_submitted(text: String, tax_key: String) -> void:
-	_commit_number_input("tax", tax_key, text)
-
-func _on_tax_input_focus_exited(tax_key: String) -> void:
-	_commit_number_input("tax", tax_key, tax_inputs[tax_key].text)
-
-func _on_utility_input_submitted(text: String, fee_key: String) -> void:
-	_commit_number_input("utility", fee_key, text)
-
-func _on_utility_input_focus_exited(fee_key: String) -> void:
-	_commit_number_input("utility", fee_key, utility_inputs[fee_key].text)
-
-func _on_service_input_submitted(text: String, service_key: String) -> void:
-	_commit_number_input("service", service_key, text)
-
-func _on_service_input_focus_exited(service_key: String) -> void:
-	_commit_number_input("service", service_key, service_inputs[service_key].text)
+	_on_fiscal_slider_changed(value, "service", service_key)
 
 func _toggle_policy(enabled: bool, policy_name: String) -> void:
 	if lower_council_stage != null:

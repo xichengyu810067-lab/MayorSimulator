@@ -1,4 +1,4 @@
-# 《城諾之音：Civil Tale》內部 Alpha 使用條件
+# 《城諾之音》CivicTale: Voice of Promise 內部 Alpha 使用條件
 
 本文件適用於經專案擁有者授權取得的內部 Alpha 測試包，並應與隨包
 `LICENSE.txt` 一同閱讀。`LICENSE.txt` 是此內部 Alpha 包的授權依據；
